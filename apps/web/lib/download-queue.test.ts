@@ -46,6 +46,8 @@ describe("download queue client", () => {
       return source;
     });
     source.onopen?.(new Event("open"));
+    expect(onStatus).toHaveBeenLastCalledWith("connecting");
+    expect(onStatus).not.toHaveBeenCalledWith("live");
     const event = {
       cursor: "download_event_ABCDEFGHIJKLMNOPQRSTUV",
       kind: "snapshot",
@@ -128,7 +130,7 @@ describe("download queue client", () => {
 
     source.onerror?.(new Event("error"));
 
-    expect(onStatus).toHaveBeenLastCalledWith("fallback");
+    expect(onStatus).toHaveBeenLastCalledWith("connecting");
     expect(source.close).not.toHaveBeenCalled();
   });
 

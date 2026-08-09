@@ -603,7 +603,7 @@ export function SystemStatus({
       : "fallback";
 
   useEffect(() => {
-    if (!live || liveStatus === "live") return;
+    if (!live || liveStatus !== "fallback") return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") void refresh();
     }, 30_000);

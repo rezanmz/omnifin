@@ -534,12 +534,18 @@ describe("acquisition timeline", () => {
     expect(screen.getByRole("heading", { name: "No acquisition events yet" })).toBeVisible();
   });
 
-  it("keeps verified data and polls at a bounded interval when streaming falls back", async () => {
+  it("keeps verified data, stays single-flight, and stops polling when live resumes", async () => {
     vi.useFakeTimers();
-    const read = vi.fn(async () => operation.provenance!);
+    let resolveRead!: (value: AcquisitionProvenanceResponse) => void;
+    const pendingRead = new Promise<AcquisitionProvenanceResponse>((resolve) => {
+      resolveRead = resolve;
+    });
+    const read = vi.fn(() => pendingRead);
+    let callbacks: AcquisitionProvenanceStreamCallbacks | undefined;
     const watchEvents = vi.fn(
-      (_target: AcquisitionTargetInput, callbacks: AcquisitionProvenanceStreamCallbacks) => {
-        callbacks.onStatus("fallback");
+      (_target: AcquisitionTargetInput, nextCallbacks: AcquisitionProvenanceStreamCallbacks) => {
+        callbacks = nextCallbacks;
+        nextCallbacks.onStatus("fallback");
         return vi.fn();
       },
     );
@@ -557,8 +563,48 @@ describe("acquisition timeline", () => {
     expect(read).not.toHaveBeenCalled();
     await act(async () => vi.advanceTimersByTimeAsync(15_000));
     expect(read).toHaveBeenCalledOnce();
+    await act(async () => vi.advanceTimersByTimeAsync(15_000));
+    expect(read).toHaveBeenCalledOnce();
+
+    act(() => callbacks?.onStatus("live"));
+    await act(async () => vi.advanceTimersByTimeAsync(30_000));
+    expect(read).toHaveBeenCalledOnce();
+    resolveRead(operation.provenance!);
 
     unmount();
+    vi.useRealTimers();
+  });
+
+  it("closes the stream and aborts an outstanding fallback read on cleanup", async () => {
+    vi.useFakeTimers();
+    let readSignal: AbortSignal | undefined;
+    const read = vi.fn((_target: AcquisitionTargetInput, signal?: AbortSignal) => {
+      readSignal = signal;
+      return new Promise<AcquisitionProvenanceResponse>(() => undefined);
+    });
+    const stopWatching = vi.fn();
+    const watchEvents = vi.fn(
+      (_target: AcquisitionTargetInput, callbacks: AcquisitionProvenanceStreamCallbacks) => {
+        callbacks.onStatus("fallback");
+        return stopWatching;
+      },
+    );
+    const { unmount } = render(
+      <AcquisitionTimeline
+        client={client(read)}
+        operation={operation}
+        onOpenChange={vi.fn()}
+        open
+        watchEvents={watchEvents}
+      />,
+    );
+
+    await act(async () => vi.advanceTimersByTimeAsync(15_000));
+    expect(read).toHaveBeenCalledOnce();
+    unmount();
+
+    expect(stopWatching).toHaveBeenCalledOnce();
+    expect(readSignal?.aborted).toBe(true);
     vi.useRealTimers();
   });
 

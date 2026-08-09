@@ -9,6 +9,7 @@ import { requirePermission } from "../auth/authorization.js";
 import { sessionCookieName, writeSessionCookie } from "../auth/session-cookie.js";
 import { SafeHttpError } from "../http-error.js";
 import { safeFailureDiagnostics } from "../logger.js";
+import { GatewaySseWriter } from "../runtime/sse-writer.js";
 import {
   SystemStatusEventBroker,
   type SystemStatusEventBrokerDependencies,
@@ -122,10 +123,11 @@ export const systemStatusRoutes: FastifyPluginAsync<SystemStatusRoutesOptions> =
         heartbeat?: ReturnType<typeof setInterval>;
         lifetime?: ReturnType<typeof setTimeout>;
         subscription?: SystemStatusEventSubscription;
+        writer?: GatewaySseWriter;
       } = {};
       const operationAborted = () =>
         request.operationSignal.aborted || app.runtimeDrain.signal.aborted;
-      const close = () => {
+      const close = (force = false) => {
         if (closed) return;
         closed = true;
         if (state.heartbeat !== undefined) clearInterval(state.heartbeat);
@@ -133,7 +135,12 @@ export const systemStatusRoutes: FastifyPluginAsync<SystemStatusRoutesOptions> =
         request.raw.off("aborted", close);
         reply.raw.off("close", close);
         if (state.subscription?.accepted) state.subscription.unsubscribe();
-        if (hijacked && !reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.end();
+        const blocked = state.writer?.close() ?? false;
+        if (force || blocked) {
+          if (!reply.raw.destroyed) reply.raw.destroy();
+        } else if (hijacked && !reply.raw.destroyed && !reply.raw.writableEnded) {
+          reply.raw.end();
+        }
       };
       if (operationAborted()) return;
       state.subscription = eventBroker.subscribe({
@@ -141,7 +148,7 @@ export const systemStatusRoutes: FastifyPluginAsync<SystemStatusRoutesOptions> =
         onClose: close,
         onEvent: (event) => {
           if (closed || reply.raw.destroyed || reply.raw.writableEnded) return;
-          reply.raw.write(`id: ${event.cursor}\ndata: ${JSON.stringify(event)}\n\n`);
+          state.writer?.writeSnapshot(`id: ${event.cursor}\ndata: ${JSON.stringify(event)}\n\n`);
         },
         principal,
       });
@@ -174,10 +181,18 @@ export const systemStatusRoutes: FastifyPluginAsync<SystemStatusRoutesOptions> =
       reply.raw.setHeader("vary", "Cookie");
       reply.raw.setHeader("x-accel-buffering", "no");
       reply.raw.writeHead(200);
-      reply.raw.write(`retry: ${eventReconnectMs}\n\n`);
+      state.writer = new GatewaySseWriter(reply.raw, {
+        onClose: (reason, blocked) => close(reason === "error" || blocked),
+        onStall: () => close(true),
+      });
+      state.writer.write(`retry: ${eventReconnectMs}\n\n`);
+      if (closed || operationAborted()) {
+        close();
+        return;
+      }
       state.heartbeat = setInterval(() => {
         if (!closed && !reply.raw.destroyed && !reply.raw.writableEnded) {
-          reply.raw.write(": keep-alive\n\n");
+          state.writer?.write(": keep-alive\n\n");
         }
       }, eventHeartbeatMs);
       state.heartbeat.unref();

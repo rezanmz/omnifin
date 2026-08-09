@@ -246,10 +246,10 @@ export function watchDownloadQueueEvents(
     callbacks.onStatus("fallback");
   };
   source.onopen = () => {
-    if (active && !failedClosed) callbacks.onStatus("live");
+    if (active && !failedClosed) callbacks.onStatus("connecting");
   };
   source.onerror = () => {
-    if (active && !failedClosed) callbacks.onStatus("fallback");
+    if (active && !failedClosed) callbacks.onStatus("connecting");
   };
   source.onmessage = (message) => {
     void (async () => {

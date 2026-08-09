@@ -1583,7 +1583,7 @@ test("acquisition timeline visual baseline", async ({ page }, testInfo) => {
     .click();
   const timeline = page.getByRole("dialog", { name: "Signal history" });
   await expect(timeline).toBeVisible();
-  await expect(page.getByLabel("Acquisition updates: Refreshing")).toBeVisible();
+  await expect(page.getByLabel("Acquisition updates: Connecting")).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
   await stabilizeAcquisitionTimelineVisual(page);
   await expect(timeline).toHaveScreenshot("acquisition-timeline.png");
@@ -1600,7 +1600,7 @@ test("acquisition recovery confirmation visual baseline", async ({ page }, testI
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();
   const timeline = page.getByRole("dialog", { name: "Signal history" });
-  await expect(page.getByLabel("Acquisition updates: Refreshing")).toBeVisible();
+  await expect(page.getByLabel("Acquisition updates: Connecting")).toBeVisible();
   await timeline.getByRole("button", { name: "Review search" }).click();
   await expect(timeline.getByRole("button", { name: "Queue search" })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
@@ -1615,7 +1615,7 @@ async function openQueueRecoveryTimeline(page: Page) {
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();
   const timeline = page.getByRole("dialog", { name: "Signal history" });
-  await expect(page.getByLabel("Acquisition updates: Refreshing")).toBeVisible();
+  await expect(page.getByLabel("Acquisition updates: Connecting")).toBeVisible();
   return timeline;
 }
 
@@ -1695,7 +1695,7 @@ test("acquisition monitoring confirmation visual baseline", async ({ page }, tes
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();
   const timeline = page.getByRole("dialog", { name: "Signal history" });
-  await expect(page.getByLabel("Acquisition updates: Refreshing")).toBeVisible();
+  await expect(page.getByLabel("Acquisition updates: Connecting")).toBeVisible();
   await timeline.getByRole("button", { name: "Pause monitoring for The Far Meridian" }).click();
   await expect(timeline.getByRole("button", { name: "Pause" })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);

@@ -471,7 +471,7 @@ test("acquisition timeline has no automatically detectable accessibility violati
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();
   await expect(page.getByRole("dialog", { name: "Signal history" })).toBeVisible();
-  await expect(page.getByLabel("Acquisition updates: Refreshing")).toBeVisible();
+  await expect(page.getByLabel("Acquisition updates: Connecting")).toBeVisible();
   await page.getByRole("button", { name: "Review search" }).click();
   await expect(page.getByRole("button", { name: "Queue search" })).toBeVisible();
   const results = await new AxeBuilder({ page }).analyze();
@@ -492,7 +492,7 @@ test("acquisition monitoring confirmation has no automatically detectable access
     .getByRole("button", { name: "Inspect acquisition history for The Far Meridian" })
     .click();
   const timeline = page.getByRole("dialog", { name: "Signal history" });
-  await expect(timeline.getByLabel("Acquisition updates: Refreshing")).toBeVisible();
+  await expect(timeline.getByLabel("Acquisition updates: Connecting")).toBeVisible();
   await timeline.getByRole("button", { name: "Pause monitoring for The Far Meridian" }).click();
   await expect(timeline.getByRole("button", { name: "Cancel" })).toBeFocused();
   const results = await new AxeBuilder({ page }).analyze();

@@ -267,7 +267,7 @@ describe("acquisition provenance client", () => {
     await vi.waitFor(() => expect(source.onerror).toBeTypeOf("function"));
     source.onerror?.(new Event("error"));
 
-    expect(onStatus).toHaveBeenLastCalledWith("fallback");
+    expect(onStatus).toHaveBeenLastCalledWith("connecting");
     expect(source.close).not.toHaveBeenCalled();
   });
 });
