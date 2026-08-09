@@ -13,6 +13,7 @@ const REPOSITORY_ROOT = resolve(import.meta.dirname, "../..");
 const PUBLIC_ORIGIN = "https://omnifin.example";
 const REQUEST_TIMEOUT_MS = 15_000;
 const RESPONSE_MAX_BYTES = 1_048_576;
+const ROLLBACK_PROBE_MAX_BYTES = 512;
 const IMAGE_PATTERN = /^ghcr\.io\/rezanmz\/omnifin@(sha256:[a-f0-9]{64})$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const SESSION_VALUE_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
@@ -672,13 +673,52 @@ function maintenanceSnapshot(resources, image, fileName, label) {
   return { ...closed, databaseSha256: verified.databaseSha256 };
 }
 
-const ROLLBACK_PROBE_OUTPUT = JSON.stringify({
+const ROLLBACK_PROBE_SUCCESS_OUTPUT = `${JSON.stringify({
   operation: "rollback_quarantine_raw_verify",
   status: "ok",
-});
+})}\n`;
+const ROLLBACK_PROBE_CATEGORIES = new Set([
+  "probe_database",
+  "probe_identity",
+  "probe_discovery",
+  "probe_timestamp",
+  "probe_transaction",
+]);
 
-function verifyRollbackProbeOutput(output) {
-  if (output !== ROLLBACK_PROBE_OUTPUT) throw new RehearsalFailure("rollback_probe_invalid");
+function rollbackProbeFailureOperation(category) {
+  return `rollback_v0131_${category}`;
+}
+
+export function classifyV0131RollbackProbeResult(status, stdout) {
+  if (status === 125) return "rollback_v0131_probe_container";
+  if (typeof stdout !== "string" || Buffer.byteLength(stdout) > ROLLBACK_PROBE_MAX_BYTES) {
+    return "rollback_v0131_probe_invalid";
+  }
+  if (status === 0) {
+    return stdout === ROLLBACK_PROBE_SUCCESS_OUTPUT ? null : "rollback_v0131_probe_invalid";
+  }
+  if (status !== 1) return "rollback_v0131_probe_invalid";
+
+  let result;
+  try {
+    result = JSON.parse(stdout);
+  } catch {
+    return "rollback_v0131_probe_invalid";
+  }
+  if (
+    !result ||
+    typeof result !== "object" ||
+    Array.isArray(result) ||
+    Object.getPrototypeOf(result) !== Object.prototype ||
+    Object.keys(result).join(",") !== "operation,status,category" ||
+    result.operation !== "rollback_quarantine_raw_verify" ||
+    result.status !== "failed" ||
+    !ROLLBACK_PROBE_CATEGORIES.has(result.category) ||
+    stdout !== `${JSON.stringify(result)}\n`
+  ) {
+    return "rollback_v0131_probe_invalid";
+  }
+  return rollbackProbeFailureOperation(result.category);
 }
 
 function runV0131RollbackProbe(resources, image, nodeEntrypoint) {
@@ -686,41 +726,61 @@ function runV0131RollbackProbe(resources, image, nodeEntrypoint) {
   const probePath = join(REPOSITORY_ROOT, "scripts/release/verify-v0131-quarantined-rollback.mjs");
   resources.containers.add(name);
   try {
-    const output = docker(
-      [
-        "run",
-        "--rm",
-        "--name",
-        name,
-        "--network",
-        "none",
-        "--read-only",
-        "--cap-drop",
-        "ALL",
-        "--security-opt",
-        "no-new-privileges",
-        "--pids-limit",
-        "64",
-        "--memory",
-        "256m",
-        "--cpus",
-        "1",
-        "--volume",
-        `${resources.backupVolume}:/backups:ro`,
-        "--volume",
-        `${probePath}:/opt/omnifin/bin/verify-v0131-quarantined-rollback.mjs:ro`,
-        "--entrypoint",
-        nodeEntrypoint,
-        image.reference,
-        "/opt/omnifin/bin/verify-v0131-quarantined-rollback.mjs",
-      ],
-      "rollback_v0131_probe",
-    );
+    let result;
     try {
-      verifyRollbackProbeOutput(output);
-    } finally {
-      resources.containers.delete(name);
+      result = {
+        status: 0,
+        stdout: execFileSync(
+          "docker",
+          [
+            "run",
+            "--rm",
+            "--name",
+            name,
+            "--network",
+            "none",
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--pids-limit",
+            "64",
+            "--memory",
+            "256m",
+            "--cpus",
+            "1",
+            "--volume",
+            `${resources.backupVolume}:/backups:ro`,
+            "--volume",
+            `${probePath}:/opt/omnifin/bin/verify-v0131-quarantined-rollback.mjs:ro`,
+            "--entrypoint",
+            nodeEntrypoint,
+            image.reference,
+            "/opt/omnifin/bin/verify-v0131-quarantined-rollback.mjs",
+          ],
+          {
+            cwd: REPOSITORY_ROOT,
+            encoding: "utf8",
+            maxBuffer: ROLLBACK_PROBE_MAX_BYTES,
+            stdio: ["ignore", "pipe", "pipe"],
+            timeout: 180_000,
+          },
+        ),
+      };
+    } catch (error) {
+      result = {
+        status: error?.status,
+        stdout:
+          typeof error?.stdout === "string"
+            ? error.stdout
+            : Buffer.isBuffer(error?.stdout)
+              ? error.stdout.toString("utf8")
+              : "",
+      };
     }
+    const operation = classifyV0131RollbackProbeResult(result.status, result.stdout);
+    if (operation) throw new RehearsalFailure(operation);
   } catch (error) {
     try {
       docker(["container", "rm", "--force", name], "rollback_v0131_probe_cleanup");
@@ -728,7 +788,11 @@ function runV0131RollbackProbe(resources, image, nodeEntrypoint) {
       // The --rm run normally already removed the container.
     }
     resources.containers.delete(name);
-    throw error;
+    if (error instanceof RehearsalFailure) {
+      const failure = error;
+      throw failure;
+    }
+    throw new RehearsalFailure("rollback_v0131_probe_invalid");
   } finally {
     resources.containers.delete(name);
   }

@@ -9,6 +9,7 @@ import test from "node:test";
 import { parse } from "yaml";
 
 import {
+  classifyV0131RollbackProbeResult,
   failedUpgradeRehearsalReport,
   immutableOmnifinImage,
   privateContainerAddress,
@@ -19,7 +20,10 @@ import {
   validateV0131RollbackAdminError,
   validatePreviousRestoreEvidence,
 } from "../release/upgrade-rehearsal.mjs";
-import { verifyQuarantinedRollback } from "../release/verify-v0131-quarantined-rollback.mjs";
+import {
+  classifyQuarantinedRollback,
+  verifyQuarantinedRollback,
+} from "../release/verify-v0131-quarantined-rollback.mjs";
 
 const PREVIOUS_IMAGE =
   "ghcr.io/rezanmz/omnifin@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -206,6 +210,34 @@ test("verifies the quarantined rollback fixture without mocking SQLite", () => {
   }
 });
 
+test("classifies each quarantined rollback predicate group without exposing values", () => {
+  const cases = [
+    ["database", { providers: [] }, "probe_database"],
+    ["identity", { providers: [{ ...ROLLBACK_PROVIDER, clientId: "wrong" }] }, "probe_identity"],
+    [
+      "discovery",
+      { providers: [{ ...ROLLBACK_PROVIDER, discoveryState: "ready" }] },
+      "probe_discovery",
+    ],
+    [
+      "timestamp",
+      {
+        providers: [{ ...ROLLBACK_PROVIDER, discoveryCheckedAt: ROLLBACK_PROVIDER_CREATED_AT - 1 }],
+      },
+      "probe_timestamp",
+    ],
+    ["transaction", { transaction: true }, "probe_transaction"],
+  ];
+  for (const [name, options, category] of cases) {
+    assert.equal(
+      withRollbackProbeFixture(options, (path) => classifyQuarantinedRollback(path)),
+      category,
+      name,
+    );
+  }
+  assert.equal(classifyQuarantinedRollback("/missing/rollback.sqlite"), "probe_database");
+});
+
 test("CLI emits only its exact success JSON and discloses nothing on failure", () => {
   const fixture = createRollbackProbeFixture();
   const copiedProbePath = join(fixture.directory, "probe.mjs");
@@ -237,17 +269,58 @@ test("CLI emits only its exact success JSON and discloses nothing on failure", (
         encoding: "utf8",
       });
       assert.notEqual(failure.status, 0);
-      assert.equal(failure.stdout, "");
+      assert.equal(
+        failure.stdout,
+        '{"operation":"rollback_quarantine_raw_verify","status":"failed","category":"probe_transaction"}\n',
+      );
       assert.equal(failure.stderr, "");
       assert.doesNotMatch(
         failure.stdout + failure.stderr,
-        /encrypted-client-secret|oidc-upgrade-rehearsal/u,
+        /encrypted-client-secret|oidc-upgrade-rehearsal|private|ciphertext|configurationFingerprint|response|error/u,
       );
     } finally {
       rmSync(invalidFixture.directory, { force: true, recursive: true });
     }
   } finally {
     rmSync(fixture.directory, { force: true, recursive: true });
+  }
+});
+
+test("maps only bounded raw probe status and output combinations", () => {
+  assert.equal(
+    classifyV0131RollbackProbeResult(
+      0,
+      '{"operation":"rollback_quarantine_raw_verify","status":"ok"}\n',
+    ),
+    null,
+  );
+  assert.equal(
+    classifyV0131RollbackProbeResult(
+      1,
+      '{"operation":"rollback_quarantine_raw_verify","status":"failed","category":"probe_database"}\n',
+    ),
+    "rollback_v0131_probe_database",
+  );
+  for (const category of ["identity", "discovery", "timestamp", "transaction"]) {
+    assert.equal(
+      classifyV0131RollbackProbeResult(
+        1,
+        `{"operation":"rollback_quarantine_raw_verify","status":"failed","category":"probe_${category}"}\n`,
+      ),
+      `rollback_v0131_probe_${category}`,
+    );
+  }
+  assert.equal(
+    classifyV0131RollbackProbeResult(125, "private docker stderr\n"),
+    "rollback_v0131_probe_container",
+  );
+  for (const [status, output] of [
+    [2, ""],
+    [1, "private output\n"],
+    [1, '{"operation":"rollback_quarantine_raw_verify","status":"failed","category":"private"}\n'],
+    [0, '{"operation":"rollback_quarantine_raw_verify","status":"ok","private":"value"}\n'],
+  ]) {
+    assert.equal(classifyV0131RollbackProbeResult(status, output), "rollback_v0131_probe_invalid");
   }
 });
 
@@ -586,6 +659,9 @@ test("keeps the raw rollback probe isolated and sanitized", () => {
     ROLLBACK_PROBE_SOURCE,
     /console\.|JSON\.stringify\(provider|encryptedClientSecret\)/u,
   );
+  assert.doesNotMatch(PROBE_HARNESS_SOURCE, /error\.(?:stderr|cause|message)/u);
+  assert.doesNotMatch(PROBE_HARNESS_SOURCE, /new RehearsalFailure\([^)]*,\s*\{\s*cause/u);
+  assert.doesNotMatch(PROBE_HARNESS_SOURCE, /throw error(?:;|\n)/u);
 });
 
 test("passes the production gateway runtime contract", () => {
