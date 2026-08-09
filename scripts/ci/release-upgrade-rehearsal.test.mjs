@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import { parse } from "yaml";
@@ -8,10 +12,14 @@ import {
   failedUpgradeRehearsalReport,
   immutableOmnifinImage,
   privateContainerAddress,
+  ROLLBACK_V0131_EXCEPTION_CHECK,
   runningContainerState,
+  usesV0131RollbackCompatibility,
   upgradeRehearsalReport,
+  validateV0131RollbackAdminError,
   validatePreviousRestoreEvidence,
 } from "../release/upgrade-rehearsal.mjs";
+import { verifyQuarantinedRollback } from "../release/verify-v0131-quarantined-rollback.mjs";
 
 const PREVIOUS_IMAGE =
   "ghcr.io/rezanmz/omnifin@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -21,6 +29,186 @@ const HARNESS_SOURCE = readFileSync(
   new URL("../release/upgrade-rehearsal.mjs", import.meta.url),
   "utf8",
 );
+const PROBE_HARNESS_SOURCE = HARNESS_SOURCE.slice(
+  HARNESS_SOURCE.indexOf("function runV0131RollbackProbe"),
+  HARNESS_SOURCE.indexOf("export function validatePreviousRestoreEvidence"),
+);
+const ROLLBACK_PROBE_SOURCE = readFileSync(
+  new URL("../release/verify-v0131-quarantined-rollback.mjs", import.meta.url),
+  "utf8",
+);
+const V0131_DIGEST = "sha256:deae382a5c09560322eb5146764393bd0155c314087768426b757ca0c6fbff11";
+const ROLLBACK_PROBE_SUCCESS = '{"operation":"rollback_quarantine_raw_verify","status":"ok"}\n';
+const ROLLBACK_PROVIDER = Object.freeze({
+  id: "oidc-upgrade-rehearsal",
+  slug: "upgrade-rehearsal",
+  clientId: "omnifin-upgrade-rehearsal",
+  tokenEndpointAuthMethod: "client_secret_basic",
+  encryptedClientSecret: "encrypted-client-secret",
+  approvedEndpointOriginsJson: "[]",
+  discoveryState: "unchecked",
+  discoveryCapabilitiesJson: "{}",
+  discoveryCheckedAt: null,
+  allowJitProvisioning: 0,
+  enabled: 1,
+});
+
+function createRollbackProbeFixture({ providers = [ROLLBACK_PROVIDER], transaction = false } = {}) {
+  const directory = mkdtempSync(join(tmpdir(), "omnifin-rollback-probe-"));
+  const databasePath = join(directory, "rollback.sqlite");
+  const database = new DatabaseSync(databasePath);
+  database.exec(`
+    create table oidc_providers (
+      id text,
+      slug text,
+      client_id text,
+      token_endpoint_auth_method text,
+      encrypted_client_secret text,
+      approved_endpoint_origins_json text,
+      discovery_state text,
+      discovery_capabilities_json text,
+      discovery_checked_at text,
+      allow_jit_provisioning integer,
+      enabled integer
+    );
+    create table auth_transactions (provider_id text);
+  `);
+  const insertProvider = database.prepare(`
+    insert into oidc_providers (
+      id,
+      slug,
+      client_id,
+      token_endpoint_auth_method,
+      encrypted_client_secret,
+      approved_endpoint_origins_json,
+      discovery_state,
+      discovery_capabilities_json,
+      discovery_checked_at,
+      allow_jit_provisioning,
+      enabled
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const provider of providers) {
+    insertProvider.run(
+      provider.id,
+      provider.slug,
+      provider.clientId,
+      provider.tokenEndpointAuthMethod,
+      provider.encryptedClientSecret,
+      provider.approvedEndpointOriginsJson,
+      provider.discoveryState,
+      provider.discoveryCapabilitiesJson,
+      provider.discoveryCheckedAt,
+      provider.allowJitProvisioning,
+      provider.enabled,
+    );
+  }
+  if (transaction) {
+    database
+      .prepare("insert into auth_transactions (provider_id) values (?)")
+      .run(ROLLBACK_PROVIDER.id);
+  }
+  database.close();
+  return { databasePath, directory };
+}
+
+function withRollbackProbeFixture(options, callback) {
+  const fixture = createRollbackProbeFixture(options);
+  try {
+    return callback(fixture.databasePath);
+  } finally {
+    rmSync(fixture.directory, { force: true, recursive: true });
+  }
+}
+
+test("verifies the quarantined rollback fixture without mocking SQLite", () => {
+  assert.equal(
+    withRollbackProbeFixture({}, (databasePath) => verifyQuarantinedRollback(databasePath)),
+    true,
+  );
+
+  const mismatches = [
+    ["id", "different-provider"],
+    ["slug", "different-slug"],
+    ["clientId", "different-client-id"],
+    ["tokenEndpointAuthMethod", "client_secret_post"],
+    ["approvedEndpointOriginsJson", '["https://unexpected.example"]'],
+    ["discoveryState", "ready"],
+    ["discoveryCapabilitiesJson", '{"authorization_endpoint":"unexpected"}'],
+    ["discoveryCheckedAt", "2026-01-01T00:00:00.000Z"],
+    ["allowJitProvisioning", 1],
+    ["enabled", 0],
+  ];
+  for (const [field, value] of mismatches) {
+    const provider = { ...ROLLBACK_PROVIDER, [field]: value };
+    assert.equal(
+      withRollbackProbeFixture({ providers: [provider] }, (databasePath) =>
+        verifyQuarantinedRollback(databasePath),
+      ),
+      false,
+      `provider field mismatch: ${field}`,
+    );
+  }
+
+  for (const [name, options] of [
+    ["missing provider", { providers: [] }],
+    ["extra provider", { providers: [ROLLBACK_PROVIDER, { ...ROLLBACK_PROVIDER, id: "extra" }] }],
+    ["absent ciphertext", { providers: [{ ...ROLLBACK_PROVIDER, encryptedClientSecret: null }] }],
+    ["empty ciphertext", { providers: [{ ...ROLLBACK_PROVIDER, encryptedClientSecret: "" }] }],
+    ["retained transaction", { transaction: true }],
+  ]) {
+    assert.equal(
+      withRollbackProbeFixture(options, (databasePath) => verifyQuarantinedRollback(databasePath)),
+      false,
+      name,
+    );
+  }
+});
+
+test("CLI emits only its exact success JSON and discloses nothing on failure", () => {
+  const fixture = createRollbackProbeFixture();
+  const copiedProbePath = join(fixture.directory, "probe.mjs");
+  const copiedProbe = ROLLBACK_PROBE_SOURCE.replace(
+    'const DATABASE_PATH = "/backups/rollback.sqlite";',
+    `const DATABASE_PATH = ${JSON.stringify(fixture.databasePath)};`,
+  );
+  writeFileSync(copiedProbePath, copiedProbe, { mode: 0o500 });
+  try {
+    const success = spawnSync(process.execPath, [realpathSync(copiedProbePath)], {
+      encoding: "utf8",
+    });
+    assert.equal(success.status, 0);
+    assert.equal(success.stdout, ROLLBACK_PROBE_SUCCESS);
+    assert.equal(success.stderr, "");
+
+    const invalidFixture = createRollbackProbeFixture({ transaction: true });
+    const invalidProbePath = join(invalidFixture.directory, "probe.mjs");
+    writeFileSync(
+      invalidProbePath,
+      copiedProbe.replace(
+        JSON.stringify(fixture.databasePath),
+        JSON.stringify(invalidFixture.databasePath),
+      ),
+      { mode: 0o500 },
+    );
+    try {
+      const failure = spawnSync(process.execPath, [realpathSync(invalidProbePath)], {
+        encoding: "utf8",
+      });
+      assert.notEqual(failure.status, 0);
+      assert.equal(failure.stdout, "");
+      assert.equal(failure.stderr, "");
+      assert.doesNotMatch(
+        failure.stdout + failure.stderr,
+        /encrypted-client-secret|oidc-upgrade-rehearsal/u,
+      );
+    } finally {
+      rmSync(invalidFixture.directory, { force: true, recursive: true });
+    }
+  } finally {
+    rmSync(fixture.directory, { force: true, recursive: true });
+  }
+});
 
 test("accepts only immutable public Omnifin image digests", () => {
   assert.deepEqual(immutableOmnifinImage(PREVIOUS_IMAGE), {
@@ -108,6 +296,81 @@ test("builds a closed upgrade and rollback report", () => {
     schemaSha256: "d".repeat(64),
   });
   assert.doesNotMatch(JSON.stringify(report), /private-state|private-database|private-provider/u);
+});
+
+test("selects the v0.13.1 exception only for the exact signed digest", () => {
+  const legacyPrevious = `ghcr.io/rezanmz/omnifin@${V0131_DIGEST}`;
+  const almostLegacyPrevious = `ghcr.io/rezanmz/omnifin@${V0131_DIGEST.slice(0, -1)}0`;
+  assert.equal(usesV0131RollbackCompatibility(V0131_DIGEST), true);
+  assert.equal(usesV0131RollbackCompatibility(`${V0131_DIGEST.slice(0, -1)}0`), false);
+
+  const evidence = {
+    candidate: { image: CANDIDATE_IMAGE, migrationCount: 18, schemaSha256: "c".repeat(64) },
+    previous: { image: legacyPrevious, migrationCount: 17, schemaSha256: "d".repeat(64) },
+    rollback: { migrationCount: 17, schemaSha256: "d".repeat(64) },
+  };
+  const baseChecks = [
+    "previous_runtime_verified",
+    "previous_state_seeded",
+    "backup_verified",
+    "candidate_runtime_verified",
+    "candidate_state_verified",
+    "candidate_backup_verified",
+    "rollback_backup_verified",
+    ROLLBACK_V0131_EXCEPTION_CHECK,
+    "rollback_state_verified",
+  ];
+  assert.equal(upgradeRehearsalReport({ ...evidence, checks: baseChecks }).status, "passed");
+  assert.throws(
+    () =>
+      upgradeRehearsalReport({
+        ...evidence,
+        checks: baseChecks.filter((check) => check !== ROLLBACK_V0131_EXCEPTION_CHECK),
+      }),
+    /rehearsal_checks_invalid/u,
+  );
+  assert.throws(
+    () =>
+      upgradeRehearsalReport({
+        ...evidence,
+        previous: { ...evidence.previous, image: almostLegacyPrevious },
+        checks: baseChecks,
+      }),
+    /rehearsal_checks_invalid/u,
+  );
+  assert.equal(
+    failedUpgradeRehearsalReport(
+      new Error("private"),
+      {
+        candidate: immutableOmnifinImage(CANDIDATE_IMAGE),
+        previous: immutableOmnifinImage(almostLegacyPrevious),
+      },
+      [ROLLBACK_V0131_EXCEPTION_CHECK],
+    ).checks.length,
+    0,
+  );
+});
+
+test("accepts only the quarantined v0.13.1 admin error", () => {
+  assert.equal(
+    validateV0131RollbackAdminError({
+      body: { error: { code: "oidc_provider_configuration_unavailable" } },
+      status: 503,
+    }),
+    true,
+  );
+  for (const response of [
+    { body: { error: { code: "oidc_provider_configuration_unavailable" } }, status: 200 },
+    { body: { error: { code: "internal_error" } }, status: 503 },
+    { body: { error: {} }, status: 503 },
+    { body: { error: "oidc_provider_configuration_unavailable" }, status: 503 },
+    { body: null, status: 503 },
+  ]) {
+    assert.throws(
+      () => validateV0131RollbackAdminError(response),
+      /rollback_v0131_admin_error_invalid/u,
+    );
+  }
 });
 
 test("refuses passed evidence when any required transition check is missing", () => {
@@ -203,7 +466,11 @@ test("isolates and resource-bounds every rehearsal runtime", () => {
   );
   for (const option of ["--cap-drop", "--security-opt", "--pids-limit", "--memory", "--cpus"]) {
     const occurrences = HARNESS_SOURCE.match(new RegExp(`"${option}"`, "gu")) ?? [];
-    assert.equal(occurrences.length, 2, `${option} must protect gateway and maintenance runs`);
+    assert.equal(
+      occurrences.length,
+      3,
+      `${option} must protect gateway, maintenance, and probe runs`,
+    );
   }
   assert.doesNotMatch(HARNESS_SOURCE, /"--publish"/u);
   assert.doesNotMatch(HARNESS_SOURCE, /\.NetworkSettings\.Ports/u);
@@ -225,6 +492,7 @@ test("exercises the harness against public stable and protected-main edge digest
     ".github/workflows/publish.yml",
     ".github/workflows/upgrade-rehearsal.yml",
     "scripts/release/upgrade-rehearsal.mjs",
+    "scripts/release/verify-v0131-quarantined-rollback.mjs",
     "scripts/ci/release-upgrade-rehearsal.test.mjs",
   ]);
   const exercise = workflow.jobs.rehearsal.steps.find(
@@ -242,6 +510,41 @@ test("exercises the harness against public stable and protected-main edge digest
   );
   assert.equal(evidence.if, "always()");
   assert.equal(evidence.with["if-no-files-found"], "error");
+});
+
+test("keeps the raw rollback probe isolated and sanitized", () => {
+  for (const option of [
+    /"--network",\s*"none"/u,
+    '"--read-only"',
+    /"--cap-drop",\s*"ALL"/u,
+    /"--security-opt",\s*"no-new-privileges"/u,
+    '"--pids-limit"',
+    '"--memory"',
+    '"--cpus"',
+    ":/backups:ro",
+    ":/opt/omnifin/bin/verify-v0131-quarantined-rollback.mjs:ro",
+    '"--entrypoint"',
+  ]) {
+    assert.match(
+      PROBE_HARNESS_SOURCE,
+      typeof option === "string" ? new RegExp(option, "u") : option,
+    );
+  }
+  assert.doesNotMatch(
+    PROBE_HARNESS_SOURCE,
+    /encryptionFile|recoveryFile|omnifin_encryption_key|omnifin_recovery_secret/u,
+  );
+  assert.match(ROLLBACK_PROBE_SOURCE, /export function verifyQuarantinedRollback\(databasePath/u);
+  assert.match(ROLLBACK_PROBE_SOURCE, /new DatabaseSync\(databasePath, \{ readOnly: true \}\)/u);
+  assert.match(ROLLBACK_PROBE_SOURCE, /const DATABASE_PATH = "\/backups\/rollback\.sqlite"/u);
+  assert.match(ROLLBACK_PROBE_SOURCE, /PRAGMA query_only=ON/u);
+  assert.match(ROLLBACK_PROBE_SOURCE, /from oidc_providers/u);
+  assert.match(ROLLBACK_PROBE_SOURCE, /from auth_transactions where provider_id = \?/u);
+  assert.match(ROLLBACK_PROBE_SOURCE, /rollback_quarantine_raw_verify.*status.*ok/u);
+  assert.doesNotMatch(
+    ROLLBACK_PROBE_SOURCE,
+    /console\.|JSON\.stringify\(provider|encryptedClientSecret\)/u,
+  );
 });
 
 test("passes the production gateway runtime contract", () => {

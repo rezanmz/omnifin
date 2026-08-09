@@ -894,6 +894,7 @@ function IdentityProviderConsoleContent({
   const outcome = outcomeQuery.data;
   const providers = outcome?.status === "ready" ? outcome.snapshot.providers : [];
   const selected = providers.find((provider) => provider.id === selectedId) ?? providers[0] ?? null;
+  const requiresEndpointRepair = selected?.approvedEndpointOrigins.length === 0;
   const effectiveView = providers.length === 0 ? "create" : view;
   const mappingsQuery = useQuery({
     enabled: outcome?.status === "ready" && selected !== null && effectiveView === "detail",
@@ -983,7 +984,7 @@ function IdentityProviderConsoleContent({
   };
 
   const validate = async () => {
-    if (!snapshot || !selected) return;
+    if (!snapshot || !selected || requiresEndpointRepair) return;
     await run("validate", async () => {
       const result = await client.validateProvider(selected.id, snapshot.csrfToken);
       updateProviders((current) =>
@@ -999,7 +1000,7 @@ function IdentityProviderConsoleContent({
   };
 
   const toggleEnabled = async () => {
-    if (!snapshot || !selected) return;
+    if (!snapshot || !selected || requiresEndpointRepair) return;
     await run("toggle", async () => {
       const input: OidcProviderUpdateRequest = {
         allowJitProvisioning: selected.allowJitProvisioning,
@@ -1248,7 +1249,13 @@ function IdentityProviderConsoleContent({
                         </span>
                         <span>
                           <strong>{provider.displayName}</strong>
-                          <small>{provider.enabled ? "Sign-in enabled" : "Sign-in disabled"}</small>
+                          <small>
+                            {provider.approvedEndpointOrigins.length === 0
+                              ? "Needs endpoint repair"
+                              : provider.enabled
+                                ? "Sign-in enabled"
+                                : "Sign-in disabled"}
+                          </small>
                         </span>
                         <ChevronRight aria-hidden="true" size={16} />
                       </button>
@@ -1298,7 +1305,13 @@ function IdentityProviderConsoleContent({
                   <div className={styles.telemetryGrid}>
                     <div>
                       <span>Sign-in</span>
-                      <strong>{selected.enabled ? "Enabled" : "Disabled"}</strong>
+                      <strong>
+                        {requiresEndpointRepair
+                          ? "Quarantined"
+                          : selected.enabled
+                            ? "Enabled"
+                            : "Disabled"}
+                      </strong>
                       <small>
                         {selected.allowJitProvisioning
                           ? "JIT viewers allowed"
@@ -1350,6 +1363,7 @@ function IdentityProviderConsoleContent({
                         disabled={
                           busyAction !== null ||
                           !selected.enabled ||
+                          requiresEndpointRepair ||
                           selected.discoveryState !== "ready"
                         }
                         onClick={() => void startAdministratorBootstrap()}
@@ -1365,6 +1379,31 @@ function IdentityProviderConsoleContent({
                       {!selected.enabled || selected.discoveryState !== "ready" ? (
                         <small>Validate and enable this provider before claiming authority.</small>
                       ) : null}
+                    </section>
+                  ) : null}
+
+                  {requiresEndpointRepair ? (
+                    <section
+                      aria-labelledby="provider-approval-repair-title"
+                      className={styles.approvalRecovery}
+                      role="alert"
+                    >
+                      <CircleAlert aria-hidden="true" size={22} />
+                      <div>
+                        <p className="section-kicker">Approval quarantine</p>
+                        <h3 id="provider-approval-repair-title">Endpoint approval needs repair</h3>
+                        <p>
+                          This restored provider has no approved endpoint origins. Sign-in stays
+                          unavailable until you re-save its issuer configuration.
+                        </p>
+                      </div>
+                      <button
+                        className={styles.secondaryButton}
+                        onClick={() => setView("edit")}
+                        type="button"
+                      >
+                        Edit configuration
+                      </button>
                     </section>
                   ) : null}
 
@@ -1403,7 +1442,7 @@ function IdentityProviderConsoleContent({
                   <div className={styles.lifecycleActions}>
                     <button
                       className={styles.primaryButton}
-                      disabled={busyAction !== null}
+                      disabled={busyAction !== null || requiresEndpointRepair}
                       onClick={validate}
                       type="button"
                     >
@@ -1425,6 +1464,7 @@ function IdentityProviderConsoleContent({
                       className={selected.enabled ? styles.dangerButton : styles.primaryButton}
                       disabled={
                         busyAction !== null ||
+                        requiresEndpointRepair ||
                         (!selected.enabled && selected.discoveryState !== "ready")
                       }
                       onClick={toggleEnabled}
@@ -1440,7 +1480,12 @@ function IdentityProviderConsoleContent({
                       {selected.enabled ? "Disable sign-in" : "Enable sign-in"}
                     </button>
                   </div>
-                  {!selected.enabled && selected.discoveryState !== "ready" ? (
+                  {requiresEndpointRepair ? (
+                    <p className={styles.actionHint}>
+                      Repair the issuer approval in Edit configuration before validating or enabling
+                      sign-in.
+                    </p>
+                  ) : !selected.enabled && selected.discoveryState !== "ready" ? (
                     <p className={styles.actionHint}>
                       Validation must pass before this interface enables sign-in.
                     </p>

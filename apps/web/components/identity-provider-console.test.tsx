@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   RECOVERY_PERMISSIONS,
@@ -146,6 +146,46 @@ describe("IdentityProviderConsole", () => {
     expect(await screen.findByText(/media-operators/)).toBeVisible();
     expect(screen.getByText("operator")).toBeVisible();
     expect(screen.queryByText(/client secret value/i)).not.toBeInTheDocument();
+  });
+
+  it("quarantines a restored provider until its issuer approval is repaired", async () => {
+    const user = userEvent.setup();
+    const quarantinedProvider = { ...provider, approvedEndpointOrigins: [] };
+    const updateProvider = vi.fn(async (_providerId, input) => ({
+      provider: { ...quarantinedProvider, ...input },
+      revokedSessions: 0,
+    }));
+    render(
+      <IdentityProviderConsole
+        client={client({ updateProvider })}
+        initialMappings={{ [provider.id]: [] }}
+        initialOutcome={ready([quarantinedProvider])}
+        publicBaseUrl="https://omnifin.example.test"
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "no approved endpoint origins. Sign-in stays unavailable",
+    );
+    expect(screen.getByRole("button", { name: "Validate now" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Enable sign-in" })).toBeDisabled();
+
+    await user.click(
+      within(screen.getByRole("alert")).getByRole("button", { name: "Edit configuration" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(screen.getByRole("button", { name: "Save configuration" }));
+
+    await waitFor(() => expect(updateProvider).toHaveBeenCalledOnce());
+    expect(updateProvider).toHaveBeenCalledWith(
+      provider.id,
+      expect.objectContaining({
+        approvedEndpointOrigins: ["https://identity.example.test"],
+        enabled: false,
+      }),
+      csrfToken,
+    );
   });
 
   it("offers an explicit OIDC first-admin claim only to recovery access", async () => {

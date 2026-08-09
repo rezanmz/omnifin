@@ -447,6 +447,13 @@ describe("authentication contracts", () => {
       providers: [provider],
     });
     expect(
+      oidcProviderAdminSchema.parse({ ...provider, approvedEndpointOrigins: [] }),
+    ).toMatchObject({
+      approvedEndpointOrigins: [],
+      clientSecretConfigured: true,
+      slug: provider.slug,
+    });
+    expect(
       oidcProviderAdminSchema.safeParse({ ...provider, clientSecret: "must-not-cross" }).success,
     ).toBe(false);
     expect(oidcProviderValidationParamsSchema.parse({ providerId: provider.id })).toEqual({
@@ -522,6 +529,12 @@ describe("authentication contracts", () => {
     expect(
       oidcProviderCreateRequestSchema.safeParse({
         ...base,
+        approvedEndpointOrigins: [],
+      }).success,
+    ).toBe(false);
+    expect(
+      oidcProviderCreateRequestSchema.safeParse({
+        ...base,
         tokenEndpointAuthMethod: "client_secret_post",
       }).success,
     ).toBe(false);
@@ -550,6 +563,12 @@ describe("authentication contracts", () => {
       oidcProviderUpdateRequestSchema.safeParse({
         ...base,
         clientSecret: "must-not-be-retained",
+      }).success,
+    ).toBe(false);
+    expect(
+      oidcProviderUpdateRequestSchema.safeParse({
+        ...base,
+        approvedEndpointOrigins: [],
       }).success,
     ).toBe(false);
     expect(
