@@ -205,7 +205,6 @@ function sendTransfer(
   transfer: OriginalDownloadTransfer,
   request: FastifyRequest,
   reply: FastifyReply,
-  controller: AbortController,
 ) {
   const response = createOriginalDownloadResponseBody(transfer, () => {
     request.log.error(
@@ -213,12 +212,15 @@ function sendTransfer(
       "Original download finalization failed",
     );
   });
-  const close = () => {
-    controller.abort();
-    response.cancel();
+  const cancel = () => response.cancel();
+  const cleanup = () => {
+    reply.raw.off("close", cancel);
+    request.operationSignal.removeEventListener("abort", cancel);
   };
-  reply.raw.once("close", close);
-  response.body.once("close", () => reply.raw.off("close", close));
+  reply.raw.once("close", cancel);
+  request.operationSignal.addEventListener("abort", cancel, { once: true });
+  response.body.once("close", cleanup);
+  if (request.operationSignal.aborted) cancel();
 
   reply.status(transfer.status);
   reply.header("accept-ranges", transfer.acceptRanges ? "bytes" : "none");
@@ -260,22 +262,16 @@ export const originalDownloadRoutes: FastifyPluginAsync<OriginalDownloadRoutesOp
     async (request, reply) => {
       const params = prepareParamsSchema.parse(request.params);
       libraryDownloadPrepareRequestSchema.parse(request.body);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         const prepared = await downloads.prepare(
           params.referenceId,
           context(request, reply),
-          controller.signal,
+          request.operationSignal,
         );
         return reply.status(201).send(libraryDownloadPrepareResponseSchema.parse(prepared));
       } catch (error) {
         if (error instanceof OriginalDownloadError) throw mappedError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
-        reply.raw.off("close", abort);
       }
     },
   );
@@ -294,25 +290,17 @@ export const originalDownloadRoutes: FastifyPluginAsync<OriginalDownloadRoutesOp
       const params = grantParamsSchema.parse(request.params);
       const rangeHeader = request.headers.range;
       const range = Array.isArray(rangeHeader) ? rangeHeader.join(",") : rangeHeader;
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
-      reply.raw.once("close", abort);
       try {
         const transfer = await downloads.open(
           params.grantId,
           range,
           context(request, reply),
-          controller.signal,
+          request.operationSignal,
         );
-        request.raw.off("aborted", abort);
-        reply.raw.off("close", abort);
-        return sendTransfer(transfer, request, reply, controller);
+        return sendTransfer(transfer, request, reply);
       } catch (error) {
         if (error instanceof OriginalDownloadError) throw mappedError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );

@@ -55,25 +55,31 @@ function sessionDependencies() {
   };
 }
 
-async function harness() {
+async function harness(
+  options: {
+    listAttentionItems?: ReturnType<typeof vi.fn<LibraryOperationClient["listAttentionItems"]>>;
+  } = {},
+) {
   const appConfig = config();
-  const listAttentionItems = vi.fn(async () => ({
-    items: [
-      {
-        artwork: { poster: { itemId: "route-private-poster", type: "Primary" as const } },
-        externalId: "route-private-movie",
-        identityState: "unmatched" as const,
-        issues: ["missing_identity" as const, "missing_overview" as const],
-        kind: "movie" as const,
-        overview: null,
-        title: "Ember Coast",
-        year: 2026,
-      },
-    ],
-    nextStartIndex: null,
-    scanned: 1,
-    truncated: false,
-  }));
+  const listAttentionItems =
+    options.listAttentionItems ??
+    vi.fn(async () => ({
+      items: [
+        {
+          artwork: { poster: { itemId: "route-private-poster", type: "Primary" as const } },
+          externalId: "route-private-movie",
+          identityState: "unmatched" as const,
+          issues: ["missing_identity" as const, "missing_overview" as const],
+          kind: "movie" as const,
+          overview: null,
+          title: "Ember Coast",
+          year: 2026,
+        },
+      ],
+      nextStartIndex: null,
+      scanned: 1,
+      truncated: false,
+    }));
   const scanLibrary = vi.fn(async () => undefined);
   const refreshItem = vi.fn(async () => undefined);
   let metadataState = { overview: null, title: "Ember Coast", year: 2026 };
@@ -222,6 +228,46 @@ describe("library operation routes", () => {
       expect(response.headers["cache-control"]).toBe("no-store");
       expect(response.headers.vary).toBe("Cookie");
       expect(response.body).not.toMatch(/route-private|operator-link|jellyfin-token/u);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("passes the canonical operation signal through and aborts it during runtime drain", async () => {
+    let entered!: () => void;
+    const enteredPromise = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let observedSignal!: AbortSignal;
+    const listAttentionItems = vi.fn(
+      async (_input: unknown, signal?: AbortSignal): Promise<never> => {
+        observedSignal = signal!;
+        entered();
+        return new Promise<never>((_resolve, reject) => {
+          if (signal?.aborted) {
+            reject(signal.reason);
+            return;
+          }
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      },
+    );
+    const { app, headers } = await harness({ listAttentionItems });
+    try {
+      const responsePromise = app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: "/v1/library/attention",
+      });
+      await enteredPromise;
+      app.runtimeDrain.beginDrain("test drain");
+      const response = await responsePromise;
+
+      expect(observedSignal).toBeInstanceOf(AbortSignal);
+      expect(observedSignal.aborted).toBe(true);
+      expect(observedSignal.reason).toBeInstanceOf(DOMException);
+      expect((observedSignal.reason as DOMException).name).toBe("AbortError");
+      expect(response.statusCode).toBe(500);
     } finally {
       await app.close();
     }

@@ -1091,6 +1091,8 @@ describe("Continue Watching routes", () => {
       actionResponse!.emit("close");
 
       await vi.waitFor(() => expect(actionSignal?.aborted).toBe(true));
+      expect(actionSignal?.reason).toBeInstanceOf(DOMException);
+      expect((actionSignal?.reason as DOMException).name).toBe("AbortError");
       downstream.abort();
       await pending;
     } finally {

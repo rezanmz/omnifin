@@ -261,6 +261,7 @@ describe("download queue routes", () => {
       expect(response.body).not.toContain(privatePassword);
       expect(response.body).not.toContain(privateUpstreamId);
       expect(readDownloadQueue).toHaveBeenCalledOnce();
+      expect(readDownloadQueue.mock.calls[0]?.[0]).toEqual(expect.any(AbortSignal));
     } finally {
       await app.close();
     }
@@ -334,6 +335,23 @@ describe("download queue routes", () => {
       expect(response.body).not.toContain(privatePassword);
       expect(response.body).not.toContain(privateUpstreamId);
       expect(readDownloadQueue).toHaveBeenCalledOnce();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("does not retain or hijack a queue stream after runtime drain", async () => {
+    const { app, operator, readDownloadQueue } = await harness();
+    try {
+      app.runtimeDrain.beginDrain("test drain");
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/downloads/queue/events",
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(readDownloadQueue).not.toHaveBeenCalled();
     } finally {
       await app.close();
     }

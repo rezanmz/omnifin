@@ -91,6 +91,8 @@ import {
 import { createLoggerOptions, safeFailureDiagnostics } from "./logger.js";
 import { runtimeIdentityRoutes } from "./runtime/identity-routes.js";
 import { loadRuntimeIdentity } from "./runtime/identity.js";
+import { createRuntimeDrainCoordinator, type RuntimeDrainCoordinator } from "./runtime/drain.js";
+import { installRequestOperationSignal } from "./runtime/request-operation.js";
 import { savedListRoutes, type SavedListRoutesOptions } from "./saved/list-routes.js";
 import { purgeExpiredSavedState, SAVED_MAINTENANCE_INTERVAL_MS } from "./saved/maintenance.js";
 import { savedTargetRoutes, type SavedTargetRoutesOptions } from "./saved/target-routes.js";
@@ -146,10 +148,12 @@ declare module "fastify" {
   interface FastifyInstance {
     appConfig: AppConfig;
     database: DatabaseHandle;
+    runtimeDrain: RuntimeDrainCoordinator;
     sessionService: SessionService;
   }
 
   interface FastifyRequest {
+    operationSignal: AbortSignal;
     validatedSession: ValidatedSession | null;
   }
 }
@@ -196,6 +200,7 @@ export interface CreateAppOptions {
   stackVerificationDependencies?: StackVerificationRoutesOptions["dependencies"];
   recoveryAccessDependencies?: RecoveryRoutesOptions["dependencies"];
   runtimeIdentity?: RuntimeIdentity;
+  runtimeDrain?: RuntimeDrainCoordinator;
   sessionDependencies?: SessionServiceDependencies;
 }
 
@@ -269,6 +274,7 @@ function oidcBackchannelRequest(request: FastifyRequest) {
 }
 
 export async function createApp(options: CreateAppOptions = {}): Promise<FastifyInstance> {
+  const runtimeDrain = options.runtimeDrain ?? createRuntimeDrainCoordinator();
   const config = options.config ?? loadConfig();
   const startupPrepared = options.database === undefined && options.migrate !== false;
   const database =
@@ -337,6 +343,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
 
     app.decorate("appConfig", config);
     app.decorate("database", database);
+    app.decorate("runtimeDrain", runtimeDrain);
     const sessionService = new SessionService(database, config, options.sessionDependencies);
     const backchannelDependencies = options.oidcDependencies?.backchannelLogout;
     const oidcBackchannelLogout = new OidcBackchannelLogoutService(database, config, {
@@ -347,6 +354,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
     });
     app.decorate("sessionService", sessionService);
     app.decorateRequest("validatedSession", null);
+    installRequestOperationSignal(app, runtimeDrain);
 
     app.addHook("onRequest", async (request, reply) => {
       reply.header("x-request-id", request.id);
@@ -502,8 +510,12 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       }
     }, SAVED_MAINTENANCE_INTERVAL_MS);
     savedMaintenance.unref();
+    app.addHook("preClose", async () => {
+      runtimeDrain.beginDrain("app.close");
+    });
     app.addHook("onClose", async () => {
       clearInterval(savedMaintenance);
+      runtimeDrain.beginDrain("app.onClose");
       closeDatabase();
     });
 

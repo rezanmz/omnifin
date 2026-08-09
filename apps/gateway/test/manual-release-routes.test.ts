@@ -5,7 +5,7 @@ import {
   type ManualReleaseCandidate,
 } from "@omnifin/contracts/acquisition";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, type Mock, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
 import { SESSION_COOKIE_NAME } from "../src/auth/session-cookie.js";
@@ -14,6 +14,7 @@ import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.
 import {
   ManualReleaseError,
   ManualReleaseService,
+  type ManualReleaseAdapter,
   type ManualReleaseErrorReason,
 } from "../src/acquisitions/manual-release-service.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
@@ -118,9 +119,14 @@ async function harness(
       service: "radarr" as const,
     },
   })),
+  options: {
+    grabManualRelease?: Mock<ManualReleaseAdapter["grabManualRelease"]>;
+  } = {},
 ) {
   const config = testConfig();
-  const grabManualRelease = vi.fn(async () => undefined);
+  const grabManualRelease =
+    options.grabManualRelease ??
+    vi.fn<ManualReleaseAdapter["grabManualRelease"]>(async () => undefined);
   const app = await createApp({
     config,
     manualReleaseDependencies: {
@@ -411,6 +417,70 @@ describe("manual release routes", () => {
       expect(first.statusCode).toBe(409);
       expect(replay.statusCode).toBe(409);
       expect(apiErrorSchema.parse(first.json()).error.code).toBe(
+        "manual_release_grab_outcome_uncertain",
+      );
+      expect(grabManualRelease).toHaveBeenCalledOnce();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("passes drain cancellation to a dispatched grab while preserving uncertainty", async () => {
+    let observedSignal: AbortSignal | undefined;
+    let observedAbortReason: unknown;
+    const grabManualRelease = vi.fn<ManualReleaseAdapter["grabManualRelease"]>(
+      async (_reference, signal) => {
+        observedSignal = signal;
+        await new Promise<void>((_resolve, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              observedAbortReason = signal.reason;
+              reject(signal.reason);
+            },
+            { once: true },
+          );
+        });
+      },
+    );
+    const { app, operator } = await harness(undefined, { grabManualRelease });
+    const headers = {
+      cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}`,
+      "idempotency-key": "manual-drain-route-0001",
+      origin: baseUrl,
+      "x-omnifin-csrf": operator.csrfToken,
+    };
+    try {
+      await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/acquisitions/releases?service=radarr&mediaId=42",
+      });
+      const pending = app.inject({
+        headers,
+        method: "POST",
+        payload: { overrideRejections: false, releaseId },
+        url: "/v1/acquisitions/releases/grabs",
+      });
+      await vi.waitFor(() => expect(observedSignal).toBeDefined());
+      app.runtimeDrain.beginDrain("test drain");
+
+      const response = await pending;
+      expect(observedSignal?.aborted).toBe(true);
+      expect(observedAbortReason).toBeInstanceOf(DOMException);
+      expect((observedAbortReason as DOMException).name).toBe("AbortError");
+      expect(response.statusCode).toBe(409);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe(
+        "manual_release_grab_outcome_uncertain",
+      );
+      const replay = await app.inject({
+        headers,
+        method: "POST",
+        payload: { overrideRejections: false, releaseId },
+        url: "/v1/acquisitions/releases/grabs",
+      });
+      expect(replay.statusCode).toBe(409);
+      expect(apiErrorSchema.parse(replay.json()).error.code).toBe(
         "manual_release_grab_outcome_uncertain",
       );
       expect(grabManualRelease).toHaveBeenCalledOnce();

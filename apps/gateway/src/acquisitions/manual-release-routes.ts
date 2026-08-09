@@ -226,23 +226,18 @@ export const manualReleaseRoutes: FastifyPluginAsync<ManualReleaseRoutesOptions>
         );
       }
       const principal = requirePermission(session?.principal, "acquisition.manage");
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return manualReleaseSearchResponseSchema.parse(
           await releases.search(
             manualReleaseTargetInputSchema.parse(request.query),
             { principal },
-            controller.signal,
+            request.operationSignal,
           ),
         );
       } catch (error) {
         if (error instanceof ManualReleaseError) throw readError(error);
         if (error instanceof SafeConnectorError) throw upstreamError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -273,15 +268,12 @@ export const manualReleaseRoutes: FastifyPluginAsync<ManualReleaseRoutesOptions>
       const idempotencyKey = manualReleaseGrabIdempotencyKeySchema.parse(
         request.headers["idempotency-key"],
       );
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         const result = await releases.grab(
           input,
           idempotencyKey,
           { ipAddress: request.ip, principal, requestId: request.id },
-          controller.signal,
+          request.operationSignal,
         );
         reply.header("idempotency-replayed", String(result.replayed));
         reply.status(result.replayed ? 200 : 201);
@@ -289,8 +281,6 @@ export const manualReleaseRoutes: FastifyPluginAsync<ManualReleaseRoutesOptions>
       } catch (error) {
         if (error instanceof ManualReleaseError) throw grabError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );

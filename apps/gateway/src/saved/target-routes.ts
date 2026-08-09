@@ -191,22 +191,17 @@ export const savedTargetRoutes: FastifyPluginAsync<SavedTargetRoutesOptions> = a
     async (request, reply) => {
       savedOwnedTargetIssueRequestSchema.parse(request.body);
       const { referenceId } = paramsSchema.parse(request.params);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         const summary = await targets.issueOwned(
           referenceId,
           operationContext(request, reply, "saved.lists.self.manage"),
-          controller.signal,
+          request.operationSignal,
         );
         reply.status(201);
         return savedMembershipSummarySchema.parse(summary);
       } catch (error) {
         if (error instanceof SavedTargetServiceError) throw serviceError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -227,22 +222,17 @@ export const savedTargetRoutes: FastifyPluginAsync<SavedTargetRoutesOptions> = a
     },
     async (request, reply) => {
       const input = savedDiscoveryTargetIssueRequestSchema.parse(request.body);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         const summary = await targets.issueDiscovery(
           input,
           operationContext(request, reply, "saved.lists.self.manage"),
-          controller.signal,
+          request.operationSignal,
         );
         reply.status(201);
         return savedMembershipSummarySchema.parse(summary);
       } catch (error) {
         if (error instanceof SavedTargetServiceError) throw serviceError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -265,23 +255,18 @@ export const savedTargetRoutes: FastifyPluginAsync<SavedTargetRoutesOptions> = a
     async (request, reply) => {
       const input = savedFavoriteMutationRequestSchema.parse(request.body);
       const { targetReferenceId } = favoriteParamsSchema.parse(request.params);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         const result = await targets.updateFavorite(
           targetReferenceId,
           input,
           savedListIdempotencyKeySchema.parse(request.headers["idempotency-key"]),
           operationContext(request, reply, "favorites.self.manage"),
-          controller.signal,
+          request.operationSignal,
         );
         return savedFavoriteMutationResponseSchema.parse(result);
       } catch (error) {
         if (error instanceof SavedTargetServiceError) throw serviceError(error, reply, "favorite");
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );

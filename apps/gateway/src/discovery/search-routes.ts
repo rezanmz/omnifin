@@ -170,23 +170,18 @@ export const discoverySearchRoutes: FastifyPluginAsync<DiscoverySearchRoutesOpti
         );
       }
       const principal = requirePermission(session?.principal, "media.view");
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return discoveryBrowseResponseSchema.parse(
           await discovery.browse(
             discoveryBrowseQuerySchema.parse(request.query),
             { principal },
-            controller.signal,
+            request.operationSignal,
           ),
         );
       } catch (error) {
         if (error instanceof DiscoverySearchError) throw searchError(error);
         if (error instanceof SafeConnectorError) throw upstreamError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -214,22 +209,17 @@ export const discoverySearchRoutes: FastifyPluginAsync<DiscoverySearchRoutesOpti
         );
       }
       const principal = requirePermission(session?.principal, "media.view");
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return discoveryFeedResponseSchema.parse(
           await discovery.feed(
             discoveryFeedQuerySchema.parse(request.query),
             { principal },
-            controller.signal,
+            request.operationSignal,
           ),
         );
       } catch (error) {
         if (error instanceof DiscoverySearchError) throw searchError(error);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -254,11 +244,12 @@ export const discoverySearchRoutes: FastifyPluginAsync<DiscoverySearchRoutesOpti
       }
       const principal = requirePermission(session?.principal, "media.view");
       const { referenceId } = discoveryArtworkParamsSchema.parse(request.params);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
-        const artwork = await discovery.readArtwork({ principal }, referenceId, controller.signal);
+        const artwork = await discovery.readArtwork(
+          { principal },
+          referenceId,
+          request.operationSignal,
+        );
         reply.header("cache-control", "private, max-age=3600, immutable");
         reply.header("etag", artwork.etag);
         reply.header("vary", "Cookie");
@@ -282,8 +273,6 @@ export const discoverySearchRoutes: FastifyPluginAsync<DiscoverySearchRoutesOpti
         }
         if (error instanceof DiscoverySearchError) throw searchError(error);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -311,23 +300,18 @@ export const discoverySearchRoutes: FastifyPluginAsync<DiscoverySearchRoutesOpti
         );
       }
       const principal = requirePermission(session?.principal, "media.view");
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return discoverySearchResponseSchema.parse(
           await discovery.search(
             discoverySearchQuerySchema.parse(request.query),
             { principal },
-            controller.signal,
+            request.operationSignal,
           ),
         );
       } catch (error) {
         if (error instanceof DiscoverySearchError) throw searchError(error);
         if (error instanceof SafeConnectorError) throw upstreamError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -356,24 +340,19 @@ export const discoverySearchRoutes: FastifyPluginAsync<DiscoverySearchRoutesOpti
         );
       }
       const principal = requirePermission(session?.principal, "media.view");
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return discoveryMediaDetailResponseSchema.parse(
           await discovery.detail(
             discoveryMediaDetailParamsSchema.parse(request.params),
             discoveryMediaDetailQuerySchema.parse(request.query),
             { principal },
-            controller.signal,
+            request.operationSignal,
           ),
         );
       } catch (error) {
         if (error instanceof DiscoverySearchError) throw searchError(error);
         if (error instanceof SafeConnectorError) throw upstreamError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -402,24 +381,19 @@ export const discoverySearchRoutes: FastifyPluginAsync<DiscoverySearchRoutesOpti
         );
       }
       const principal = requirePermission(session?.principal, "media.view");
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return discoveryPersonDetailResponseSchema.parse(
           await discovery.personDetail(
             discoveryPersonDetailParamsSchema.parse(request.params),
             discoveryPersonDetailQuerySchema.parse(request.query),
             { principal },
-            controller.signal,
+            request.operationSignal,
           ),
         );
       } catch (error) {
         if (error instanceof DiscoverySearchError) throw searchError(error);
         if (error instanceof SafeConnectorError) throw upstreamError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -448,24 +422,19 @@ export const discoverySearchRoutes: FastifyPluginAsync<DiscoverySearchRoutesOpti
         );
       }
       const principal = requirePermission(session?.principal, "media.view");
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return discoveryPersonCreditsResponseSchema.parse(
           await discovery.personCredits(
             discoveryPersonDetailParamsSchema.parse(request.params),
             discoveryPersonCreditsQuerySchema.parse(request.query),
             { principal },
-            controller.signal,
+            request.operationSignal,
           ),
         );
       } catch (error) {
         if (error instanceof DiscoverySearchError) throw searchError(error);
         if (error instanceof SafeConnectorError) throw upstreamError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );

@@ -594,16 +594,13 @@ export const savedListRoutes: FastifyPluginAsync<SavedListRoutesOptions> = async
     async (request, reply) => {
       const context = operationContext(request, reply);
       const params = artworkParamsSchema.parse(request.params);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         const referenceId = saved.resolveOwnedArtworkReference(params.catalogReferenceId, context);
         const artwork = await media.readArtwork(
           { principal: context.principal },
           referenceId,
           params.kind,
-          controller.signal,
+          request.operationSignal,
         );
         reply.header("cache-control", "private, max-age=3600, stale-while-revalidate=86400");
         reply.header("content-disposition", "inline");
@@ -648,8 +645,6 @@ export const savedListRoutes: FastifyPluginAsync<SavedListRoutesOptions> = async
           });
         }
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );

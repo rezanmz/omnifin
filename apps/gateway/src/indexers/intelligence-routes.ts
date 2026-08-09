@@ -125,14 +125,7 @@ async function withAbort<T>(
   request: FastifyRequest,
   operation: (signal: AbortSignal) => Promise<T>,
 ) {
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  request.raw.once("aborted", abort);
-  try {
-    return await operation(controller.signal);
-  } finally {
-    request.raw.off("aborted", abort);
-  }
+  return operation(request.operationSignal);
 }
 
 export interface IndexerIntelligenceRoutesOptions {

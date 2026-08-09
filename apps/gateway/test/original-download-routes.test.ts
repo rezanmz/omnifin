@@ -52,19 +52,21 @@ async function harness() {
     year: 2026,
   };
   const readOriginalDownloadMetadata = vi.fn(async () => metadata);
-  const streamOriginalDownload = vi.fn(async (): Promise<JellyfinOriginalDownloadStream> => ({
-    acceptRanges: true,
-    body: new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array([0, 1, 2, 3]));
-        controller.close();
-      },
+  const streamOriginalDownload = vi.fn(
+    async (_input?: unknown, _signal?: AbortSignal): Promise<JellyfinOriginalDownloadStream> => ({
+      acceptRanges: true,
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([0, 1, 2, 3]));
+          controller.close();
+        },
+      }),
+      contentLength: 4,
+      contentRange: "bytes 0-3/9000000000",
+      contentType: "video/mp4",
+      status: 206,
     }),
-    contentLength: 4,
-    contentRange: "bytes 0-3/9000000000",
-    contentType: "video/mp4",
-    status: 206,
-  }));
+  );
   let auditToken = 0;
   let grantToken = 0;
   let internalToken = 0;
@@ -461,5 +463,52 @@ describe("original download routes", () => {
     await vi.waitFor(() => expect(cancelled).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(finish).toHaveBeenCalledWith("cancelled", 4));
     expect(String(cancelled.mock.calls[0]?.[0])).not.toMatch(/jellyfin|token|item/iu);
+  });
+
+  it("cancels an in-flight original stream with AbortError when runtime drain begins", async () => {
+    const test = await harness();
+    let streamSignal: AbortSignal | undefined;
+    let started!: () => void;
+    const startedPromise = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    test.streamOriginalDownload.mockImplementationOnce(
+      async (_input: unknown, signal?: AbortSignal): Promise<never> => {
+        streamSignal = signal;
+        started();
+        return await new Promise<never>((_resolve, reject) => {
+          if (signal?.aborted) {
+            reject(signal.reason);
+            return;
+          }
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      },
+    );
+
+    try {
+      const preparedResponse = await test.app.inject({
+        headers: test.headers,
+        method: "POST",
+        payload: {},
+        url: `/v1/media/library/${test.referenceId}/downloads`,
+      });
+      const prepared = libraryDownloadPrepareResponseSchema.parse(preparedResponse.json());
+      const pending = test.app.inject({
+        headers: { cookie: test.headers.cookie },
+        method: "GET",
+        url: prepared.path,
+      });
+
+      await startedPromise;
+      test.app.runtimeDrain.beginDrain("test drain");
+      const response = await pending;
+
+      expect(response.statusCode).toBe(503);
+      expect(streamSignal?.reason).toBeInstanceOf(DOMException);
+      expect((streamSignal?.reason as DOMException).name).toBe("AbortError");
+    } finally {
+      await test.app.close();
+    }
   });
 });

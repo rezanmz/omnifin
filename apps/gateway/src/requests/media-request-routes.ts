@@ -174,9 +174,6 @@ export const mediaRequestRoutes: FastifyPluginAsync<MediaRequestRoutesOptions> =
       }
       const principal = requirePermission(session?.principal, "request.create");
       const query = mediaRequestRoutingOptionsQuerySchema.parse(request.query);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return mediaRequestRoutingOptionsResponseSchema.parse(
           await mediaRequests.routingOptions(
@@ -186,14 +183,12 @@ export const mediaRequestRoutes: FastifyPluginAsync<MediaRequestRoutesOptions> =
               principal,
               requestId: request.id,
             },
-            controller.signal,
+            request.operationSignal,
           ),
         );
       } catch (error) {
         if (error instanceof MediaRequestServiceError) throw requestError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -221,9 +216,6 @@ export const mediaRequestRoutes: FastifyPluginAsync<MediaRequestRoutesOptions> =
       );
       const input = mediaRequestInputSchema.parse(request.body);
       const idempotencyKey = idempotencyKeySchema.parse(request.headers["idempotency-key"]);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         const result = await mediaRequests.create(
           input,
@@ -233,7 +225,7 @@ export const mediaRequestRoutes: FastifyPluginAsync<MediaRequestRoutesOptions> =
             principal,
             requestId: request.id,
           },
-          controller.signal,
+          request.operationSignal,
         );
         reply.header("idempotency-replayed", String(result.replayed));
         reply.status(result.replayed ? 200 : 201);
@@ -241,8 +233,6 @@ export const mediaRequestRoutes: FastifyPluginAsync<MediaRequestRoutesOptions> =
       } catch (error) {
         if (error instanceof MediaRequestServiceError) throw requestError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -264,9 +254,6 @@ export const mediaRequestRoutes: FastifyPluginAsync<MediaRequestRoutesOptions> =
         "connectors.manage",
       );
       const input = mediaRequestRoutingPreferenceInputSchema.parse(request.body);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         await mediaRequests.setRoutingPreference(
           input,
@@ -275,14 +262,12 @@ export const mediaRequestRoutes: FastifyPluginAsync<MediaRequestRoutesOptions> =
             principal,
             requestId: request.id,
           },
-          controller.signal,
+          request.operationSignal,
         );
         return reply.status(204).send();
       } catch (error) {
         if (error instanceof MediaRequestServiceError) throw requestError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );

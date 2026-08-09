@@ -252,13 +252,6 @@ function handleError(error: unknown, reply: FastifyReply): never {
   throw error;
 }
 
-function abortController(request: FastifyRequest) {
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  request.raw.once("aborted", abort);
-  return { controller, release: () => request.raw.off("aborted", abort) };
-}
-
 export interface LibraryOperationRoutesOptions {
   dependencies?: LibraryOperationDependencies;
 }
@@ -284,15 +277,12 @@ export const libraryOperationRoutes: FastifyPluginAsync<LibraryOperationRoutesOp
     },
     async (request, reply) => {
       const query = libraryAttentionQuerySchema.parse(request.query);
-      const abort = abortController(request);
       try {
         return libraryAttentionResponseSchema.parse(
-          await library.attention(query, operationContext(request, reply), abort.controller.signal),
+          await library.attention(query, operationContext(request, reply), request.operationSignal),
         );
       } catch (error) {
         handleError(error, reply);
-      } finally {
-        abort.release();
       }
     },
   );
@@ -319,20 +309,17 @@ export const libraryOperationRoutes: FastifyPluginAsync<LibraryOperationRoutesOp
       const idempotencyKey = libraryMutationIdempotencyKeySchema.parse(
         request.headers["idempotency-key"],
       );
-      const abort = abortController(request);
       try {
         const result = await library.scan(
           idempotencyKey,
           operationContext(request, reply),
-          abort.controller.signal,
+          request.operationSignal,
         );
         reply.header("idempotency-replayed", String(result.replayed));
         reply.status(result.replayed ? 200 : 201);
         return libraryMutationResponseSchema.parse(result.receipt);
       } catch (error) {
         handleError(error, reply);
-      } finally {
-        abort.release();
       }
     },
   );
@@ -361,22 +348,19 @@ export const libraryOperationRoutes: FastifyPluginAsync<LibraryOperationRoutesOp
       const idempotencyKey = libraryMutationIdempotencyKeySchema.parse(
         request.headers["idempotency-key"],
       );
-      const abort = abortController(request);
       try {
         const result = await library.refresh(
           params.referenceId,
           body,
           idempotencyKey,
           operationContext(request, reply),
-          abort.controller.signal,
+          request.operationSignal,
         );
         reply.header("idempotency-replayed", String(result.replayed));
         reply.status(result.replayed ? 200 : 201);
         return libraryMutationResponseSchema.parse(result.receipt);
       } catch (error) {
         handleError(error, reply);
-      } finally {
-        abort.release();
       }
     },
   );
@@ -405,22 +389,19 @@ export const libraryOperationRoutes: FastifyPluginAsync<LibraryOperationRoutesOp
       const idempotencyKey = libraryMutationIdempotencyKeySchema.parse(
         request.headers["idempotency-key"],
       );
-      const abort = abortController(request);
       try {
         const result = await library.updateMetadata(
           params.referenceId,
           body,
           idempotencyKey,
           operationContext(request, reply),
-          abort.controller.signal,
+          request.operationSignal,
         );
         reply.header("idempotency-replayed", String(result.replayed));
         reply.status(result.replayed ? 200 : 201);
         return libraryMutationResponseSchema.parse(result.receipt);
       } catch (error) {
         handleError(error, reply);
-      } finally {
-        abort.release();
       }
     },
   );
@@ -443,20 +424,17 @@ export const libraryOperationRoutes: FastifyPluginAsync<LibraryOperationRoutesOp
     async (request, reply) => {
       const params = itemParamsSchema.parse(request.params);
       const body = libraryArtworkSearchRequestSchema.parse(request.body);
-      const abort = abortController(request);
       try {
         const result = await library.searchArtwork(
           params.referenceId,
           body,
           operationContext(request, reply),
-          abort.controller.signal,
+          request.operationSignal,
         );
         reply.status(201);
         return libraryArtworkSearchResponseSchema.parse(result);
       } catch (error) {
         handleError(error, reply);
-      } finally {
-        abort.release();
       }
     },
   );
@@ -472,13 +450,12 @@ export const libraryOperationRoutes: FastifyPluginAsync<LibraryOperationRoutesOp
     },
     async (request, reply) => {
       const params = artworkParamsSchema.parse(request.params);
-      const abort = abortController(request);
       try {
         const result = await library.previewArtwork(
           params.searchId,
           params.resultId,
           operationContext(request, reply),
-          abort.controller.signal,
+          request.operationSignal,
         );
         reply.header("cache-control", "private, max-age=300, must-revalidate");
         reply.header("vary", "Cookie");
@@ -487,8 +464,6 @@ export const libraryOperationRoutes: FastifyPluginAsync<LibraryOperationRoutesOp
         return reply.type(result.contentType).send(Buffer.from(result.body));
       } catch (error) {
         handleError(error, reply);
-      } finally {
-        abort.release();
       }
     },
   );
@@ -517,22 +492,19 @@ export const libraryOperationRoutes: FastifyPluginAsync<LibraryOperationRoutesOp
       const idempotencyKey = libraryMutationIdempotencyKeySchema.parse(
         request.headers["idempotency-key"],
       );
-      const abort = abortController(request);
       try {
         const result = await library.applyArtwork(
           params.searchId,
           params.resultId,
           idempotencyKey,
           operationContext(request, reply),
-          abort.controller.signal,
+          request.operationSignal,
         );
         reply.header("idempotency-replayed", String(result.replayed));
         reply.status(result.replayed ? 200 : 201);
         return libraryMutationResponseSchema.parse(result.receipt);
       } catch (error) {
         handleError(error, reply);
-      } finally {
-        abort.release();
       }
     },
   );

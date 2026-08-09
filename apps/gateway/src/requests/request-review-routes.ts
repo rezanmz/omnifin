@@ -160,18 +160,13 @@ export const requestReviewRoutes: FastifyPluginAsync<RequestReviewRoutesOptions>
       }
       const principal = requirePermission(session?.principal, "request.review");
       const query = requestReviewWireQuerySchema.parse(request.query);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         return requestReviewPageSchema.parse(
-          await reviews.list(query, { principal }, controller.signal),
+          await reviews.list(query, { principal }, request.operationSignal),
         );
       } catch (error) {
         if (error instanceof RequestReviewServiceError) throw reviewError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
@@ -195,24 +190,19 @@ export const requestReviewRoutes: FastifyPluginAsync<RequestReviewRoutesOptions>
       const { requestId } = requestReviewParametersSchema.parse(request.params);
       const input = requestReviewDecisionInputSchema.parse(request.body);
       const idempotencyKey = idempotencyKeySchema.parse(request.headers["idempotency-key"]);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.raw.once("aborted", abort);
       try {
         const result = await reviews.review(
           requestId,
           input,
           idempotencyKey,
           { ipAddress: request.ip, principal, requestId: request.id },
-          controller.signal,
+          request.operationSignal,
         );
         reply.header("idempotency-replayed", String(result.replayed));
         return requestReviewItemSchema.parse(result.request);
       } catch (error) {
         if (error instanceof RequestReviewServiceError) throw reviewError(error, reply);
         throw error;
-      } finally {
-        request.raw.off("aborted", abort);
       }
     },
   );
