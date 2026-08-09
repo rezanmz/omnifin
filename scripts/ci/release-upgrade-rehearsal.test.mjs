@@ -242,3 +242,26 @@ test("exercises the harness against public stable and protected-main edge digest
   assert.equal(evidence.if, "always()");
   assert.equal(evidence.with["if-no-files-found"], "error");
 });
+
+test("passes the production gateway runtime contract", () => {
+  const gatewayStart = HARNESS_SOURCE.slice(
+    HARNESS_SOURCE.indexOf("function startGateway"),
+    HARNESS_SOURCE.indexOf("function stopGateway"),
+  );
+  assert.match(gatewayStart, /`\$\{resources\.backupVolume\}:\/backups`/u);
+  assert.match(gatewayStart, /"OMNIFIN_BACKUP_DIRECTORY=\/backups"/u);
+  assert.match(gatewayStart, /`OMNIFIN_IMAGE_REF=\$\{image\.reference\}`/u);
+});
+
+test("uses the prior image to restore the original backup and retains candidate evidence", () => {
+  assert.match(
+    HARNESS_SOURCE,
+    /function restorePreviousState\(resources, priorImage, previous\)[\s\S]*?runMaintenance\(\s*resources,\s*priorImage,[\s\S]*?candidate-pre-rollback\.sqlite/u,
+  );
+  assert.match(
+    HARNESS_SOURCE,
+    /const candidateRollback = restorePreviousState\(resources, options\.previous, previous\)/u,
+  );
+  assert.match(HARNESS_SOURCE, /"\/backups\/previous\.sqlite"/u);
+  assert.match(HARNESS_SOURCE, /"\/backups\/candidate-pre-rollback\.sqlite"/u);
+});
