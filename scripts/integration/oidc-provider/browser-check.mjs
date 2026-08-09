@@ -91,6 +91,30 @@ async function update(request, webOrigin, path, csrfToken, data) {
   );
 }
 
+async function exchangeInvitation(request, webOrigin, invitationUrl) {
+  const parsed = new URL(invitationUrl);
+  assert(parsed.pathname === "/invite" && parsed.search === "");
+  const match = /^#invite=([A-Za-z0-9_-]{43})$/u.exec(parsed.hash);
+  assert(match !== null, "invitation_url");
+  const response = await request.post("/api/auth/invitations/exchange", {
+    data: { token: match[1] },
+    headers: { origin: webOrigin },
+    maxRedirects: 0,
+  });
+  assert(response.status() === 204, "invitation_exchange");
+}
+
+async function startInvitationAuthorization(request, webOrigin) {
+  const response = await request.post(`/api/auth/invitations/oidc/${expectedProviderId}/start`, {
+    data: {},
+    headers: { origin: webOrigin },
+    maxRedirects: 0,
+  });
+  const started = await json(response, 200);
+  assert(typeof started.authorizationUrl === "string", "invitation_start");
+  return started.authorizationUrl;
+}
+
 async function recoverySession(request, webOrigin, secret) {
   const recovery = await request.post("/api/auth/recovery/session", {
     data: { secret },
@@ -475,8 +499,15 @@ async function run() {
     assert(invitationUrl.search === "");
     assert(/^#invite=[A-Za-z0-9_-]{43}$/u.test(invitationUrl.hash));
 
+    currentStage = "viewer_invitation_exchange";
+    await exchangeInvitation(context.request, webOrigin, invitationUrl.href);
+    currentStage = "viewer_invitation_start";
+    const invitationAuthorizationUrl = await startInvitationAuthorization(
+      context.request,
+      webOrigin,
+    );
     currentStage = "viewer_login";
-    await completeAuthorization(page, invitationUrl.href, webOrigin, "viewer_login");
+    await completeAuthorization(page, invitationAuthorizationUrl, webOrigin, "viewer_login");
     currentStage = "viewer_session";
     const { identity: viewerIdentity } = await waitForPendingPrincipal(
       () => currentBrowserSession(page),

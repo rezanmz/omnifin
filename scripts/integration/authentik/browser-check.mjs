@@ -157,6 +157,30 @@ async function updateMapping(request, webOrigin, path, csrfToken, data) {
   return json(response, 200);
 }
 
+async function exchangeInvitation(request, webOrigin, invitationUrl) {
+  const parsed = new URL(invitationUrl);
+  assert(parsed.pathname === "/invite");
+  const match = /^#invite=([A-Za-z0-9_-]{43})$/u.exec(parsed.hash);
+  assert(match !== null);
+  const response = await request.post("/api/auth/invitations/exchange", {
+    data: { token: match[1] },
+    headers: { origin: webOrigin },
+    maxRedirects: 0,
+  });
+  assert(response.status() === 204);
+}
+
+async function startInvitationAuthorization(request, webOrigin) {
+  const response = await request.post(`/api/auth/invitations/oidc/${expectedProviderId}/start`, {
+    data: {},
+    headers: { origin: webOrigin },
+    maxRedirects: 0,
+  });
+  const started = await json(response, 200);
+  assert(typeof started.authorizationUrl === "string");
+  return started.authorizationUrl;
+}
+
 async function validateProvider(request, path, webOrigin, csrfToken) {
   const startedAt = Date.now();
   for (let attempt = 0; attempt < PROVIDER_VALIDATION_MAX_ATTEMPTS; attempt += 1) {
@@ -218,11 +242,11 @@ async function visible(locator) {
   }
 }
 
-async function waitForInteraction(page, webOrigin, locators) {
+async function waitForInteraction(page, webOrigin, locators, isComplete) {
   const deadline = Date.now() + INTERACTION_WAIT_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const current = new URL(page.url());
-    if (current.origin === webOrigin && current.pathname === "/link/jellyfin") return "callback";
+    if (current.origin === webOrigin && isComplete(current)) return "callback";
     for (const locator of locators) {
       if (await visible(locator)) return "interaction";
     }
@@ -231,11 +255,11 @@ async function waitForInteraction(page, webOrigin, locators) {
   return "unrecognized";
 }
 
-async function waitForStageTransition(page, activeStage, webOrigin) {
+async function waitForStageTransition(page, activeStage, webOrigin, isComplete) {
   const deadline = Date.now() + INTERACTION_WAIT_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const current = new URL(page.url());
-    if (current.origin === webOrigin && current.pathname === "/link/jellyfin") return "callback";
+    if (current.origin === webOrigin && isComplete(current)) return "callback";
     try {
       if (!(await activeStage.evaluate((stage) => stage.isConnected))) return "transitioned";
     } catch {
@@ -269,7 +293,12 @@ async function unrecognizedStage(page, webOrigin, attempt) {
     return `${attempt}_flow_executor_stalled`;
   }
   const current = new URL(page.url());
-  if (current.origin === webOrigin) return `${attempt}_omnifin_unexpected`;
+  if (current.origin === webOrigin) {
+    if (current.pathname === "/login") {
+      return `${attempt}_login_${current.searchParams.get("authError") ?? "unexpected"}`;
+    }
+    return `${attempt}_omnifin_unexpected`;
+  }
   if (current.pathname.startsWith("/if/flow/")) {
     return `${attempt}_authentik_flow_unrecognized`;
   }
@@ -311,7 +340,15 @@ async function submitStableForm(page, locator) {
   });
 }
 
-async function completeAuthentikFlow(page, startPath, username, password, webOrigin, attempt) {
+async function completeAuthentikFlow(
+  page,
+  startPath,
+  username,
+  password,
+  webOrigin,
+  attempt,
+  { expectedPath = "/link/jellyfin", isComplete = (url) => url.pathname === expectedPath } = {},
+) {
   issuerRequestFailed = false;
   pageErrorObserved = false;
   currentStage = `${attempt}_navigation`;
@@ -323,10 +360,7 @@ async function completeAuthentikFlow(page, startPath, username, password, webOri
   }
 
   for (let step = 0; step < 12; step += 1) {
-    if (
-      new URL(page.url()).origin === webOrigin &&
-      new URL(page.url()).pathname === "/link/jellyfin"
-    ) {
+    if (new URL(page.url()).origin === webOrigin && isComplete(new URL(page.url()))) {
       return;
     }
 
@@ -353,12 +387,12 @@ async function completeAuthentikFlow(page, startPath, username, password, webOri
     const credentialForm = page
       .locator("ak-stage-identification form, ak-stage-password form")
       .first();
-    const readiness = await waitForInteraction(page, webOrigin, [
-      usernameInput,
-      passwordInput,
-      namedAction,
-      submitAction,
-    ]);
+    const readiness = await waitForInteraction(
+      page,
+      webOrigin,
+      [usernameInput, passwordInput, namedAction, submitAction],
+      isComplete,
+    );
     if (readiness === "callback") return;
     if (readiness === "unrecognized") {
       currentStage = await unrecognizedStage(page, webOrigin, attempt);
@@ -399,7 +433,7 @@ async function completeAuthentikFlow(page, startPath, username, password, webOri
       await submitStableForm(page, page.locator("ak-stage-consent form").first());
     }
     currentStage = `${attempt}_transition`;
-    const transition = await waitForStageTransition(page, activeStage, webOrigin);
+    const transition = await waitForStageTransition(page, activeStage, webOrigin, isComplete);
     if (transition === "callback") return;
     if (transition === "timeout") throw new BrowserCheckError();
   }
@@ -422,17 +456,17 @@ async function waitForRevokedSession(request) {
   throw new BrowserCheckError();
 }
 
-async function assertAuthentikBrowserSession(request, issuerOrigin) {
+async function assertAuthentikBrowserSession(request, issuerOrigin, username) {
   const response = await request.get(`${issuerOrigin}/api/v3/core/users/me/`, {
     maxRedirects: 0,
   });
   const body = await json(response, 200);
-  assert(body.user?.username === "akadmin");
+  assert(body.user?.username === username);
 }
 
-async function currentAuthentikBrowserSession(request, issuerOrigin) {
+async function currentAuthentikBrowserSession(request, issuerOrigin, username) {
   const response = await request.get(
-    `${issuerOrigin}/api/v3/core/authenticated_sessions/?page_size=100&user__username=akadmin`,
+    `${issuerOrigin}/api/v3/core/authenticated_sessions/?page_size=100&user__username=${encodeURIComponent(username)}`,
     { maxRedirects: 0 },
   );
   const body = await json(response, 200);
@@ -468,15 +502,15 @@ async function authentikAccessTokens(request, issuerOrigin, token, providerPk) {
   return body.results;
 }
 
-function providerUserAccessTokens(accessTokens, providerPk) {
+function providerUserAccessTokens(accessTokens, providerPk, username) {
   return accessTokens.filter(
     (accessToken) =>
       String(accessToken?.provider?.pk) === String(providerPk) &&
-      accessToken?.user?.username === "akadmin",
+      accessToken?.user?.username === username,
   );
 }
 
-async function assertAuthentikAccessToken(request, issuerOrigin, token, providerPk) {
+async function assertAuthentikAccessToken(request, issuerOrigin, token, providerPk, username) {
   const accessTokens = await authentikAccessTokens(request, issuerOrigin, token, providerPk);
   if (accessTokens.length === 0) {
     currentStage = "backchannel_access_token_missing";
@@ -489,7 +523,7 @@ async function assertAuthentikAccessToken(request, issuerOrigin, token, provider
     currentStage = "backchannel_access_token_provider_mismatch";
     throw new BrowserCheckError();
   }
-  const userTokens = providerUserAccessTokens(providerTokens, providerPk);
+  const userTokens = providerUserAccessTokens(providerTokens, providerPk, username);
   if (userTokens.length === 0) {
     currentStage = "backchannel_access_token_user_mismatch";
     throw new BrowserCheckError();
@@ -603,12 +637,19 @@ async function run() {
   const recoverySecret = required("OMNIFIN_FIXTURE_RECOVERY_SECRET");
   const authentikToken = required("OMNIFIN_FIXTURE_AUTHENTIK_TOKEN");
   const authentikPassword = required("OMNIFIN_FIXTURE_AUTHENTIK_PASSWORD");
+  const jellyfinAdminPassword = required("OMNIFIN_FIXTURE_JELLYFIN_ADMIN_PASSWORD");
   const composeProject = required("OMNIFIN_FIXTURE_COMPOSE_PROJECT");
   const composeEnvironmentFile = required("OMNIFIN_FIXTURE_COMPOSE_ENV_FILE");
   assert(new URL(webOrigin).protocol === "https:");
   assert(new URL(issuer).protocol === "https:");
 
-  const sensitiveValues = [clientSecret, recoverySecret, authentikToken, authentikPassword];
+  const sensitiveValues = [
+    clientSecret,
+    recoverySecret,
+    authentikToken,
+    authentikPassword,
+    jellyfinAdminPassword,
+  ];
   const observedBrowserText = [];
   const browser = await chromium.launch({ headless: true });
   try {
@@ -616,7 +657,11 @@ async function run() {
       baseURL: webOrigin,
       ignoreHTTPSErrors: true,
     });
-    const page = await context.newPage();
+    const userContext = await browser.newContext({
+      baseURL: webOrigin,
+      ignoreHTTPSErrors: true,
+    });
+    const page = await userContext.newPage();
     page.on("console", (message) => observedBrowserText.push(message.text()));
     page.on("pageerror", () => {
       pageErrorObserved = true;
@@ -643,7 +688,7 @@ async function run() {
     const csrfToken = recoverySession.csrfToken;
 
     const providerInput = {
-      allowJitProvisioning: true,
+      allowJitProvisioning: false,
       approvedEndpointOrigins: [issuerOrigin],
       clientId,
       clientSecret,
@@ -745,19 +790,70 @@ async function run() {
     assert(publicProvider.supportsBackChannelLogout === true);
     assert(publicProvider.supportsRpInitiatedLogout === true);
 
-    const startPath = `/api/auth/oidc/${expectedProviderId}/start`;
+    currentStage = "admin_bootstrap";
+    const administrator = await json(
+      await context.request.post("/api/auth/bootstrap/jellyfin/password", {
+        data: { password: jellyfinAdminPassword, username: "fixture-admin" },
+        headers: { origin: webOrigin, "x-omnifin-csrf": csrfToken },
+        maxRedirects: 0,
+      }),
+      200,
+    );
+    currentStage = "admin_session";
+    assert(administrator.principal?.accountState === "active");
+    assert(administrator.principal?.role === "admin");
+    assert(administrator.principal?.authenticationMethod?.kind === "jellyfin");
+    assert(typeof administrator.csrfToken === "string");
+
+    currentStage = "invitation_create";
+    const createdInvitation = await mutate(
+      context.request,
+      webOrigin,
+      "/api/admin/invites",
+      administrator.csrfToken,
+      {},
+    );
+    const invitationUrl = new URL(createdInvitation.invitationUrl);
+    assert(invitationUrl.origin === webOrigin);
+    assert(invitationUrl.pathname === "/invite");
+    assert(invitationUrl.search === "");
+    assert(/^#invite=[A-Za-z0-9_-]{43}$/u.test(invitationUrl.hash));
+
+    currentStage = "first_invitation_exchange";
+    await exchangeInvitation(userContext.request, webOrigin, invitationUrl.href);
+    assert(
+      (await userContext.cookies(webOrigin)).some((cookie) =>
+        cookie.name.includes("registration_handoff"),
+      ),
+    );
+    currentStage = "first_invitation_start";
+    const invitationAuthorizationUrl = await startInvitationAuthorization(
+      userContext.request,
+      webOrigin,
+    );
+
     currentStage = "first_browser_login";
     await completeAuthentikFlow(
       page,
-      startPath,
+      invitationAuthorizationUrl,
       "akadmin",
       authentikPassword,
       webOrigin,
       "first_login",
     );
     currentStage = "first_session";
-    const firstSession = await session(context.request);
+    const firstSession = await session(userContext.request);
     const subject = assertPrincipal(firstSession, issuer, "operator");
+
+    currentStage = "invitation_consumption";
+    const invitations = await json(
+      await context.request.get("/api/admin/invites", { maxRedirects: 0 }),
+      200,
+    );
+    const consumedInvitation = invitations.invitations?.find(
+      (invitation) => invitation.id === createdInvitation.invitation.id,
+    );
+    assert(consumedInvitation?.status === "consumed");
 
     currentStage = "backchannel_access_token";
     await assertAuthentikAccessToken(
@@ -765,16 +861,21 @@ async function run() {
       issuerOrigin,
       authentikToken,
       authentikProviderPk,
+      "akadmin",
     );
     currentStage = "backchannel_provider_session";
-    await assertAuthentikBrowserSession(context.request, issuerOrigin);
+    await assertAuthentikBrowserSession(userContext.request, issuerOrigin, "akadmin");
     currentStage = "backchannel_session_lookup";
-    const authentikSessionIds = await currentAuthentikBrowserSession(context.request, issuerOrigin);
+    const authentikSessionIds = await currentAuthentikBrowserSession(
+      userContext.request,
+      issuerOrigin,
+      "akadmin",
+    );
     currentStage = "backchannel_trigger";
     dispatchAuthentikBackchannel(composeProject, composeEnvironmentFile);
     currentStage = "backchannel_revocation";
     try {
-      await waitForRevokedSession(context.request);
+      await waitForRevokedSession(userContext.request);
     } catch {
       currentStage = await backchannelTaskFailureStage(
         context.request,
@@ -786,7 +887,7 @@ async function run() {
 
     currentStage = "backchannel_provider_session_cleanup";
     await revokeAuthentikBrowserSessions(
-      context.request,
+      userContext.request,
       issuerOrigin,
       authentikToken,
       authentikSessionIds,
@@ -798,7 +899,9 @@ async function run() {
       authentikToken,
       authentikProviderPk,
     );
-    if (providerUserAccessTokens(remainingAccessTokens, authentikProviderPk).length > 0) {
+    if (
+      providerUserAccessTokens(remainingAccessTokens, authentikProviderPk, "akadmin").length > 0
+    ) {
       currentStage = "backchannel_access_token_retained";
       throw new BrowserCheckError();
     }
@@ -806,18 +909,18 @@ async function run() {
     currentStage = "second_browser_login";
     await completeAuthentikFlow(
       page,
-      startPath,
+      `/api/auth/oidc/${expectedProviderId}/start`,
       "akadmin",
       authentikPassword,
       webOrigin,
       "second_login",
     );
     currentStage = "second_session";
-    const secondSession = await session(context.request);
+    const secondSession = await session(userContext.request);
     assertPrincipal(secondSession, issuer, "operator", subject);
 
     currentStage = "rp_logout";
-    const logout = await context.request.post("/api/auth/oidc/logout", {
+    const logout = await userContext.request.post("/api/auth/oidc/logout", {
       form: { csrfToken: secondSession.csrfToken },
       headers: { origin: webOrigin },
       maxRedirects: 0,
@@ -829,7 +932,7 @@ async function run() {
     assert(providerLogout.origin === issuerOrigin);
     assert(providerLogout.pathname.includes("/application/o/omnifin/end-session/"));
     currentStage = "rp_session_revocation";
-    await waitForRevokedSession(context.request);
+    await waitForRevokedSession(userContext.request);
 
     currentStage = "secret_leak_inspection";
     assert(
@@ -837,7 +940,7 @@ async function run() {
         observedBrowserText.some((observation) => observation.includes(secret)),
       ),
     );
-    await context.close();
+    await Promise.all([context.close(), userContext.close()]);
   } finally {
     await browser.close();
   }

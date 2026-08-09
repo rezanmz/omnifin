@@ -25,6 +25,7 @@ const root = resolve(fileURLToPath(new URL("../../..", import.meta.url)));
 const composeFile = join(root, "scripts/integration/authentik/compose.yaml");
 const proxyScript = join(root, "scripts/integration/authentik/tls-proxy.mjs");
 const browserScript = join(root, "scripts/integration/authentik/browser-check.mjs");
+const jellyfinScript = join(root, "scripts/integration/oidc-provider/mock-jellyfin.mjs");
 const MAX_CAPTURE_BYTES = 512 * 1_024;
 
 class FixtureError extends Error {
@@ -389,13 +390,14 @@ async function main(options) {
   try {
     mkdirSync(backupDirectory, { mode: 0o700 });
     const host = selectPrivateHost();
-    const [webPort, gatewayPort, webTlsPort, authentikHttpPort, authentikTlsPort] =
+    const [webPort, gatewayPort, webTlsPort, authentikHttpPort, authentikTlsPort, jellyfinPort] =
       await Promise.all([
         reservePort("127.0.0.1"),
         reservePort("127.0.0.1"),
         reservePort("0.0.0.0"),
         reservePort("127.0.0.1"),
         reservePort("0.0.0.0"),
+        reservePort(host),
       ]);
     const webOrigin = `https://${host}:${webTlsPort}`;
     const authentikOrigin = `https://${host}:${authentikTlsPort}`;
@@ -445,6 +447,17 @@ async function main(options) {
       30_000,
     );
 
+    const jellyfin = spawnRuntime("node", [jellyfinScript], {
+      OMNIFIN_FIXTURE_JELLYFIN_PORT: String(jellyfinPort),
+    });
+    runtimes.push(jellyfin);
+    await waitFor(
+      "jellyfin",
+      async () => jellyfin.stdout.includes("fixture_jellyfin_ready"),
+      jellyfin,
+      30_000,
+    );
+
     composeStarted = true;
     await runCommand(
       "docker",
@@ -473,6 +486,8 @@ async function main(options) {
       "node",
       ["apps/gateway/dist/main.js"],
       {
+        OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED: "true",
+        OMNIFIN_JELLYFIN_URL: `http://${host}:${jellyfinPort}`,
         NODE_ENV: "production",
         NODE_EXTRA_CA_CERTS: certificates.caCertificate,
         OMNIFIN_BACKUP_DIRECTORY: backupDirectory,
@@ -604,6 +619,12 @@ async function main(options) {
         "first_login_username",
         "first_login_user_login_stalled",
         "first_session",
+        "first_invitation_exchange",
+        "first_invitation_start",
+        "admin_bootstrap",
+        "admin_session",
+        "invitation_create",
+        "invitation_consumption",
         "provider_create",
         "provider_enable",
         "provider_enable_client_error",
@@ -664,6 +685,7 @@ async function main(options) {
           OMNIFIN_FIXTURE_CLIENT_SECRET: secrets.clientSecret,
           OMNIFIN_FIXTURE_COMPOSE_ENV_FILE: environmentFile,
           OMNIFIN_FIXTURE_COMPOSE_PROJECT: project,
+          OMNIFIN_FIXTURE_JELLYFIN_ADMIN_PASSWORD: "fixture-admin-password",
           OMNIFIN_FIXTURE_RECOVERY_SECRET: secrets.recoverySecret,
           OMNIFIN_FIXTURE_WEB_ORIGIN: webOrigin,
         },

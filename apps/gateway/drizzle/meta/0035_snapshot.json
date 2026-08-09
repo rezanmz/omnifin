@@ -2381,6 +2381,12 @@
           "columns": ["token_hash"],
           "isUnique": true
         },
+        "invitations_registration_handoff_hash_unique": {
+          "name": "invitations_registration_handoff_hash_unique",
+          "columns": ["registration_handoff_hash"],
+          "isUnique": true,
+          "where": "\"invitations\".\"registration_handoff_hash\" is not null"
+        },
         "invitations_created_idx": {
           "name": "invitations_created_idx",
           "columns": ["created_at", "id"],
@@ -2390,12 +2396,6 @@
           "name": "invitations_expiry_idx",
           "columns": ["expires_at"],
           "isUnique": false
-        },
-        "invitations_registration_handoff_hash_unique": {
-          "name": "invitations_registration_handoff_hash_unique",
-          "columns": ["registration_handoff_hash"],
-          "isUnique": true,
-          "where": "\"invitations\".\"registration_handoff_hash\" is not null"
         }
       },
       "foreignKeys": {},
@@ -2416,7 +2416,7 @@
         },
         "invitations_timestamp_check": {
           "name": "invitations_timestamp_check",
-          "value": "\"invitations\".\"created_at\" >= 0\n        and \"invitations\".\"created_at\" < \"invitations\".\"expires_at\"\n        and (\"invitations\".\"consumed_at\" is null or (\"invitations\".\"consumed_at\" >= \"invitations\".\"created_at\" and \"invitations\".\"consumed_at\" < \"invitations\".\"expires_at\"))\n        and (\"invitations\".\"revoked_at\" is null or (\"invitations\".\"revoked_at\" >= \"invitations\".\"created_at\" and \"invitations\".\"revoked_at\" < \"invitations\".\"expires_at\"))\n        and (\"invitations\".\"consumed_at\" is null or \"invitations\".\"revoked_at\" is null)\n        and ((\"invitations\".\"registration_handoff_hash\" is null and \"invitations\".\"registration_handoff_expires_at\" is null)\n          or (\"invitations\".\"registration_handoff_hash\" is not null and \"invitations\".\"registration_handoff_expires_at\" is not null))\n        and ((\"invitations\".\"consumed_at\" is null and \"invitations\".\"revoked_at\" is null)\n          or (\"invitations\".\"registration_handoff_hash\" is null and \"invitations\".\"registration_handoff_expires_at\" is null))\n        and (\"invitations\".\"registration_handoff_expires_at\" is null\n          or (\"invitations\".\"registration_handoff_expires_at\" >= \"invitations\".\"created_at\"\n            and \"invitations\".\"registration_handoff_expires_at\" <= \"invitations\".\"expires_at\"))"
+          "value": "\"invitations\".\"created_at\" >= 0\n        and \"invitations\".\"created_at\" < \"invitations\".\"expires_at\"\n        and (\"invitations\".\"consumed_at\" is null or (\"invitations\".\"consumed_at\" >= \"invitations\".\"created_at\" and \"invitations\".\"consumed_at\" < \"invitations\".\"expires_at\"))\n        and (\"invitations\".\"revoked_at\" is null or (\"invitations\".\"revoked_at\" >= \"invitations\".\"created_at\" and \"invitations\".\"revoked_at\" < \"invitations\".\"expires_at\"))\n        and (\"invitations\".\"consumed_at\" is null or \"invitations\".\"revoked_at\" is null)\n        and ((\"invitations\".\"registration_handoff_hash\" is null and \"invitations\".\"registration_handoff_expires_at\" is null)\n          or (\"invitations\".\"registration_handoff_hash\" is not null and \"invitations\".\"registration_handoff_expires_at\" is not null))\n        and (\"invitations\".\"consumed_at\" is null and \"invitations\".\"revoked_at\" is null\n          or \"invitations\".\"registration_handoff_hash\" is null and \"invitations\".\"registration_handoff_expires_at\" is null)\n        and (\"invitations\".\"registration_handoff_expires_at\" is null\n          or (\"invitations\".\"registration_handoff_expires_at\" >= \"invitations\".\"created_at\"\n            and \"invitations\".\"registration_handoff_expires_at\" <= \"invitations\".\"expires_at\"))"
         }
       }
     },

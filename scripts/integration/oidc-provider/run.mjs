@@ -349,9 +349,9 @@ function browserFailureCategory(stderr) {
   );
   const allowedStages = new Set([
     "authorization_code_pkce",
+    "admin_bootstrap",
     "configuration",
     "discovery_logout",
-    "admin_bootstrap",
     "invitation_consumption",
     "invitation_create",
     "uninvited_login",
@@ -393,6 +393,8 @@ function browserFailureCategory(stderr) {
     "viewer_login_connector",
     "viewer_login_invite",
     "viewer_login_navigation",
+    "viewer_invitation_exchange",
+    "viewer_invitation_start",
     "viewer_cookie",
     "viewer_session",
   ]);
