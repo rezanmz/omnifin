@@ -6,12 +6,24 @@ import {
 } from "@omnifin/contracts/auth";
 import { requirePermission } from "../authorization.js";
 import {
+  InvitationService,
+  InvitationServiceError,
+  type InvitationServiceDependencies,
+} from "../invitation-service.js";
+import {
   AdministratorRecoveryError,
   AdministratorRecoveryService,
 } from "../administrator-recovery-service.js";
-import { clearSessionCookie, sessionCookieName, writeSessionCookie } from "../session-cookie.js";
+import {
+  clearSessionCookie,
+  registrationHandoffCookieName,
+  sessionCookieName,
+  writeRegistrationHandoffCookie,
+  writeSessionCookie,
+} from "../session-cookie.js";
 import { SessionIssuanceLimitError } from "../session-service.js";
 import { SafeHttpError } from "../../http-error.js";
+import type { AppConfig } from "../../config.js";
 import { clientNetworkGroup } from "../../security/client-network.js";
 import { randomToken } from "../../security/crypto.js";
 import {
@@ -234,6 +246,18 @@ function preflightLocation(providerId: string, returnPath: string) {
   return `/api/auth/oidc/${encodeURIComponent(providerId)}/start?${query.toString()}`;
 }
 
+function clearRegistrationHandoffCookie(
+  reply: FastifyReply,
+  config: Pick<AppConfig, "secureCookies">,
+) {
+  reply.clearCookie(registrationHandoffCookieName(config), {
+    httpOnly: true,
+    path: "/",
+    sameSite: "lax",
+    secure: config.secureCookies,
+  });
+}
+
 function failureLocation(error: OidcBrowserError) {
   return `/login?authError=${error}`;
 }
@@ -265,6 +289,9 @@ function startFailure(error: unknown): {
   if (error instanceof OidcProviderRegistryError) {
     return { auditReason: "provider_unavailable", browserError: "provider_unavailable" };
   }
+  if (error instanceof InvitationServiceError) {
+    return { auditReason: "invalid_request", browserError: "invalid_request" };
+  }
   if (error instanceof OidcProtocolError) {
     return { auditReason: "provider_unavailable", browserError: "provider_unavailable" };
   }
@@ -288,6 +315,9 @@ function callbackFailure(error: unknown): {
   }
   if (error instanceof OidcProviderRegistryError) {
     return { auditReason: "provider_unavailable", browserError: "provider_unavailable" };
+  }
+  if (error instanceof InvitationServiceError) {
+    return { auditReason: "callback_validation_failed", browserError: "authentication_failed" };
   }
   if (error instanceof SessionIssuanceLimitError) {
     return {
@@ -313,7 +343,8 @@ export interface OidcRoutesDependencies {
   backchannelLogout?: Omit<OidcBackchannelLogoutDependencies, "providerRegistry">;
   failureAudit?: OidcFailureAuditDependencies;
   frontchannelLogout?: OidcFrontchannelLogoutDependencies;
-  identity?: Omit<OidcIdentityServiceDependencies, "providerBindingVerifier">;
+  invitation?: InvitationServiceDependencies;
+  identity?: Omit<OidcIdentityServiceDependencies, "invitationService" | "providerBindingVerifier">;
   protocol?: OidcProtocolDependencies;
   providerRegistry?: OidcProviderRegistryDependencies;
 }
@@ -329,6 +360,7 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
     app.appConfig,
     dependencies.providerRegistry,
   );
+  const invitations = new InvitationService(app.database, app.appConfig, dependencies.invitation);
   const transactions = new OidcAuthorizationTransactionService(
     app.database,
     app.appConfig,
@@ -336,7 +368,8 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
   );
   const protocol = new OidcProtocolService(dependencies.protocol);
   const identity = new OidcIdentityService(app.database, {
-    ...dependencies.identity,
+    ...(dependencies.identity ?? {}),
+    invitationService: invitations,
     providerBindingVerifier: createOidcProviderRuntimeBindingVerifier(app.database, app.appConfig),
   });
   const administratorRecovery = new AdministratorRecoveryService(
@@ -834,6 +867,124 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
     },
   );
 
+  app.post<{
+    Params: { providerId: string };
+  }>(
+    "/v1/auth/invitations/oidc/:providerId/start",
+    {
+      bodyLimit: 512,
+      config: {
+        omnifinSecurity: { kind: "public-browser" },
+        rateLimit: { max: 10, timeWindow: "1 minute" },
+      },
+      onError: async (request, _reply, error) => {
+        if (!isRateLimitFailure(error)) recordFailure(request, "invalid_request");
+      },
+      onSend: async (_request, reply, payload) => {
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+        reply.header("referrer-policy", "no-referrer");
+        return payload;
+      },
+      schema: {
+        response: {
+          200: {
+            additionalProperties: false,
+            properties: {
+              authorizationUrl: { maxLength: 16_384, minLength: 1, type: "string" },
+              expiresAt: { format: "date-time", type: "string" },
+            },
+            required: ["authorizationUrl", "expiresAt"],
+            type: "object",
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const providerId = request.params.providerId;
+      const handoffToken = request.cookies[registrationHandoffCookieName(app.appConfig)];
+      try {
+        await enforceRateLimit(
+          startClientRateLimit,
+          request,
+          reply,
+          "Too many authentication attempts were started.",
+        );
+        await enforceRateLimit(
+          globalStartRateLimit,
+          request,
+          reply,
+          "Too many authentication attempts were started.",
+        );
+        if (!PROVIDER_ID_PATTERN.test(providerId)) throw new OidcBrowserRouteError();
+        if (
+          app.sessionService.resolveAndRefresh(request.cookies[sessionCookieName(app.appConfig)])
+        ) {
+          throw new OidcBrowserRouteError();
+        }
+        const handoff = invitations.beginRegistrationHandoff(handoffToken);
+        if (typeof handoffToken !== "string") throw new OidcBrowserRouteError();
+        const runtime = await providerRegistry.discover(providerId);
+        const providerRuntimeBinding = oidcProviderRuntimeBinding(runtime);
+        protocol.assertAuthorizationRequestViable(runtime, {
+          providerId,
+          redirectUri: canonicalOidcCallbackUri(app.appConfig.baseUrl, providerId),
+        });
+        const transaction = await transactions.create({
+          browserBindingToken:
+            request.cookies[oidcBrowserBindingCookieName(app.appConfig)] ?? createBrowserBinding(),
+          invitationId: handoff.invitationId,
+          providerId,
+          providerRuntimeBinding,
+          purpose: "invitation_registration",
+        });
+        try {
+          const redirect = protocol.buildAuthorizationRequest(runtime, transaction);
+          writeOidcBrowserBindingCookie(
+            reply,
+            app.appConfig,
+            transaction.browserBindingToken,
+            transaction.expiresAt,
+          );
+          writeOidcTransactionBindingCookie(
+            reply,
+            app.appConfig,
+            transaction.state,
+            transaction.browserBindingToken,
+            transaction.expiresAt,
+          );
+          writeRegistrationHandoffCookie(reply, app.appConfig, handoffToken, handoff.expiresAt);
+          return reply.status(200).send({
+            authorizationUrl: redirect.authorizationUrl,
+            expiresAt: transaction.expiresAt.toISOString(),
+          });
+        } catch (error) {
+          transactions.cancel({
+            browserBindingToken: transaction.browserBindingToken,
+            providerId: transaction.providerId,
+            state: transaction.state,
+          });
+          throw error;
+        }
+      } catch (error) {
+        if (error instanceof SafeHttpError) throw error;
+        const failure = startFailure(error);
+        await recordStartFailure(request, failure.auditReason);
+        throw new SafeHttpError({
+          code:
+            failure.browserError === "invalid_request"
+              ? "invalid_request"
+              : "oidc_provider_unavailable",
+          message:
+            failure.browserError === "invalid_request"
+              ? "The invitation authentication request is invalid."
+              : "The identity provider is temporarily unavailable.",
+          statusCode: failure.browserError === "invalid_request" ? 400 : 503,
+        });
+      }
+    },
+  );
+
   app.get<{
     Params: { providerId: string };
     Querystring: { returnPath?: string };
@@ -980,6 +1131,17 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
           state: parsedRequest.state,
         });
         clearOidcTransactionBindingCookie(reply, app.appConfig, parsedRequest.state);
+        const registrationHandoffToken =
+          request.cookies[registrationHandoffCookieName(app.appConfig)];
+        if (transaction.purpose === "invitation_registration") {
+          if (!transaction.invitationId || typeof registrationHandoffToken !== "string") {
+            throw new OidcBrowserRouteError();
+          }
+          invitations.resolveRegistrationHandoff({
+            handoffToken: registrationHandoffToken,
+            invitationId: transaction.invitationId,
+          });
+        }
         const returnPath = safeReturnPath(transaction.returnPath);
         const response = callbackResponse(parsedRequest, transaction.redirectUri);
         if (response.kind === "authorization_denied") {
@@ -1015,6 +1177,14 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
           ...(request.headers["user-agent"] === undefined
             ? {}
             : { userAgent: request.headers["user-agent"] }),
+          ...(transaction.purpose !== "invitation_registration"
+            ? {}
+            : {
+                invitation: {
+                  handoffToken: registrationHandoffToken,
+                  invitationId: transaction.invitationId!,
+                },
+              }),
         };
         if (transaction.purpose === "administrator_replacement") {
           if (
@@ -1065,6 +1235,9 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
           result.session.sessionToken,
           result.session.absoluteExpiresAt,
         );
+        if (transaction.purpose === "invitation_registration") {
+          clearRegistrationHandoffCookie(reply, app.appConfig);
+        }
         return reply.redirect(
           transaction.purpose === "administrator_bootstrap"
             ? "/settings?administrator=ready&jellyfin=pending"

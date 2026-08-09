@@ -20,6 +20,7 @@ const REQUIRED_TABLES = [
   "external_identities",
   "external_mutation_dispatches",
   "external_mutation_target_locks",
+  "invitations",
   "library_removal_operations",
   "library_removal_previews",
   "media_issue_operations",
@@ -166,6 +167,11 @@ function assertDatabaseReady(database: DatabaseHandle) {
     database.sqlite
       .prepare(
         "select id, oidc_provider_id, external_identity_id, oidc_session_id_hash from sessions limit 0",
+      )
+      .all();
+    database.sqlite
+      .prepare(
+        "select id, token_hash, expires_at, consumed_at, revoked_at, created_at from invitations limit 0",
       )
       .all();
     database.sqlite

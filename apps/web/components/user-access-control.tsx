@@ -3,6 +3,7 @@
 import {
   QueryClient,
   QueryClientProvider,
+  useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
@@ -11,11 +12,14 @@ import type { Role, UserAccessSummary } from "@omnifin/contracts/auth";
 import {
   ArrowRight,
   BadgeCheck,
+  CalendarClock,
   Check,
   CircleAlert,
+  Copy,
   Clock3,
   CloudOff,
   KeyRound,
+  Link2,
   LoaderCircle,
   LockKeyhole,
   RefreshCw,
@@ -36,6 +40,14 @@ import {
   type UserAccessAdminClient,
   type UserAccessAdminLoadOutcome,
 } from "../lib/user-access-admin";
+import {
+  inviteAdminClient,
+  type AdminInvite,
+  type CreatedAdminInvite,
+  type InviteAdminClient,
+  type InviteLifetime,
+  type InviteLoadOutcome,
+} from "../lib/invite-admin";
 import styles from "./user-access-control.module.css";
 import { UserAccessPageShell } from "./user-access-page-shell";
 
@@ -48,10 +60,312 @@ const roleDescriptions: Record<Role, string> = {
   viewer: "Browse and play within the paired Jellyfin permissions.",
 };
 
+function inviteDate(value: string | null) {
+  if (!value) return "No expiry";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "Expiry unavailable"
+    : new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(date);
+}
+
+function inviteStatus(invite: AdminInvite) {
+  return invite.status.charAt(0).toUpperCase() + invite.status.slice(1);
+}
+
+function InviteManagement({
+  client,
+  initialOutcome,
+}: {
+  client: InviteAdminClient;
+  initialOutcome?: InviteLoadOutcome;
+}) {
+  const queryClient = useQueryClient();
+  const query = useInfiniteQuery({
+    ...(initialOutcome === undefined
+      ? {}
+      : { initialData: { pages: [initialOutcome], pageParams: [null] } }),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => client.load(pageParam),
+    queryKey: ["admin-invites"],
+    getNextPageParam: (lastPage) => (lastPage.status === "ready" ? lastPage.nextCursor : undefined),
+    retry: false,
+    staleTime: initialOutcome ? Number.POSITIVE_INFINITY : 30_000,
+  });
+  const firstPage = query.data?.pages[0];
+  const invites =
+    query.data?.pages.flatMap((page) => (page.status === "ready" ? page.invites : [])) ?? [];
+  const [expiry, setExpiry] = useState("604800");
+  const [created, setCreated] = useState<CreatedAdminInvite | null>(null);
+  const [revokeId, setRevokeId] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const createMutation = useMutation({
+    mutationFn: () => {
+      if (firstPage?.status !== "ready") throw new Error("The invitation service is not ready.");
+      return client.create(Number(expiry) as InviteLifetime, firstPage.csrfToken);
+    },
+  });
+  const revokeMutation = useMutation({
+    mutationFn: (id: string) => {
+      if (firstPage?.status !== "ready") throw new Error("The invitation service is not ready.");
+      return client.revoke(id, firstPage.csrfToken);
+    },
+  });
+
+  const create = async () => {
+    setError(null);
+    try {
+      const invite = await createMutation.mutateAsync();
+      setCreated(invite);
+      setMessage("Invitation created. Copy the link now — it cannot be recovered later.");
+      await queryClient.invalidateQueries({ queryKey: ["admin-invites"] });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "The invitation could not be created.");
+    }
+  };
+  const revoke = async () => {
+    if (!revokeId) return;
+    setError(null);
+    try {
+      await revokeMutation.mutateAsync(revokeId);
+      setRevokeId(null);
+      setMessage("Invitation revoked. Its link will no longer work.");
+      await queryClient.invalidateQueries({ queryKey: ["admin-invites"] });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "The invitation could not be revoked.");
+    }
+  };
+
+  return (
+    <section className={styles.invitePanel} aria-labelledby="invite-management-title">
+      <header className={styles.inviteHeader}>
+        <div>
+          <p className="section-kicker">Controlled entry</p>
+          <h2 id="invite-management-title">Invitations</h2>
+          <p>Create a single-use link for someone new to join this Omnifin instance.</p>
+        </div>
+        <div className={styles.inviteCreate}>
+          <label htmlFor="invite-expiry">Lifetime</label>
+          <select
+            id="invite-expiry"
+            value={expiry}
+            onChange={(event) => setExpiry(event.target.value)}
+          >
+            <option value="3600">1 hour</option>
+            <option value="86400">24 hours</option>
+            <option value="604800">7 days</option>
+            <option value="2592000">30 days</option>
+          </select>
+          <button
+            className={styles.primaryButton}
+            disabled={createMutation.isPending || firstPage?.status !== "ready"}
+            onClick={() => void create()}
+            type="button"
+          >
+            {createMutation.isPending ? (
+              <LoaderCircle className={styles.spinner} aria-hidden="true" size={16} />
+            ) : (
+              <Link2 aria-hidden="true" size={16} />
+            )}
+            Create invite
+          </button>
+        </div>
+      </header>
+      <div className={styles.announcer} aria-live="polite" aria-atomic="true">
+        {message ?? error ?? ""}
+      </div>
+      {message ? (
+        <div className={styles.inviteNotice} role="status">
+          <BadgeCheck aria-hidden="true" size={17} />
+          <span>{message}</span>
+          <button aria-label="Dismiss notification" onClick={() => setMessage(null)} type="button">
+            <X size={16} aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
+      {error ? (
+        <div className={styles.inviteError} role="alert">
+          <CircleAlert aria-hidden="true" size={17} />
+          <span>{error}</span>
+          <button
+            className={styles.secondaryButton}
+            onClick={() => void query.refetch()}
+            type="button"
+          >
+            Try again
+          </button>
+        </div>
+      ) : null}
+
+      {query.isPending ? (
+        <div className={styles.inviteLoading} aria-busy="true" role="status">
+          Loading invitations…
+        </div>
+      ) : firstPage?.status !== "ready" ? (
+        <div className={styles.inviteState} role="alert">
+          <CircleAlert aria-hidden="true" size={20} />
+          <div>
+            <strong>
+              {firstPage?.status === "forbidden"
+                ? "Invitation management is restricted."
+                : firstPage?.status === "signed_out"
+                  ? "Your administrative session ended."
+                  : "Invitations are temporarily offline."}
+            </strong>
+            <p>No invitation was changed.</p>
+          </div>
+          <button
+            className={styles.secondaryButton}
+            onClick={() => void query.refetch()}
+            type="button"
+          >
+            Reload
+          </button>
+        </div>
+      ) : invites.length === 0 ? (
+        <div className={styles.inviteEmpty} role="status">
+          <CalendarClock aria-hidden="true" size={26} />
+          <strong>No invitations yet</strong>
+          <span>Create a link when you are ready to add someone.</span>
+        </div>
+      ) : (
+        <div className={styles.inviteTableWrap}>
+          <table className={styles.inviteTable}>
+            <caption className="sr-only">Invitation lifecycle</caption>
+            <thead>
+              <tr>
+                <th scope="col">Status</th>
+                <th scope="col">Created</th>
+                <th scope="col">Lifetime</th>
+                <th scope="col">
+                  <span className="sr-only">Actions</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {invites.map((invite) => (
+                <tr key={invite.id}>
+                  <td>
+                    <span className={styles.inviteStatus} data-status={invite.status}>
+                      <span aria-hidden="true" />
+                      {inviteStatus(invite)}
+                    </span>
+                  </td>
+                  <td>{inviteDate(invite.createdAt)}</td>
+                  <td>
+                    {invite.status === "active"
+                      ? `Expires ${inviteDate(invite.expiresAt)}`
+                      : invite.status === "consumed"
+                        ? "Used once"
+                        : invite.status === "revoked"
+                          ? "Revoked"
+                          : "Expired"}
+                  </td>
+                  <td>
+                    {invite.status === "active" ? (
+                      <button
+                        className={styles.textButton}
+                        onClick={() => setRevokeId(invite.id)}
+                        type="button"
+                      >
+                        Revoke
+                      </button>
+                    ) : (
+                      <span className={styles.muted}>Closed</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {query.hasNextPage ? (
+            <button
+              className={styles.secondaryButton}
+              disabled={query.isFetchingNextPage}
+              onClick={() => void query.fetchNextPage()}
+              type="button"
+            >
+              {query.isFetchingNextPage ? "Loading more invitations…" : "Load more invitations"}
+            </button>
+          ) : null}
+        </div>
+      )}
+      {created ? (
+        <div
+          className={styles.reveal}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="invite-link-title"
+        >
+          <div className={styles.revealHeading}>
+            <Link2 aria-hidden="true" size={20} />
+            <div>
+              <h3 id="invite-link-title">Your one-time invitation link</h3>
+              <p>Copy it now. For your security, Omnifin will not show this link again.</p>
+            </div>
+          </div>
+          <div className={styles.linkRow}>
+            <code>{created.invitationUrl}</code>
+            <button
+              className={styles.secondaryButton}
+              onClick={() => {
+                void navigator.clipboard.writeText(created.invitationUrl);
+                setMessage("Invitation link copied.");
+              }}
+              type="button"
+            >
+              <Copy aria-hidden="true" size={16} /> Copy link
+            </button>
+          </div>
+          <button className={styles.textButton} onClick={() => setCreated(null)} type="button">
+            I’ve copied the link
+          </button>
+        </div>
+      ) : null}
+      {revokeId ? (
+        <div className={styles.confirmBackdrop}>
+          <section
+            className={styles.confirm}
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="revoke-title"
+            aria-describedby="revoke-copy"
+          >
+            <h3 id="revoke-title">Revoke this invitation?</h3>
+            <p id="revoke-copy">
+              Anyone with this link will lose access to the invitation. This cannot be undone.
+            </p>
+            <div>
+              <button
+                className={styles.secondaryButton}
+                disabled={revokeMutation.isPending}
+                onClick={() => setRevokeId(null)}
+                type="button"
+              >
+                Keep invite
+              </button>
+              <button
+                className={styles.dangerButton}
+                disabled={revokeMutation.isPending}
+                onClick={() => void revoke()}
+                type="button"
+              >
+                {revokeMutation.isPending ? "Revoking…" : "Revoke invitation"}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 export interface UserAccessControlProperties {
   client?: UserAccessAdminClient;
+  inviteClient?: InviteAdminClient;
   displayProfile?: DisplayProfile;
   embedded?: boolean;
+  initialInviteOutcome?: InviteLoadOutcome;
   initialOutcome?: UserAccessAdminLoadOutcome;
 }
 
@@ -161,9 +475,13 @@ function StatePanel({
 
 function UserAccessControlContent({
   client,
+  inviteClient,
+  initialInviteOutcome,
   initialOutcome,
 }: {
   client: UserAccessAdminClient;
+  inviteClient: InviteAdminClient;
+  initialInviteOutcome?: InviteLoadOutcome;
   initialOutcome?: UserAccessAdminLoadOutcome;
 }) {
   const queryClient = useQueryClient();
@@ -295,16 +613,22 @@ function UserAccessControlContent({
 
   if (users.length === 0) {
     return (
-      <section className={styles.statePanel} data-liquid-glass role="status">
-        <UsersRound aria-hidden="true" size={30} />
-        <div>
-          <h2>No user identities yet.</h2>
-          <p>Accounts appear here after a successful Jellyfin or OIDC sign-in.</p>
-        </div>
-        <Link className={styles.secondaryButton} href="/settings/identity-providers">
-          Review sign-in providers
-        </Link>
-      </section>
+      <>
+        <section className={styles.statePanel} data-liquid-glass role="status">
+          <UsersRound aria-hidden="true" size={30} />
+          <div>
+            <h2>No user identities yet.</h2>
+            <p>Accounts appear here after a successful Jellyfin or OIDC sign-in.</p>
+          </div>
+          <Link className={styles.secondaryButton} href="/settings/identity-providers">
+            Review sign-in providers
+          </Link>
+        </section>
+        <InviteManagement
+          client={inviteClient}
+          {...(initialInviteOutcome === undefined ? {} : { initialOutcome: initialInviteOutcome })}
+        />
+      </>
     );
   }
 
@@ -557,14 +881,20 @@ function UserAccessControlContent({
           </article>
         ) : null}
       </section>
+      <InviteManagement
+        client={inviteClient}
+        {...(initialInviteOutcome === undefined ? {} : { initialOutcome: initialInviteOutcome })}
+      />
     </>
   );
 }
 
 export function UserAccessControl({
   client = userAccessAdminClient,
+  inviteClient = inviteAdminClient,
   displayProfile = "standard",
   embedded = false,
+  initialInviteOutcome,
   initialOutcome,
 }: UserAccessControlProperties) {
   const [queryClient] = useState(
@@ -580,6 +910,8 @@ export function UserAccessControl({
     <QueryClientProvider client={queryClient}>
       <UserAccessControlContent
         client={client}
+        inviteClient={inviteClient}
+        {...(initialInviteOutcome === undefined ? {} : { initialInviteOutcome })}
         {...(initialOutcome === undefined ? {} : { initialOutcome })}
       />
     </QueryClientProvider>

@@ -1008,6 +1008,289 @@
   width: 1px;
 }
 
+.invitePanel {
+  background: var(--surface-card-solid);
+  border: 1px solid var(--glass-edge);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 20px 50px var(--glass-cast-shadow);
+  margin-top: 16px;
+  overflow: hidden;
+  padding: clamp(22px, 3vw, 34px);
+}
+
+.inviteHeader {
+  align-items: flex-end;
+  border-bottom: 1px solid var(--line-soft);
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  padding-bottom: 24px;
+}
+.inviteHeader h2 {
+  font-family: var(--font-display);
+  font-size: clamp(1.8rem, 3vw, 2.8rem);
+  font-weight: 500;
+  letter-spacing: -0.05em;
+  margin: 5px 0 7px;
+}
+.inviteHeader p:last-child {
+  color: var(--paper-2);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  max-width: 52ch;
+}
+.inviteCreate {
+  align-items: flex-end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  justify-content: flex-end;
+}
+.inviteCreate label {
+  color: var(--paper-2);
+  font-size: 0.65rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  width: 100%;
+}
+.inviteCreate select {
+  background: var(--surface-recessed);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--paper-0);
+  min-height: 44px;
+  padding: 0 11px;
+}
+.inviteTableWrap {
+  overflow-x: auto;
+}
+.inviteTable {
+  border-collapse: collapse;
+  min-width: 600px;
+  text-align: left;
+  width: 100%;
+}
+.inviteTable th {
+  color: var(--paper-3);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 18px 12px 10px;
+  text-transform: uppercase;
+}
+.inviteTable td {
+  border-top: 1px solid var(--line-soft);
+  color: var(--paper-1);
+  font-size: 0.72rem;
+  padding: 16px 12px;
+}
+.inviteTable th:first-child,
+.inviteTable td:first-child {
+  padding-left: 0;
+}
+.inviteStatus {
+  align-items: center;
+  display: inline-flex;
+  font-weight: 700;
+  gap: 8px;
+}
+.inviteStatus > span {
+  background: var(--success);
+  border-radius: 50%;
+  height: 7px;
+  width: 7px;
+}
+.inviteStatus[data-status="expired"] > span,
+.inviteStatus[data-status="revoked"] > span {
+  background: var(--paper-3);
+}
+.inviteStatus[data-status="redeemed"] > span {
+  background: var(--info);
+}
+.textButton {
+  color: var(--acid);
+  font-size: 0.7rem;
+  font-weight: 700;
+  min-height: 40px;
+  padding: 0 8px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.textButton:hover {
+  color: var(--paper-0);
+}
+.muted {
+  color: var(--paper-3);
+  font-size: 0.68rem;
+}
+.inviteNotice,
+.inviteError {
+  align-items: center;
+  border-radius: var(--radius-sm);
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+  min-height: 48px;
+  padding: 8px 12px;
+}
+.inviteNotice {
+  background: color-mix(in srgb, var(--success) 9%, transparent);
+  color: var(--success);
+}
+.inviteError {
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  color: var(--danger);
+}
+.inviteNotice span,
+.inviteError span {
+  color: var(--paper-1);
+  flex: 1;
+  font-size: 0.7rem;
+}
+.inviteNotice button {
+  color: var(--paper-2);
+  min-height: 38px;
+  min-width: 38px;
+}
+.inviteState,
+.inviteLoading,
+.inviteEmpty {
+  align-items: center;
+  color: var(--paper-2);
+  display: flex;
+  gap: 13px;
+  min-height: 150px;
+  padding: 18px 0 4px;
+}
+.inviteState svg,
+.inviteEmpty svg {
+  color: var(--acid);
+  flex: 0 0 auto;
+}
+.inviteState div,
+.inviteEmpty {
+  display: grid;
+  gap: 5px;
+}
+.inviteState strong,
+.inviteEmpty strong {
+  color: var(--paper-0);
+  font-size: 0.78rem;
+}
+.inviteState p,
+.inviteEmpty span {
+  font-size: 0.7rem;
+}
+.inviteState .secondaryButton {
+  margin-left: auto;
+}
+.reveal {
+  background: color-mix(in srgb, var(--acid) 8%, var(--surface-card-solid));
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-md);
+  margin-top: 22px;
+  padding: 20px;
+}
+.revealHeading {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+}
+.revealHeading > svg {
+  color: var(--acid);
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+.reveal h3,
+.confirm h3 {
+  font-family: var(--font-display);
+  font-size: 1.3rem;
+  font-weight: 550;
+  letter-spacing: -0.03em;
+}
+.reveal p,
+.confirm p {
+  color: var(--paper-2);
+  font-size: 0.7rem;
+  line-height: 1.5;
+  margin-top: 5px;
+}
+.linkRow {
+  align-items: stretch;
+  display: flex;
+  gap: 9px;
+  margin: 18px 0 10px;
+}
+.linkRow code {
+  background: var(--surface-recessed);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  color: var(--paper-1);
+  flex: 1;
+  font-size: 0.68rem;
+  overflow: auto;
+  padding: 13px;
+  white-space: nowrap;
+}
+.dangerButton {
+  background: var(--danger);
+  border-radius: var(--radius-sm);
+  color: white;
+  font-size: 0.7rem;
+  font-weight: 700;
+  min-height: 44px;
+  padding: 0 15px;
+}
+.confirmBackdrop {
+  align-items: center;
+  background: rgb(0 0 0 / 48%);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 20px;
+  position: fixed;
+  z-index: 30;
+}
+.confirm {
+  background: var(--surface-card-solid);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 42%);
+  max-width: 440px;
+  padding: 25px;
+  width: 100%;
+}
+.confirm > div {
+  display: flex;
+  gap: 9px;
+  justify-content: flex-end;
+  margin-top: 22px;
+}
+
+@media (max-width: 680px) {
+  .inviteHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .inviteCreate {
+    justify-content: stretch;
+  }
+  .inviteCreate select,
+  .inviteCreate .primaryButton {
+    flex: 1;
+  }
+  .linkRow {
+    flex-direction: column;
+  }
+  .inviteState {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .inviteState .secondaryButton {
+    margin-left: 0;
+  }
+}
+
 @keyframes spin {
   to {
     rotate: 360deg;

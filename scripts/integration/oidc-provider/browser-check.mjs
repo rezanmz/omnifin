@@ -152,7 +152,13 @@ async function visible(locator) {
   }
 }
 
-async function completeAuthorization(page, startPath, webOrigin, attempt) {
+async function completeAuthorization(
+  page,
+  startPath,
+  webOrigin,
+  attempt,
+  { expectedPath = "/link/jellyfin", isComplete = () => true } = {},
+) {
   currentStage = `${attempt}_navigation`;
   const navigation = await page.goto(startPath, { waitUntil: "domcontentloaded" });
   if (!navigation || navigation.status() >= 400) {
@@ -163,7 +169,8 @@ async function completeAuthorization(page, startPath, webOrigin, attempt) {
   const deadline = Date.now() + FLOW_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const current = new URL(page.url());
-    if (current.origin === webOrigin && current.pathname === "/link/jellyfin") return;
+    if (current.origin === webOrigin && current.pathname === expectedPath && isComplete(current))
+      return;
 
     const connector = page
       .getByRole("link", { name: /generic identity|log in with generic/iu })
@@ -171,7 +178,14 @@ async function completeAuthorization(page, startPath, webOrigin, attempt) {
     const approval = page
       .getByRole("button", { name: /approve|authorize|grant access|continue/iu })
       .first();
-    if (await visible(connector)) {
+    if (
+      current.origin === webOrigin &&
+      current.pathname === "/invite" &&
+      (await visible(approval))
+    ) {
+      currentStage = `${attempt}_invite`;
+      await approval.click();
+    } else if (await visible(connector)) {
       currentStage = `${attempt}_connector`;
       await connector.click();
     } else if (await visible(approval)) {
@@ -317,10 +331,11 @@ async function run() {
   const clientId = required("OMNIFIN_FIXTURE_CLIENT_ID");
   const clientSecret = required("OMNIFIN_FIXTURE_CLIENT_SECRET");
   const recoverySecret = required("OMNIFIN_FIXTURE_RECOVERY_SECRET");
+  const jellyfinAdminPassword = required("OMNIFIN_FIXTURE_JELLYFIN_ADMIN_PASSWORD");
   assert(new URL(webOrigin).protocol === "https:");
   assert(new URL(issuer).protocol === "https:");
 
-  const sensitiveValues = [clientSecret, recoverySecret];
+  const sensitiveValues = [clientSecret, recoverySecret, jellyfinAdminPassword];
   const observedBrowserText = [];
   const authorizationRequests = [];
   const browser = await chromium.launch({ headless: true });
@@ -330,7 +345,12 @@ async function run() {
       baseURL: webOrigin,
       ignoreHTTPSErrors: true,
     });
+    const uninvitedContext = await browser.newContext({
+      baseURL: webOrigin,
+      ignoreHTTPSErrors: true,
+    });
     const page = await context.newPage();
+    const uninvitedPage = await uninvitedContext.newPage();
     page.on("console", (message) => observedBrowserText.push(message.text()));
     page.on("pageerror", () => observedBrowserText.push("browser_page_error"));
     page.on("request", (request) => {
@@ -357,7 +377,7 @@ async function run() {
       recoverySecret,
     );
     const providerInput = {
-      allowJitProvisioning: true,
+      allowJitProvisioning: false,
       approvedEndpointOrigins: [issuerOrigin],
       clientId,
       clientSecret,
@@ -420,8 +440,43 @@ async function run() {
     assert(publicProvider.supportsRpInitiatedLogout === false);
 
     const startPath = `/api/auth/oidc/${expectedProviderId}/start`;
+    currentStage = "uninvited_login";
+    await completeAuthorization(uninvitedPage, startPath, webOrigin, "uninvited_login", {
+      expectedPath: "/login",
+      isComplete: (url) => url.searchParams.get("authError") === "account_not_authorized",
+    });
+
+    currentStage = "admin_bootstrap";
+    const bootstrap = await json(
+      await administrationContext.request.post("/api/auth/bootstrap/jellyfin/password", {
+        data: { password: jellyfinAdminPassword, username: "fixture-admin" },
+        headers: { origin: webOrigin, "x-omnifin-csrf": recovery.csrfToken },
+        maxRedirects: 0,
+      }),
+      200,
+    );
+    assert(bootstrap.principal?.accountState === "active");
+    assert(bootstrap.principal?.role === "admin");
+    assert(bootstrap.principal?.authenticationMethod?.kind === "jellyfin");
+    assert(bootstrap.principal?.linkedServices?.length === 1);
+    assert(typeof bootstrap.csrfToken === "string");
+
+    currentStage = "invitation_create";
+    const createdInvitation = await create(
+      administrationContext.request,
+      webOrigin,
+      "/api/admin/invites",
+      bootstrap.csrfToken,
+      {},
+    );
+    const invitationUrl = new URL(createdInvitation.invitationUrl);
+    assert(invitationUrl.origin === webOrigin);
+    assert(invitationUrl.pathname === "/invite");
+    assert(invitationUrl.search === "");
+    assert(/^#invite=[A-Za-z0-9_-]{43}$/u.test(invitationUrl.hash));
+
     currentStage = "viewer_login";
-    await completeAuthorization(page, startPath, webOrigin, "viewer_login");
+    await completeAuthorization(page, invitationUrl.href, webOrigin, "viewer_login");
     currentStage = "viewer_session";
     const { identity: viewerIdentity } = await waitForPendingPrincipal(
       () => currentBrowserSession(page),
@@ -430,6 +485,16 @@ async function run() {
     );
     currentStage = "viewer_cookie";
     const viewerSessionCookie = await waitForSessionCookie(context, webOrigin);
+
+    currentStage = "invitation_consumption";
+    const invitations = await json(
+      await administrationContext.request.get("/api/admin/invites", { maxRedirects: 0 }),
+      200,
+    );
+    const consumedInvitation = invitations.invitations?.find(
+      (invitation) => invitation.id === createdInvitation.invitation.id,
+    );
+    assert(consumedInvitation?.status === "consumed");
 
     currentStage = "mapping_recovery_session";
     const mappingRecovery = await recoverySession(
@@ -561,7 +626,7 @@ async function run() {
         observedBrowserText.some((observation) => observation.includes(secret)),
       ),
     );
-    await Promise.all([context.close(), administrationContext.close()]);
+    await Promise.all([context.close(), administrationContext.close(), uninvitedContext.close()]);
   } finally {
     await browser.close();
   }

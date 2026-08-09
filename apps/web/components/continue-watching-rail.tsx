@@ -43,7 +43,7 @@ function LoadingRail() {
     <section
       aria-busy="true"
       aria-labelledby="continue-watching-loading-title"
-      className="media-rail"
+      className="media-rail media-rail--after-hero"
     >
       <div className="section-heading">
         <h2 id="continue-watching-loading-title">Continue watching</h2>
@@ -85,7 +85,10 @@ function BoundaryRail({ status }: { status: keyof typeof boundaryCopy }) {
   const copy = boundaryCopy[status];
   const Icon = copy.icon;
   return (
-    <section className="media-rail" aria-labelledby={`continue-watching-${status}-title`}>
+    <section
+      className="media-rail media-rail--after-hero"
+      aria-labelledby={`continue-watching-${status}-title`}
+    >
       <div className="section-heading">
         <h2 id={`continue-watching-${status}-title`}>Continue watching</h2>
       </div>
@@ -107,7 +110,10 @@ function BoundaryRail({ status }: { status: keyof typeof boundaryCopy }) {
 
 function UnavailableRail({ onRetry }: { onRetry: () => void }) {
   return (
-    <section className="media-rail" aria-labelledby="continue-watching-unavailable-title">
+    <section
+      className="media-rail media-rail--after-hero"
+      aria-labelledby="continue-watching-unavailable-title"
+    >
       <div className="section-heading">
         <h2 id="continue-watching-unavailable-title">Continue watching</h2>
       </div>
@@ -180,6 +186,7 @@ function ContinueWatchingRailContent({
   return (
     <>
       <MediaRail
+        className="media-rail--after-hero"
         items={continueWatchingCards(query.data)}
         onSelect={setSelected}
         {...(query.isError

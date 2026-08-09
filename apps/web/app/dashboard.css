@@ -2083,7 +2083,11 @@
 
   .hero-spotlight + .media-rail,
   .dashboard-skeleton__hero + .dashboard-skeleton__section {
-    margin-top: 60px;
+    margin-top: 92px;
+  }
+
+  .media-rail--after-hero {
+    margin-top: 48px;
   }
 
   .hero-spotlight {

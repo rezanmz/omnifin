@@ -911,6 +911,13 @@ describe("restore sanitation and rollback", () => {
       ) values ('timeline-link', 'timeline-user', 'jellyfin', 'timeline-jellyfin',
         'server', 'external', 'user', 'User', 'selected-token', 'device',
         1, 'linked', 2, 1, 1);
+      insert into invitations (
+        id, token_hash, expires_at, registration_handoff_hash,
+        registration_handoff_expires_at, created_at
+      ) values
+        ('invite_timeline-consumed', '${"c".repeat(43)}', 10000, '${"d".repeat(43)}', 5000, 1),
+        ('invite_timeline-revoked', '${"e".repeat(43)}', 10000, '${"f".repeat(43)}', 5000, 1),
+        ('invite_timeline-active', '${"g".repeat(43)}', 10000, '${"h".repeat(43)}', 5000, 1);
     `);
     let mutationJournal = new ExternalMutationJournal(sqlite, rootKey);
     mutationJournal.reserve({
@@ -952,6 +959,12 @@ describe("restore sanitation and rollback", () => {
       set encrypted_access_token = null, token_created_at = null, health_state = 'revoked',
           revoked_at = 2, revision = 7, updated_at = 2
       where id = 'timeline-link';
+      update invitations set consumed_at = 3000,
+        registration_handoff_hash = null, registration_handoff_expires_at = null
+      where id = 'invite_timeline-consumed';
+      update invitations set revoked_at = 3000,
+        registration_handoff_hash = null, registration_handoff_expires_at = null
+      where id = 'invite_timeline-revoked';
       insert into download_queue_bulk_operations (
         id, user_id, idempotency_key_hash, fingerprint_hash, state,
         request_json, results_json, created_at, updated_at
@@ -1020,6 +1033,38 @@ describe("restore sanitation and rollback", () => {
           )
           .get(`mutation_dispatch_${"t".repeat(22)}`),
       ).toEqual({ count: 0 });
+      expect(
+        sqlite
+          .prepare(
+            `select id, consumed_at as consumedAt, revoked_at as revokedAt,
+                    registration_handoff_hash as handoffHash,
+                    registration_handoff_expires_at as handoffExpiresAt
+             from invitations order by id`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          consumedAt: null,
+          handoffExpiresAt: null,
+          handoffHash: null,
+          id: "invite_timeline-active",
+          revokedAt: 5000,
+        },
+        {
+          consumedAt: 3000,
+          handoffExpiresAt: null,
+          handoffHash: null,
+          id: "invite_timeline-consumed",
+          revokedAt: null,
+        },
+        {
+          consumedAt: null,
+          handoffExpiresAt: null,
+          handoffHash: null,
+          id: "invite_timeline-revoked",
+          revokedAt: 3000,
+        },
+      ]);
       expect(
         sqlite
           .prepare(
@@ -1458,6 +1503,56 @@ describe("restore sanitation and rollback", () => {
         databasePath,
       }),
     ).rejects.toMatchObject({ code: "restore_target_not_empty" });
+  });
+
+  it("revokes active invitations and clears registration handoffs on an empty-host restore", async () => {
+    const sourceDirectory = await privateDirectory("omnifin-empty-invite-source-");
+    const targetDirectory = await privateDirectory("omnifin-empty-invite-target-");
+    const sourcePath = path.join(sourceDirectory, "source.db");
+    const backupPath = path.join(sourceDirectory, "selected.sqlite");
+    const databasePath = path.join(targetDirectory, "omnifin.db");
+    createCurrentDatabase(sourcePath);
+    const source = new Database(sourcePath);
+    source
+      .prepare(
+        `insert into invitations (
+           id, token_hash, expires_at, registration_handoff_hash,
+           registration_handoff_expires_at, created_at
+         ) values (?, ?, ?, ?, ?, ?)`,
+      )
+      .run("invite_empty-host", "i".repeat(43), 10000, "j".repeat(43), 5000, 1);
+    source.close();
+    await createDatabaseBackup({ databasePath: sourcePath, outputPath: backupPath });
+
+    await restoreDatabaseBackupIntoEmptyTarget({
+      backupPath,
+      confirmedEmptyTarget: true,
+      confirmedGatewayStopped: true,
+      databasePath,
+      now: new Date(4_000),
+    });
+
+    const restored = new Database(databasePath, { readonly: true });
+    try {
+      expect(
+        restored
+          .prepare(
+            `select consumed_at as consumedAt, revoked_at as revokedAt,
+                    registration_handoff_hash as handoffHash,
+                    registration_handoff_expires_at as handoffExpiresAt
+             from invitations where id = 'invite_empty-host'`,
+          )
+          .get(),
+      ).toEqual({
+        consumedAt: null,
+        handoffExpiresAt: null,
+        handoffHash: null,
+        revokedAt: 4000,
+      });
+      expect(restored.pragma("foreign_key_check")).toEqual([]);
+    } finally {
+      restored.close();
+    }
   });
 
   it.each(["", "-wal", "-shm", ".maintenance.lock"])(

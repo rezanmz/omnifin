@@ -2016,6 +2016,62 @@ export const sessions = sqliteTable(
   ],
 );
 
+export const invitations = sqliteTable(
+  "invitations",
+  {
+    id: text("id").primaryKey(),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    consumedAt: integer("consumed_at", { mode: "timestamp_ms" }),
+    revokedAt: integer("revoked_at", { mode: "timestamp_ms" }),
+    registrationHandoffHash: text("registration_handoff_hash"),
+    registrationHandoffExpiresAt: integer("registration_handoff_expires_at", {
+      mode: "timestamp_ms",
+    }),
+    createdAt: timestamps.createdAt,
+  },
+  (table) => [
+    uniqueIndex("invitations_token_hash_unique").on(table.tokenHash),
+    uniqueIndex("invitations_registration_handoff_hash_unique")
+      .on(table.registrationHandoffHash)
+      .where(sql`${table.registrationHandoffHash} is not null`),
+    index("invitations_created_idx").on(table.createdAt, table.id),
+    index("invitations_expiry_idx").on(table.expiresAt),
+    check(
+      "invitations_id_check",
+      sql`length(${table.id}) between 8 and 128
+        and substr(${table.id}, 1, 7) = 'invite_'
+        and substr(${table.id}, 8) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "invitations_token_hash_check",
+      sql`length(${table.tokenHash}) = 43 and ${table.tokenHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "invitations_registration_handoff_hash_check",
+      sql`${table.registrationHandoffHash} is null or (
+        length(${table.registrationHandoffHash}) = 43
+        and ${table.registrationHandoffHash} not glob '*[^A-Za-z0-9_-]*'
+      )`,
+    ),
+    check(
+      "invitations_timestamp_check",
+      sql`${table.createdAt} >= 0
+        and ${table.createdAt} < ${table.expiresAt}
+        and (${table.consumedAt} is null or (${table.consumedAt} >= ${table.createdAt} and ${table.consumedAt} < ${table.expiresAt}))
+        and (${table.revokedAt} is null or (${table.revokedAt} >= ${table.createdAt} and ${table.revokedAt} < ${table.expiresAt}))
+        and (${table.consumedAt} is null or ${table.revokedAt} is null)
+        and ((${table.registrationHandoffHash} is null and ${table.registrationHandoffExpiresAt} is null)
+          or (${table.registrationHandoffHash} is not null and ${table.registrationHandoffExpiresAt} is not null))
+        and (${table.consumedAt} is null and ${table.revokedAt} is null
+          or ${table.registrationHandoffHash} is null and ${table.registrationHandoffExpiresAt} is null)
+        and (${table.registrationHandoffExpiresAt} is null
+          or (${table.registrationHandoffExpiresAt} >= ${table.createdAt}
+            and ${table.registrationHandoffExpiresAt} <= ${table.expiresAt}))`,
+    ),
+  ],
+);
+
 export const mediaDownloadGrants = sqliteTable(
   "media_download_grants",
   {

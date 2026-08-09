@@ -1311,6 +1311,7 @@ describe("authentication schema invariants", () => {
     expect(authenticationSchema.externalIssueReferences).toBeDefined();
     expect(authenticationSchema.externalMutationDispatches).toBeDefined();
     expect(authenticationSchema.externalMutationTargetLocks).toBeDefined();
+    expect(authenticationSchema.invitations).toBeDefined();
     expect(authenticationSchema.downloadQueueItemOperations).toBeDefined();
     expect(authenticationSchema.mediaIssueOperations).toBeDefined();
     expect(authenticationSchema.playbackAssetHandles).toBeDefined();
@@ -1332,7 +1333,7 @@ describe("authentication schema invariants", () => {
     try {
       database.migrate();
       database.migrate();
-      expect(migrationFilenames.at(-1)).toBe("0034_external_mutation_journal.sql");
+      expect(migrationFilenames.at(-1)).toBe("0035_invitations.sql");
       const tables = database.sqlite
         .prepare("select name from sqlite_master where type = 'table' order by name")
         .all() as { name: string }[];
@@ -1346,6 +1347,7 @@ describe("authentication schema invariants", () => {
       expect(names).toContain("external_issue_references");
       expect(names).toContain("external_mutation_dispatches");
       expect(names).toContain("external_mutation_target_locks");
+      expect(names).toContain("invitations");
       expect(names).toContain("download_queue_item_operations");
       expect(names).toContain("media_issue_operations");
       expect(names).toContain("playback_asset_handles");

@@ -26,6 +26,7 @@ For vulnerability reporting, follow [SECURITY.md](../SECURITY.md).
 - OIDC client credentials, authorization responses, and identity assertions
 - Jellyfin user tokens and connector API credentials
 - session tokens, CSRF material, and recovery secrets
+- invitation bearers and short-lived registration handoffs
 - role assignments, identity links, and authorization policy
 - private media metadata, paths, history, and viewing activity
 - the ability to request, grab, delete, import, scan, or edit media
@@ -64,6 +65,7 @@ application boundary; operators must still patch and isolate the host.
 | ----------------------------- | ------------------------------------------------------------------------------------------------- |
 | Session theft or fixation     | Secure HttpOnly cookies, rotation, bounded lifetime, revocation, HSTS                             |
 | Login CSRF or callback replay | PKCE S256, state, nonce, one-time transactions, exact issuer validation                           |
+| Invite theft or replay        | Fragment-only bearer, one-time reveal, hashed secrets, expiry, revocation, atomic consumption     |
 | Account-link takeover         | Fresh Jellyfin proof, immutable IDs, uniqueness checks, no email auto-linking                     |
 | Privilege escalation          | Default viewer JIT role, explicit claim mappings, named local permissions, audit                  |
 | Cross-site request forgery    | SameSite cookie, strict origin checks, session-bound CSRF token                                   |
@@ -131,6 +133,32 @@ application boundary; operators must still patch and isolate the host.
 - The account update, target-session revocation, and sanitized `auth.user.access_updated` audit
   record commit atomically. Audit metadata contains only previous/new role and state plus the
   revoked-session count; client addresses are privacy-hashed.
+
+## Current invitation lifecycle controls
+
+- Invitation administration requires an active local `admin` with `identities.manage` in a
+  normal OIDC- or Jellyfin-backed session. Recovery sessions and non-admin roles are denied at
+  both the route and service boundary.
+- Lifetimes are bounded from 1 hour through 30 days, with a 7-day default. The invite URL puts
+  its bearer only in the `/invite` fragment, not in a query or request path. The link is shown
+  once at creation and cannot be reconstructed from the invitation list or database.
+- Omnifin stores one-way hashes of the invite bearer and registration handoff, never their raw
+  values. The browser handoff is short-lived and protected by an HttpOnly cookie. Raw Jellyfin
+  passwords are discarded after exchange, and a Quick Connect secret exists only inside its
+  encrypted, five-minute transaction; upstream tokens that must remain available are encrypted
+  at rest.
+- An invitation carries no role. New OIDC onboarding creates a `pending_link` account with the
+  default local `viewer` role, then requires fresh Jellyfin proof; the normal configured
+  non-admin OIDC mapping remains the authority for any mapped local role. Jellyfin onboarding
+  creates a local viewer linked to the proven Jellyfin identity.
+- An existing OIDC subject or Jellyfin identity cannot use an invitation. Normal sign-in and
+  ordinary relinking are required instead. New-account provisioning and invitation consumption
+  commit together, so replay cannot create a second account; failed proof leaves the invitation
+  available while a completed invitation is closed permanently.
+- Creation, revocation, and consumption write sanitized `auth.invitation.*` audit events in the
+  same transaction as the corresponding state change. Expiration is a derived lifecycle state,
+  not an unbounded cleanup task. Audit rows remain within the sensitive SQLite and verified
+  backup lifecycle.
 
 ## Sole-administrator recovery controls
 

@@ -74,9 +74,11 @@ export interface CreateOidcAuthorizationTransactionInput {
   browserBindingToken?: string;
   confirmation?: typeof ADMINISTRATOR_RECOVERY_CONFIRMATION;
   expectedUpdatedAt?: string;
+  invitationId?: string;
   providerId: string;
   providerRuntimeBinding: OidcProviderRuntimeBinding;
-  purpose?: "administrator_bootstrap" | "administrator_replacement" | "sign_in";
+  purpose?:
+    "administrator_bootstrap" | "administrator_replacement" | "invitation_registration" | "sign_in";
   recoverySessionId?: string;
   returnPath?: string;
 }
@@ -89,10 +91,12 @@ export interface CreatedOidcAuthorizationTransaction {
   confirmation?: typeof ADMINISTRATOR_RECOVERY_CONFIRMATION;
   expiresAt: Date;
   expectedUpdatedAt?: string;
+  invitationId?: string;
   nonce: string;
   providerId: string;
   providerRuntimeBinding: OidcProviderRuntimeBinding;
-  purpose?: "administrator_bootstrap" | "administrator_replacement" | "sign_in";
+  purpose?:
+    "administrator_bootstrap" | "administrator_replacement" | "invitation_registration" | "sign_in";
   recoverySessionId?: string;
   redirectUri: string;
   returnPath: string;
@@ -115,10 +119,12 @@ export interface ConsumedOidcAuthorizationTransaction {
   expiresAt: Date;
   expectedState: string;
   expectedUpdatedAt?: string;
+  invitationId?: string;
   nonce: string;
   providerId: string;
   providerRuntimeBinding: OidcProviderRuntimeBinding;
-  purpose: "administrator_bootstrap" | "administrator_replacement" | "sign_in";
+  purpose:
+    "administrator_bootstrap" | "administrator_replacement" | "invitation_registration" | "sign_in";
   recoverySessionId?: string;
   redirectUri: string;
   returnPath: string;
@@ -187,10 +193,20 @@ interface EncryptedOidcAuthorizationTransactionPayloadV3 extends AdministratorRe
   readonly schemaVersion: 3;
 }
 
+interface EncryptedOidcAuthorizationTransactionPayloadV4 {
+  readonly invitationId: string;
+  readonly nonce: string;
+  readonly providerId: string;
+  readonly providerRuntimeBinding: OidcProviderRuntimeBinding;
+  readonly purpose: "invitation_registration";
+  readonly schemaVersion: 4;
+}
+
 type EncryptedOidcAuthorizationTransactionPayload =
   | EncryptedOidcAuthorizationTransactionPayloadV1
   | EncryptedOidcAuthorizationTransactionPayloadV2
-  | EncryptedOidcAuthorizationTransactionPayloadV3;
+  | EncryptedOidcAuthorizationTransactionPayloadV3
+  | EncryptedOidcAuthorizationTransactionPayloadV4;
 
 function invalidTransaction(): never {
   throw new OidcAuthorizationTransactionError("oidc_transaction_invalid");
@@ -424,7 +440,9 @@ function serializeEncryptedTransactionPayload(
   nonce: string,
   providerId: string,
   providerRuntimeBinding: OidcProviderRuntimeBinding,
-  purpose: "administrator_bootstrap" | "administrator_replacement" | "sign_in",
+  purpose:
+    "administrator_bootstrap" | "administrator_replacement" | "invitation_registration" | "sign_in",
+  invitationId: string | null,
   recoverySessionId: string | null,
   replacement: AdministratorRecoveryConfirmationRequest | null,
 ) {
@@ -439,6 +457,17 @@ function serializeEncryptedTransactionPayload(
       purpose,
       recoverySessionId,
       schemaVersion: 2,
+    });
+  }
+  if (purpose === "invitation_registration") {
+    if (invitationId === null || !validProviderId(invitationId)) invalidTransaction();
+    return JSON.stringify({
+      invitationId,
+      nonce,
+      providerId,
+      providerRuntimeBinding,
+      purpose,
+      schemaVersion: 4,
     });
   }
   if (replacement === null || recoverySessionId === null) invalidTransaction();
@@ -473,10 +502,13 @@ function parseEncryptedTransactionPayload(
   const keys = Object.keys(payload).sort().join(",");
   const replacementKeys =
     "administratorId,confirmation,expectedUpdatedAt,nonce,providerId,providerRuntimeBinding,purpose,recoverySessionId,schemaVersion";
+  const invitationKeys =
+    "invitationId,nonce,providerId,providerRuntimeBinding,purpose,schemaVersion";
   if (
     keys !== "nonce,providerId,providerRuntimeBinding,schemaVersion" &&
     keys !== "nonce,providerId,providerRuntimeBinding,purpose,recoverySessionId,schemaVersion" &&
-    keys !== replacementKeys
+    keys !== replacementKeys &&
+    keys !== invitationKeys
   ) {
     invalidTransaction();
   }
@@ -486,6 +518,14 @@ function parseEncryptedTransactionPayload(
     validProviderId(candidate.providerId) &&
     validRuntimeBinding(candidate.providerRuntimeBinding);
   if (!commonValid) invalidTransaction();
+  if (
+    candidate.schemaVersion === 4 &&
+    keys === invitationKeys &&
+    candidate.purpose === "invitation_registration" &&
+    validProviderId(candidate.invitationId)
+  ) {
+    return candidate as unknown as EncryptedOidcAuthorizationTransactionPayloadV4;
+  }
   if (
     candidate.schemaVersion === 1 &&
     keys === "nonce,providerId,providerRuntimeBinding,schemaVersion"
@@ -558,12 +598,14 @@ export class OidcAuthorizationTransactionService {
       (input.purpose !== undefined &&
         input.purpose !== "sign_in" &&
         input.purpose !== "administrator_bootstrap" &&
-        input.purpose !== "administrator_replacement")
+        input.purpose !== "administrator_replacement" &&
+        input.purpose !== "invitation_registration")
     ) {
       invalidTransaction();
     }
     const purpose = input.purpose ?? "sign_in";
     const recoverySessionId = input.recoverySessionId ?? null;
+    const invitationId = input.invitationId ?? null;
     const replacement = administratorRecoveryConfirmationRequestSchema.safeParse({
       administratorId: input.administratorId,
       confirmation: input.confirmation,
@@ -577,6 +619,9 @@ export class OidcAuthorizationTransactionService {
       ((purpose === "administrator_bootstrap" || purpose === "administrator_replacement") &&
         !validSessionId(recoverySessionId)) ||
       (purpose === "sign_in" && recoverySessionId !== null) ||
+      (purpose === "invitation_registration" &&
+        (recoverySessionId !== null || invitationId === null || !validProviderId(invitationId))) ||
+      (purpose !== "invitation_registration" && invitationId !== null) ||
       (purpose === "administrator_replacement" && !replacement.success) ||
       (purpose !== "administrator_replacement" && hasReplacementFields)
     ) {
@@ -629,6 +674,7 @@ export class OidcAuthorizationTransactionService {
             input.providerId,
             input.providerRuntimeBinding,
             purpose,
+            invitationId,
             recoverySessionId,
             replacement.success ? replacement.data : null,
           ),
@@ -654,6 +700,7 @@ export class OidcAuthorizationTransactionService {
         providerRuntimeBinding: input.providerRuntimeBinding,
         purpose,
         ...(replacement.success ? replacement.data : {}),
+        ...(invitationId === null ? {} : { invitationId }),
         ...(recoverySessionId === null ? {} : { recoverySessionId }),
         redirectUri,
         returnPath,
@@ -768,8 +815,13 @@ export class OidcAuthorizationTransactionService {
       providerId: row.providerId,
       providerRuntimeBinding: encryptedPayload.providerRuntimeBinding,
       purpose: encryptedPayload.schemaVersion === 1 ? "sign_in" : encryptedPayload.purpose,
-      ...(encryptedPayload.schemaVersion !== 1 && encryptedPayload.recoverySessionId !== null
-        ? { recoverySessionId: encryptedPayload.recoverySessionId }
+      ...(encryptedPayload.schemaVersion === 4
+        ? { invitationId: encryptedPayload.invitationId }
+        : {}),
+      ...(encryptedPayload.schemaVersion === 2 || encryptedPayload.schemaVersion === 3
+        ? encryptedPayload.recoverySessionId !== null
+          ? { recoverySessionId: encryptedPayload.recoverySessionId }
+          : {}
         : {}),
       ...(encryptedPayload.schemaVersion === 3
         ? {

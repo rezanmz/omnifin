@@ -132,9 +132,12 @@ describe("UserAccessControl", () => {
     await user.click(screen.getByRole("button", { name: "Access enabled" }));
     await user.click(screen.getByRole("button", { name: "Apply & revoke sessions" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "The account changed since it was loaded.",
-    );
+    const alerts = await screen.findAllByRole("alert");
+    expect(
+      alerts.find((alert) =>
+        alert.textContent?.includes("The account changed since it was loaded."),
+      ),
+    ).toHaveTextContent("The account changed since it was loaded.");
     expect(screen.getByRole("region", { name: "Review access change" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Reload directory" }));
     await waitFor(() => expect(load).toHaveBeenCalledOnce());

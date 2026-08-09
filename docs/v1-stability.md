@@ -52,11 +52,15 @@ meet this gate must be inaccessible and documented as deferred.
 
 ## Conditional scope
 
-- [#335](https://github.com/rezanmz/omnifin/issues/335) is the first product
-  priority after the data/mutation foundation. Its next-release slice is a secure,
+- [#335](https://github.com/rezanmz/omnifin/issues/335) has an implemented secure,
   single-use invite lifecycle and redemption path through existing OIDC or Jellyfin
-  identity proof. It does not require stored Jellyfin administrator credentials,
-  automatic upstream-user creation, admin invitations, or household-profile runtime.
+  identity proof. It supports active, non-recovery administrator management, bounded
+  1-hour-to-30-day lifetimes with a 7-day default, one-time fragment-only sharing,
+  revocation, and atomic one-account completion. The invite carries no role, creates no
+  upstream user, cannot be used by an existing identity, and does not require stored
+  Jellyfin administrator credentials or household-profile runtime. Restore invalidates
+  outstanding invites and registration handoffs; operators must issue replacements after
+  recovery.
 - [#309](https://github.com/rezanmz/omnifin/issues/309) is required only as needed to
   preserve the availability invariant: released paths must not present unverified or
   contradictory availability as confirmed availability. Broader availability expansion

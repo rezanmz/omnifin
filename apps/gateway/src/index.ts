@@ -84,6 +84,21 @@ export {
 } from "./auth/oidc/provider-registry.js";
 export { revokeRecoverySessionsOnStartup } from "./auth/recovery-session.js";
 export {
+  InvitationService,
+  InvitationServiceError,
+  type InvitationAdminContext,
+  type InvitationRegistrationClaim,
+  type InvitationRegistrationContext,
+  type InvitationRegistrationHandoff,
+  type InvitationRegistrationHandoffInput,
+  type InvitationServiceDependencies,
+  type InvitationServiceErrorReason,
+} from "./auth/invitation-service.js";
+export {
+  invitationAdminRoutes,
+  type InvitationAdminRoutesOptions,
+} from "./auth/invitation-admin-routes.js";
+export {
   clearSessionCookie,
   LOCAL_SESSION_COOKIE_NAME,
   SESSION_COOKIE_NAME,

@@ -2,6 +2,9 @@ import { defineConfig, devices } from "@playwright/test";
 
 const port = Number(process.env.PLAYWRIGHT_PORT ?? "3000");
 const visualTestMode = process.env.OMNIFIN_VISUAL_TEST === "true";
+const isolatedTestMode = process.env.OMNIFIN_PLAYWRIGHT_TEST_MODE === "true";
+const productionServer = isolatedTestMode || Boolean(process.env.CI);
+const gracefulShutdown = { signal: "SIGTERM" as const, timeout: 5_000 };
 
 if (!Number.isInteger(port) || port < 1 || port > 65_535) {
   throw new Error("PLAYWRIGHT_PORT must be an integer between 1 and 65535.");
@@ -20,7 +23,7 @@ export default defineConfig({
   retries: process.env.CI && !visualTestMode ? 2 : 0,
   snapshotPathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}-{projectName}-{platform}{ext}",
   timeout: 30_000,
-  ...(visualTestMode ? { workers: 1 } : {}),
+  ...(visualTestMode || isolatedTestMode ? { workers: 1 } : {}),
   use: {
     baseURL: `http://127.0.0.1:${port}`,
     colorScheme: "dark",
@@ -29,15 +32,21 @@ export default defineConfig({
     video: visualTestMode ? "off" : "retain-on-failure",
   },
   webServer: {
-    command: process.env.CI ? "pnpm start" : "pnpm dev",
+    command: isolatedTestMode
+      ? "pnpm build && exec next start --hostname 127.0.0.1"
+      : process.env.CI
+        ? "exec next start --hostname 127.0.0.1"
+        : "pnpm dev",
     env: {
       OMNIFIN_DEMO_MODE: "true",
       OMNIFIN_GATEWAY_URL: "http://127.0.0.1:4000",
       OMNIFIN_TEST_MODE: "true",
+      ...(productionServer ? { NEXT_TELEMETRY_DISABLED: "1", NODE_ENV: "production" } : {}),
       PORT: String(port),
     },
+    gracefulShutdown,
     port,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: !isolatedTestMode && !process.env.CI,
     timeout: 120_000,
   },
   projects: [

@@ -17,6 +17,10 @@ import type { DatabaseHandle } from "../../db/client.js";
 export interface OidcSignInInput {
   readonly currentSessionToken?: unknown;
   readonly grant: VerifiedOidcGrant;
+  readonly invitation?: {
+    readonly handoffToken: unknown;
+    readonly invitationId: string;
+  };
   readonly ipAddress?: string;
   readonly requestId?: string;
   readonly userAgent?: string;
@@ -119,15 +123,31 @@ export class OidcSignInService {
                 input.requestId === undefined
                   ? { grant: input.grant }
                   : { grant: input.grant, requestId: input.requestId };
-              const identity =
-                capability === undefined
-                  ? this.#identityService.resolveInExistingTransaction(identityInput)
-                  : this.#identityService.resolveInExistingTransaction(identityInput, {
+              const identityOptions = {
+                ...(capability === undefined
+                  ? {}
+                  : {
                       sessionReplacement: {
                         capability,
                         sessionService: this.#sessionService,
                       },
-                    });
+                    }),
+                ...(input.invitation === undefined
+                  ? {}
+                  : {
+                      registration: {
+                        handoffToken: input.invitation.handoffToken,
+                        invitationId: input.invitation.invitationId,
+                      },
+                    }),
+              };
+              const identity =
+                Object.keys(identityOptions).length === 0
+                  ? this.#identityService.resolveInExistingTransaction(identityInput)
+                  : this.#identityService.resolveInExistingTransaction(
+                      identityInput,
+                      identityOptions,
+                    );
               if (identity.status === "denied") {
                 return internalResult({ reason: identity.reason, status: "denied" as const });
               }

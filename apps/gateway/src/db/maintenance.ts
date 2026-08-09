@@ -1178,6 +1178,38 @@ function mergeRollbackExternalMutationFacts(sqlite: Database.Database) {
   `);
 }
 
+function mergeRollbackInvitationFacts(sqlite: Database.Database, now: number) {
+  sqlite.exec(`
+    update main.invitations as restored
+    set consumed_at = case
+          when current.consumed_at is not null then
+            max(restored.created_at, min(current.consumed_at, restored.expires_at - 1))
+          when current.revoked_at is not null then null
+          when restored.consumed_at is not null then restored.consumed_at
+          else null
+        end,
+        revoked_at = case
+          when current.consumed_at is not null then null
+          when current.revoked_at is not null then
+            max(restored.created_at, min(current.revoked_at, restored.expires_at - 1))
+          when restored.consumed_at is not null then null
+          when restored.revoked_at is not null then restored.revoked_at
+          else max(restored.created_at, min(${now}, restored.expires_at - 1))
+        end,
+        registration_handoff_hash = null,
+        registration_handoff_expires_at = null
+    from rollback_timeline.invitations current
+    where current.id = restored.id;
+
+    update main.invitations as restored
+    set revoked_at = max(restored.created_at, min(${now}, restored.expires_at - 1)),
+        registration_handoff_hash = null,
+        registration_handoff_expires_at = null
+    where restored.consumed_at is null
+      and restored.revoked_at is null;
+  `);
+}
+
 function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number) {
   const exhaustedRevision = sqlite
     .prepare(
@@ -1401,6 +1433,7 @@ function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number) {
   `);
   mergeIdempotencyReceipts(sqlite);
   mergeRollbackExternalMutationFacts(sqlite);
+  mergeRollbackInvitationFacts(sqlite, now);
 }
 
 function quarantineAuthorityWithoutCurrentTimeline(sqlite: Database.Database, now: number) {
@@ -1412,6 +1445,17 @@ function quarantineAuthorityWithoutCurrentTimeline(sqlite: Database.Database, no
     set encrypted_access_token = null, token_created_at = null, last_verified_at = null,
         health_state = 'revoked', revoked_at = max(created_at, ${now}),
         updated_at = max(updated_at, ${now});
+  `);
+  sqlite.exec(`
+    update invitations
+    set revoked_at = max(created_at, min(${now}, expires_at - 1)),
+        registration_handoff_hash = null,
+        registration_handoff_expires_at = null
+    where consumed_at is null and revoked_at is null;
+    update invitations
+    set registration_handoff_hash = null,
+        registration_handoff_expires_at = null
+    where consumed_at is not null or revoked_at is not null;
   `);
 }
 

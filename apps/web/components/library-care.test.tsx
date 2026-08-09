@@ -186,4 +186,14 @@ describe("LibraryCare", () => {
     );
     expect(screen.getByRole("heading", { name: "Library care is offline." })).toBeVisible();
   });
+
+  it("renders the generated time as a stable, semantic UTC timestamp", () => {
+    renderLibrary(client());
+
+    expect(screen.getByText("Generated Jul 28, 2026 at 4:00 PM")).toBeVisible();
+    expect(screen.getByText("Generated Jul 28, 2026 at 4:00 PM").closest("time")).toHaveAttribute(
+      "datetime",
+      generatedAt,
+    );
+  });
 });

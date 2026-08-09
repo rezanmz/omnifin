@@ -13,9 +13,9 @@
     "start": "cross-env NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 next start --hostname 127.0.0.1",
     "storybook": "cross-env STORYBOOK_DISABLE_TELEMETRY=1 storybook dev -p 6006",
     "test": "vitest run --project=unit --coverage",
-    "test:a11y": "playwright test tests/a11y",
-    "test:e2e": "playwright test tests/e2e",
-    "test:oidc-rewrite": "playwright test --config=playwright.oidc.config.ts",
+    "test:a11y": "cross-env OMNIFIN_PLAYWRIGHT_TEST_MODE=true playwright test tests/a11y",
+    "test:e2e": "cross-env OMNIFIN_PLAYWRIGHT_TEST_MODE=true playwright test tests/e2e",
+    "test:oidc-rewrite": "pnpm build && cross-env OMNIFIN_PLAYWRIGHT_TEST_MODE=true playwright test --config=playwright.oidc.config.ts",
     "test:storybook": "cross-env STORYBOOK_DISABLE_TELEMETRY=1 vitest run --project=storybook",
     "test:visual": "cross-env OMNIFIN_VISUAL_TEST=true playwright test tests/visual",
     "typecheck": "tsc --noEmit"

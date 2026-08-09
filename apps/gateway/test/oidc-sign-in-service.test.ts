@@ -14,6 +14,8 @@ import {
 } from "../src/auth/oidc/provider-registry.js";
 import { OidcProtocolService } from "../src/auth/oidc/protocol.js";
 import { OidcSignInService, OidcSignInServiceError } from "../src/auth/oidc/sign-in-service.js";
+import { InvitationService } from "../src/auth/invitation-service.js";
+import type { AppConfig } from "../src/config.js";
 import { SessionService } from "../src/auth/session-service.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
 import {
@@ -26,13 +28,36 @@ import {
   sessionSecretReservations,
   sessions,
   users,
+  invitations,
 } from "../src/db/schema.js";
-import { EnvelopeCipher } from "../src/security/crypto.js";
+import { EnvelopeCipher, hashToken } from "../src/security/crypto.js";
 
 const ISSUER = "https://id.example.test/application/o/omnifin/";
 const LOGIN_TIME = new Date("2026-07-25T16:00:00.000Z");
 const EARLIER_TIME = new Date("2026-07-25T15:00:00.000Z");
 const ENCRYPTION_KEY = Buffer.alloc(32, 41);
+
+function invitationConfig(): AppConfig {
+  return {
+    baseUrl: new URL("https://omnifin.example"),
+    databaseUrl: ":memory:",
+    encryptionKey: ENCRYPTION_KEY,
+    environment: "test",
+    host: "127.0.0.1",
+    insecureLoopbackPreview: false,
+    jellyfinInsecureHttpApproved: false,
+    logLevel: "silent",
+    port: 4000,
+    secureCookies: true,
+    session: {
+      absoluteTtlMs: 60 * 60 * 1_000,
+      inactivityTtlMs: 10 * 60 * 1_000,
+      recoveryAbsoluteTtlMs: 15 * 60 * 1_000,
+      rotationIntervalMs: 5 * 60 * 1_000,
+    },
+    trustProxyHops: 0,
+  };
+}
 
 function claims(input: Readonly<Record<string, unknown>> = {}) {
   return Object.freeze({
@@ -227,9 +252,14 @@ function createHarness(options: { allowJitProvisioning?: boolean } = {}) {
   let identityIdentifier = 0;
   let sessionIdentifier = 0;
   let sessionToken = 0;
+  const invitationService = new InvitationService(database, invitationConfig(), {
+    clock: () => new Date(now),
+    createHandoffToken: () => Buffer.alloc(32, 22).toString("base64url"),
+  });
   const identityService = new OidcIdentityService(database, {
     clock: () => new Date(now),
     createId: () => `identity-sign-in-${(identityIdentifier += 1)}`,
+    invitationService,
     providerBindingVerifier: createOidcProviderRuntimeBindingVerifier(database, {
       encryptionKey: ENCRYPTION_KEY,
     }),
@@ -258,9 +288,24 @@ function createHarness(options: { allowJitProvisioning?: boolean } = {}) {
     },
     database,
     identityService,
+    invitationService,
     service,
     sessionService,
   };
+}
+
+function issueInvitationHandoff(database: DatabaseHandle, invitationService: InvitationService) {
+  const invitationToken = Buffer.alloc(32, 21).toString("base64url");
+  database.db
+    .insert(invitations)
+    .values({
+      createdAt: EARLIER_TIME,
+      expiresAt: new Date(LOGIN_TIME.getTime() + 10 * 60_000),
+      id: "invite_sign_in",
+      tokenHash: hashToken(invitationToken),
+    })
+    .run();
+  return invitationService.exchangeForRegistrationHandoff(invitationToken);
 }
 
 describe("OidcSignInService", () => {
@@ -279,7 +324,13 @@ describe("OidcSignInService", () => {
           ),
       ).toThrow(OidcSignInServiceError);
 
-      expect(primary.service.signIn({ grant })).toMatchObject({ status: "signed_in" });
+      const handoff = issueInvitationHandoff(primary.database, primary.invitationService);
+      expect(
+        primary.service.signIn({
+          grant,
+          invitation: { handoffToken: handoff.handoffToken, invitationId: handoff.invitationId },
+        }),
+      ).toMatchObject({ status: "signed_in" });
     } finally {
       mismatched.database.close();
       primary.database.close();
@@ -301,7 +352,13 @@ describe("OidcSignInService", () => {
           ),
       ).toThrow(OidcSignInServiceError);
 
-      expect(primary.service.signIn({ grant })).toMatchObject({ status: "signed_in" });
+      const handoff = issueInvitationHandoff(primary.database, primary.invitationService);
+      expect(
+        primary.service.signIn({
+          grant,
+          invitation: { handoffToken: handoff.handoffToken, invitationId: handoff.invitationId },
+        }),
+      ).toMatchObject({ status: "signed_in" });
     } finally {
       mismatched.database.close();
       primary.database.close();
@@ -454,15 +511,17 @@ describe("OidcSignInService", () => {
   });
 
   it("atomically JIT provisions a pending-link identity and issues its opaque session", async () => {
-    const { database, service } = createHarness();
+    const { database, invitationService, service } = createHarness();
     try {
       const grant = await verifiedGrant(
         database,
         claims({ email: "new@example.test", name: "New viewer" }),
       );
 
+      const handoff = issueInvitationHandoff(database, invitationService);
       const result = service.signIn({
         grant,
+        invitation: { handoffToken: handoff.handoffToken, invitationId: handoff.invitationId },
         ipAddress: "192.0.2.10",
         requestId: "jit-sign-in-request",
         userAgent: "Omnifin route test",
@@ -491,6 +550,87 @@ describe("OidcSignInService", () => {
       expect(spreadResult).not.toContain(result.session.csrfToken);
       expect(() => JSON.stringify(service)).toThrow("OIDC sign-in services cannot be serialized.");
       expect(() => JSON.stringify(result)).toThrow("OIDC sign-in results cannot be serialized.");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("consumes an invitation handoff only for a new identity inside the immediate transaction", async () => {
+    const { database, invitationService, service } = createHarness();
+    try {
+      const grant = await verifiedGrant(database, claims({ email: "invited@example.test" }));
+      const handoff = issueInvitationHandoff(database, invitationService);
+
+      const result = service.signIn({
+        grant,
+        invitation: {
+          handoffToken: handoff.handoffToken,
+          invitationId: handoff.invitationId,
+        },
+      });
+
+      expect(result).toMatchObject({ status: "signed_in" });
+      expect(database.db.select().from(users).all()).toHaveLength(1);
+      expect(database.db.select().from(externalIdentities).all()).toHaveLength(1);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rejects an invitation for an already-linked identity without consuming it", async () => {
+    const { database, invitationService, service } = createHarness();
+    try {
+      seedExistingIdentity(database, { status: "pending_link" });
+      const grant = await verifiedGrant(database, claims());
+      const handoff = issueInvitationHandoff(database, invitationService);
+
+      expect(
+        service.signIn({
+          grant,
+          invitation: { handoffToken: handoff.handoffToken, invitationId: handoff.invitationId },
+        }),
+      ).toEqual(
+        expect.objectContaining({ reason: "invitation_identity_already_linked", status: "denied" }),
+      );
+      expect(
+        database.sqlite
+          .prepare("select consumed_at as consumedAt from invitations where id = ?")
+          .get(handoff.invitationId),
+      ).toEqual({ consumedAt: null });
+      expect(database.db.select().from(sessions).all()).toHaveLength(0);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rolls back invitation consumption when its audit write fails", async () => {
+    const { database, invitationService, service } = createHarness();
+    try {
+      const grant = await verifiedGrant(database, claims({ email: "rollback@example.test" }));
+      const handoff = issueInvitationHandoff(database, invitationService);
+      database.sqlite.exec(`
+        create trigger reject_invitation_consumed_audit
+        before insert on audit_events
+        when new.event_type = 'auth.invitation.consumed'
+        begin
+          select raise(abort, 'forced_invitation_audit_failure');
+        end
+      `);
+
+      expect(() =>
+        service.signIn({
+          grant,
+          invitation: { handoffToken: handoff.handoffToken, invitationId: handoff.invitationId },
+        }),
+      ).toThrow(OidcSignInServiceError);
+      expect(
+        database.sqlite
+          .prepare("select consumed_at as consumedAt from invitations where id = ?")
+          .get(handoff.invitationId),
+      ).toEqual({ consumedAt: null });
+      expect(database.db.select().from(users).all()).toHaveLength(0);
+      expect(database.db.select().from(externalIdentities).all()).toHaveLength(0);
+      expect(database.db.select().from(sessions).all()).toHaveLength(0);
     } finally {
       database.close();
     }
@@ -612,9 +752,10 @@ describe("OidcSignInService", () => {
   });
 
   it("rolls back JIT identity and audit writes while leaving a failed grant one-shot", async () => {
-    const { database, service } = createHarness();
+    const { database, invitationService, service } = createHarness();
     try {
       const grant = await verifiedGrant(database, claims());
+      const handoff = issueInvitationHandoff(database, invitationService);
       database.sqlite.exec(`
         create trigger reject_oidc_session
         before insert on sessions
@@ -623,9 +764,13 @@ describe("OidcSignInService", () => {
         end
       `);
 
-      expect(() => service.signIn({ grant, requestId: "failed-jit-request" })).toThrow(
-        OidcSignInServiceError,
-      );
+      expect(() =>
+        service.signIn({
+          grant,
+          invitation: { handoffToken: handoff.handoffToken, invitationId: handoff.invitationId },
+          requestId: "failed-jit-request",
+        }),
+      ).toThrow(OidcSignInServiceError);
 
       expect(database.db.select().from(users).all()).toHaveLength(0);
       expect(database.db.select().from(externalIdentities).all()).toHaveLength(0);
@@ -646,9 +791,10 @@ describe("OidcSignInService", () => {
   });
 
   it("rolls back the inserted session, reservations, identity, and audits when session auditing fails", async () => {
-    const { database, service } = createHarness();
+    const { database, invitationService, service } = createHarness();
     try {
       const grant = await verifiedGrant(database, claims());
+      const handoff = issueInvitationHandoff(database, invitationService);
       database.sqlite.exec(`
         create trigger reject_session_audit
         before insert on audit_events
@@ -658,9 +804,13 @@ describe("OidcSignInService", () => {
         end
       `);
 
-      expect(() => service.signIn({ grant, requestId: "failed-audit-request" })).toThrow(
-        OidcSignInServiceError,
-      );
+      expect(() =>
+        service.signIn({
+          grant,
+          invitation: { handoffToken: handoff.handoffToken, invitationId: handoff.invitationId },
+          requestId: "failed-audit-request",
+        }),
+      ).toThrow(OidcSignInServiceError);
 
       expect(database.db.select().from(users).all()).toHaveLength(0);
       expect(database.db.select().from(externalIdentities).all()).toHaveLength(0);
@@ -915,7 +1065,7 @@ describe("OidcSignInService", () => {
   it.each(["current", "rotation-grace"] as const)(
     "replaces a %s session token after successful OIDC authentication",
     async (tokenState) => {
-      const { advance, database, service, sessionService } = createHarness();
+      const { advance, database, invitationService, service, sessionService } = createHarness();
       try {
         const prior = sessionService.createSession({ attribution: { authMethod: "recovery" } });
         if (tokenState === "rotation-grace") {
@@ -926,10 +1076,12 @@ describe("OidcSignInService", () => {
           expect(database.db.select().from(sessionRotationAliases).all()).toHaveLength(1);
         }
         const grant = await verifiedGrant(database, claims());
+        const handoff = issueInvitationHandoff(database, invitationService);
 
         const result = service.signIn({
           currentSessionToken: prior.sessionToken,
           grant,
+          invitation: { handoffToken: handoff.handoffToken, invitationId: handoff.invitationId },
           requestId: `${tokenState}-replacement-request`,
         });
 

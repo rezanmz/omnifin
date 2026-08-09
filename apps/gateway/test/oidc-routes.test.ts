@@ -26,12 +26,14 @@ import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
 import {
   connectorConfigs,
   externalIdentities,
+  invitations,
   oidcProviders,
   roleMappings,
   serviceIdentityLinks,
   users,
 } from "../src/db/schema.js";
 import { MAX_ACTIVE_SESSIONS_PER_USER } from "../src/auth/session-service.js";
+import { hashToken } from "../src/security/crypto.js";
 
 const providerId = "oidc-home";
 const issuer = "https://identity.example.test/application/o/omnifin/";
@@ -94,6 +96,36 @@ function seedProvider(database: DatabaseHandle) {
     .run();
 }
 
+function seedExistingOidcIdentity(database: DatabaseHandle) {
+  const createdAt = new Date(routeTime.getTime() - 60_000);
+  database.db
+    .insert(users)
+    .values({
+      createdAt,
+      displayName: "Existing viewer",
+      id: "route-existing-user",
+      role: "viewer",
+      roleSource: "default",
+      status: "pending_link",
+      updatedAt: createdAt,
+    })
+    .run();
+  database.db
+    .insert(externalIdentities)
+    .values({
+      createdAt,
+      displayClaimsJson: JSON.stringify({ name: "Existing viewer" }),
+      id: "route-existing-identity",
+      issuer,
+      lastLoginAt: createdAt,
+      providerId,
+      subject: "immutable-viewer-subject",
+      updatedAt: createdAt,
+      userId: "route-existing-user",
+    })
+    .run();
+}
+
 function discoveredConfiguration(
   clientId: string,
   clientMetadata: Partial<ClientMetadata> | string | undefined,
@@ -152,6 +184,7 @@ async function openRouteHarness(
       },
       failureAudit: { clock: () => new Date(routeTime) },
       identity: { clock: () => new Date(routeTime) },
+      invitation: { clock: () => new Date(routeTime) },
       protocol: { authorizationCodeGrant },
       providerRegistry: {
         clock: () => new Date(routeTime),
@@ -159,6 +192,7 @@ async function openRouteHarness(
         discover,
       },
     },
+    invitationPublicDependencies: { clock: () => new Date(routeTime) },
     sessionDependencies: { clock: () => new Date(routeTime) },
   });
   return { app, authorizationCodeGrant, database, discover };
@@ -199,14 +233,18 @@ async function issueBrowserOidcSession(
   app: Awaited<ReturnType<typeof createApp>>,
   binding = browserBindingToken,
 ) {
+  const handoffCookie = await issueInvitationHandoff(app, app.database);
   const started = await app.inject({
-    headers: { cookie: `__Host-omnifin_oidc_binding=${binding}` },
-    method: "GET",
-    url: `/v1/auth/oidc/${providerId}/start`,
+    headers: {
+      cookie: `${handoffCookie}; __Host-omnifin_oidc_binding=${binding}`,
+      origin: "https://omnifin.example",
+    },
+    method: "POST",
+    url: `/v1/auth/invitations/oidc/${providerId}/start`,
   });
-  const state = new URL(started.headers.location!).searchParams.get("state");
+  const state = new URL(started.json().authorizationUrl as string).searchParams.get("state");
   const callback = await app.inject({
-    headers: { cookie: transactionBindingCookie(started, state) },
+    headers: { cookie: `${handoffCookie}; ${transactionBindingCookie(started, state)}` },
     method: "GET",
     url: `/v1/auth/oidc/callback/${providerId}?code=authorization-code&state=${state}`,
   });
@@ -223,6 +261,38 @@ async function issueBrowserOidcSession(
   return { cookie, csrfToken: body.csrfToken, principal: body.principal };
 }
 
+async function issueInvitationHandoff(
+  app: Awaited<ReturnType<typeof createApp>>,
+  database: DatabaseHandle,
+) {
+  const index = database.sqlite.prepare("select count(*) as count from invitations").get() as {
+    count: number;
+  };
+  const inviteToken = Buffer.alloc(32, 201 + index.count).toString("base64url");
+  database.db
+    .insert(invitations)
+    .values({
+      createdAt: new Date(routeTime.getTime() - 1_000),
+      expiresAt: new Date(routeTime.getTime() + 10 * 60_000),
+      id: `invite_oidc_${index.count}`,
+      tokenHash: hashToken(inviteToken),
+    })
+    .run();
+  const exchanged = await app.inject({
+    headers: {
+      "content-type": "application/json",
+      origin: "https://omnifin.example",
+    },
+    method: "POST",
+    payload: JSON.stringify({ token: inviteToken }),
+    url: "/v1/auth/invitations/exchange",
+  });
+  expect(exchanged.statusCode).toBe(204);
+  const handoff = exchanged.cookies.find(({ name }) => name.includes("registration_handoff"));
+  if (!handoff) throw new Error("Expected an invitation registration handoff cookie.");
+  return `${handoff.name}=${handoff.value}`;
+}
+
 function issueRecoverySession(app: Awaited<ReturnType<typeof createApp>>) {
   const issued = app.sessionService.createSession({ attribution: { authMethod: "recovery" } });
   return {
@@ -233,6 +303,107 @@ function issueRecoverySession(app: Awaited<ReturnType<typeof createApp>>) {
 }
 
 describe("OIDC browser routes", () => {
+  it("starts and completes invited OIDC onboarding without exposing handoff material", async () => {
+    const { app, database } = await openRouteHarness();
+    const handoffCookie = await issueInvitationHandoff(app, database);
+    try {
+      const started = await app.inject({
+        headers: {
+          cookie: handoffCookie,
+          origin: "https://omnifin.example",
+        },
+        method: "POST",
+        url: `/v1/auth/invitations/oidc/${providerId}/start`,
+      });
+
+      expect(started.statusCode, started.body).toBe(200);
+      expect(started.headers["cache-control"]).toBe("no-store");
+      const authorizationUrl = new URL(started.json().authorizationUrl as string);
+      const state = authorizationUrl.searchParams.get("state");
+      expect(state).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(authorizationUrl.href).not.toContain(handoffCookie.split("=", 2)[1]);
+      expect(authorizationUrl.href).not.toContain("invite_oidc");
+      const transaction = database.sqlite
+        .prepare("select encrypted_nonce as encryptedNonce from auth_transactions")
+        .get() as { encryptedNonce: string };
+      expect(transaction.encryptedNonce).not.toContain(handoffCookie.split("=", 2)[1]);
+
+      const callback = await app.inject({
+        headers: {
+          cookie: `${handoffCookie}; ${transactionBindingCookie(started, state)}`,
+        },
+        method: "GET",
+        url: `/v1/auth/oidc/callback/${providerId}?code=invited-code&state=${state}`,
+      });
+
+      expect(callback.statusCode).toBe(303);
+      expect(callback.headers.location).toBe("/link/jellyfin");
+      expect(setCookieHeader(callback.headers["set-cookie"])).toContain(
+        "__Host-omnifin_registration_handoff=;",
+      );
+      expect(database.sqlite.prepare("select count(*) as count from users").get()).toEqual({
+        count: 1,
+      });
+      expect(
+        database.sqlite
+          .prepare("select consumed_at is not null as consumed from invitations")
+          .get(),
+      ).toEqual({ consumed: 1 });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects invitation OIDC starts without a valid handoff and burns a callback missing proof", async () => {
+    const { app, database } = await openRouteHarness();
+    try {
+      const missing = await app.inject({
+        headers: { origin: "https://omnifin.example" },
+        method: "POST",
+        url: `/v1/auth/invitations/oidc/${providerId}/start`,
+      });
+      expect(missing.statusCode).toBe(400);
+      expect(missing.json()).toMatchObject({ error: { code: "invalid_request" } });
+
+      const malformed = await app.inject({
+        headers: {
+          cookie: "__Host-omnifin_registration_handoff=not-a-token",
+          origin: "https://omnifin.example",
+        },
+        method: "POST",
+        url: `/v1/auth/invitations/oidc/${providerId}/start`,
+      });
+      expect(malformed.statusCode).toBe(400);
+      expect(malformed.json()).toMatchObject({ error: { code: "invalid_request" } });
+
+      const handoffCookie = await issueInvitationHandoff(app, database);
+      const started = await app.inject({
+        headers: { cookie: handoffCookie, origin: "https://omnifin.example" },
+        method: "POST",
+        url: `/v1/auth/invitations/oidc/${providerId}/start`,
+      });
+      expect(started.statusCode, started.body).toBe(200);
+      const state = new URL(started.json().authorizationUrl as string).searchParams.get("state");
+      const callback = await app.inject({
+        headers: { cookie: transactionBindingCookie(started, state) },
+        method: "GET",
+        url: `/v1/auth/oidc/callback/${providerId}?code=authorization-code&state=${state}`,
+      });
+      expect(callback.statusCode).toBe(303);
+      expect(callback.headers.location).toBe("/login?authError=invalid_request");
+      expect(
+        database.sqlite
+          .prepare("select consumed_at is not null as consumed from auth_transactions")
+          .get(),
+      ).toEqual({ consumed: 1 });
+      expect(database.sqlite.prepare("select count(*) as count from sessions").get()).toEqual({
+        count: 0,
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
   it("claims the first administrator through an exact recovery-bound OIDC transaction", async () => {
     const { app, database } = await openRouteHarness();
     try {
@@ -1218,6 +1389,7 @@ describe("OIDC browser routes", () => {
 
   it("completes a bound callback against the configured public URL and issues a session", async () => {
     const { app, authorizationCodeGrant, database } = await openRouteHarness();
+    seedExistingOidcIdentity(database);
     const privateCode = "private-authorization-code-canary";
     const privateProviderSession = "private-provider-session-canary";
 
@@ -1295,6 +1467,7 @@ describe("OIDC browser routes", () => {
 
   it("preserves the requested return path once the OIDC account has a media identity", async () => {
     const { app, database } = await openRouteHarness();
+    seedExistingOidcIdentity(database);
     try {
       const firstStart = await app.inject({
         headers: { cookie: `__Host-omnifin_oidc_binding=${browserBindingToken}` },
@@ -1459,6 +1632,7 @@ describe("OIDC browser routes", () => {
 
   it("does not consume a valid transaction when the callback browser binding is wrong", async () => {
     const { app, authorizationCodeGrant, database } = await openRouteHarness();
+    seedExistingOidcIdentity(database);
     const wrongBinding = Buffer.alloc(32, 61).toString("base64url");
 
     try {
@@ -1597,6 +1771,7 @@ describe("OIDC browser routes", () => {
 
   it("leaves a legitimate transaction available after a callback with duplicate state", async () => {
     const { app, authorizationCodeGrant, database } = await openRouteHarness();
+    seedExistingOidcIdentity(database);
 
     try {
       const started = await app.inject({
@@ -1728,6 +1903,7 @@ describe("OIDC browser routes", () => {
 
   it("reports a capped session issuance as an expected safe authentication outcome", async () => {
     const { app, database } = await openRouteHarness();
+    seedExistingOidcIdentity(database);
 
     try {
       const firstStart = await app.inject({
@@ -1844,6 +2020,7 @@ describe("OIDC browser routes", () => {
     const { app, authorizationCodeGrant, database, discover } = await openRouteHarness({
       createBrowserBinding: () => indexedBindingToken((bindingIndex += 1)),
     });
+    seedExistingOidcIdentity(database);
 
     try {
       const [firstPreflight, secondPreflight] = await Promise.all([
@@ -1951,6 +2128,7 @@ describe("OIDC browser routes", () => {
 
   it("allows exactly one of two concurrent callback replays to exchange and sign in", async () => {
     const { app, authorizationCodeGrant, database } = await openRouteHarness();
+    seedExistingOidcIdentity(database);
 
     try {
       const started = await app.inject({
@@ -2457,6 +2635,7 @@ describe("OIDC browser routes", () => {
       const { app, authorizationCodeGrant, database, discover } = await openRouteHarness({
         config: { trustProxyHops: 1 },
       });
+      seedExistingOidcIdentity(database);
       const audit = new OidcFailureAuditService(
         database,
         { encryptionKey: testConfig().encryptionKey },

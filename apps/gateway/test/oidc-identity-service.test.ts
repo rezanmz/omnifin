@@ -29,10 +29,13 @@ import {
   type VerifiedOidcGrant,
 } from "../src/auth/oidc/protocol.js";
 import { SessionService } from "../src/auth/session-service.js";
+import { InvitationService } from "../src/auth/invitation-service.js";
+import type { AppConfig } from "../src/config.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
 import {
   connectorConfigs,
   externalIdentities,
+  invitations,
   oidcProviders,
   roleMappings,
   serviceIdentityLinks,
@@ -40,11 +43,40 @@ import {
   users,
 } from "../src/db/schema.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
+import { hashToken } from "../src/security/crypto.js";
 
 const ISSUER = "https://id.example.test/application/o/omnifin/";
 const LOGIN_TIME = new Date("2026-07-25T16:00:00.000Z");
 const EARLIER_TIME = new Date("2026-07-25T15:00:00.000Z");
 const PROTOCOL_KEY = Buffer.alloc(32, 29);
+
+function invitationConfig(): AppConfig {
+  return {
+    baseUrl: new URL("https://omnifin.example"),
+    databaseUrl: ":memory:",
+    encryptionKey: PROTOCOL_KEY,
+    environment: "test",
+    host: "127.0.0.1",
+    insecureLoopbackPreview: false,
+    jellyfinInsecureHttpApproved: false,
+    logLevel: "silent",
+    port: 4000,
+    secureCookies: true,
+    session: {
+      absoluteTtlMs: 60 * 60 * 1_000,
+      inactivityTtlMs: 10 * 60 * 1_000,
+      recoveryAbsoluteTtlMs: 15 * 60 * 1_000,
+      rotationIntervalMs: 5 * 60 * 1_000,
+    },
+    trustProxyHops: 0,
+  };
+}
+
+function invitationService(database: DatabaseHandle) {
+  return new InvitationService(database, invitationConfig(), {
+    clock: () => new Date(LOGIN_TIME),
+  });
+}
 
 interface GrantBinding {
   idTokenHint?: string;
@@ -52,6 +84,7 @@ interface GrantBinding {
 }
 
 interface ResolveOptions extends GrantBinding {
+  invited?: boolean;
   requestId?: string;
 }
 
@@ -277,11 +310,31 @@ function createHarness(prefix = "identity-fixture") {
   const service = new OidcIdentityService(database, {
     clock: () => new Date(LOGIN_TIME),
     createId: () => `${prefix}-${(identifier += 1)}`,
+    invitationService: invitationService(database),
     providerBindingVerifier: createOidcProviderRuntimeBindingVerifier(database, {
       encryptionKey: PROTOCOL_KEY,
     }),
   });
   return { database, service };
+}
+
+function registrationFixture(database: DatabaseHandle) {
+  const count = database.sqlite.prepare("select count(*) as count from invitations").get() as {
+    count: number;
+  };
+  const invitationToken = Buffer.alloc(32, 50 + count.count).toString("base64url");
+  const invitationId = `invite_identity_${count.count}`;
+  database.db
+    .insert(invitations)
+    .values({
+      createdAt: EARLIER_TIME,
+      expiresAt: new Date(LOGIN_TIME.getTime() + 10 * 60_000),
+      id: invitationId,
+      tokenHash: hashToken(invitationToken),
+    })
+    .run();
+  const handoff = invitationService(database).exchangeForRegistrationHandoff(invitationToken);
+  return { handoffToken: handoff.handoffToken, invitationId: handoff.invitationId };
 }
 
 async function resolve(
@@ -290,9 +343,30 @@ async function resolve(
   rawClaims: Readonly<Record<string, unknown>>,
   options: ResolveOptions = {},
 ) {
-  const { requestId = "request-1", ...binding } = options;
+  const { invited, requestId = "request-1", ...binding } = options;
+  const subject = (rawClaims.sub ?? "subject-1") as string;
+  const existing = database.sqlite
+    .prepare("select 1 from external_identities where issuer = ? and subject = ?")
+    .get((rawClaims.iss ?? ISSUER) as string, subject);
+  let invitation: ReturnType<InvitationService["exchangeForRegistrationHandoff"]> | undefined;
+  if (invited ?? existing === undefined) {
+    const fixture = registrationFixture(database);
+    invitation = {
+      ...fixture,
+      expiresAt: new Date(LOGIN_TIME.getTime() + 10 * 60_000),
+      handoffToken: fixture.handoffToken,
+    };
+  }
   return service.resolve({
     grant: await verifiedGrant(database, rawClaims, binding),
+    ...(invitation === undefined
+      ? {}
+      : {
+          invitation: {
+            handoffToken: invitation.handoffToken,
+            invitationId: invitation.invitationId,
+          },
+        }),
     requestId,
   });
 }
@@ -393,7 +467,13 @@ describe("OidcIdentityService", () => {
         service.resolveInExistingTransaction({ grant, requestId: "guarded-request" }),
       ).toThrow(OidcIdentityServiceError);
 
-      expect(service.resolve({ grant, requestId: "root-request" })).toMatchObject({
+      expect(
+        service.resolve({
+          grant,
+          invitation: registrationFixture(database),
+          requestId: "root-request",
+        }),
+      ).toMatchObject({
         status: "resolved",
       });
     } finally {
@@ -422,7 +502,13 @@ describe("OidcIdentityService", () => {
         })
         .immediate();
 
-      expect(service.resolve({ grant, requestId: "safe-root-request" })).toMatchObject({
+      expect(
+        service.resolve({
+          grant,
+          invitation: registrationFixture(database),
+          requestId: "safe-root-request",
+        }),
+      ).toMatchObject({
         status: "resolved",
       });
     } finally {
@@ -438,6 +524,7 @@ describe("OidcIdentityService", () => {
         encryptionKey: PROTOCOL_KEY,
       });
       const service = new OidcIdentityService(database, {
+        invitationService: invitationService(database),
         providerBindingVerifier: verifier,
       });
 
@@ -768,14 +855,18 @@ describe("OidcIdentityService", () => {
 
       const currentGrant = await verifiedGrantFromRuntime(database, runtimeB, claims());
       expect(
-        service.resolve({ grant: currentGrant, requestId: `current-${transition.field}` }),
+        service.resolve({
+          grant: currentGrant,
+          invitation: registrationFixture(database),
+          requestId: `current-${transition.field}`,
+        }),
         transition.field,
       ).toMatchObject({ provisioned: true, status: "resolved" });
       const auditJson = JSON.stringify(readAudit(database));
       expect(auditJson).not.toContain(sealA);
       expect(auditJson).not.toContain(sealB);
       expect(auditJson).not.toContain(transition.value);
-      expect(readAudit(database)).toHaveLength(2);
+      expect(readAudit(database)).toHaveLength(3);
       expect(readAudit(database).every(({ outcome }) => outcome === "success")).toBe(true);
       database.close();
     }
@@ -784,7 +875,7 @@ describe("OidcIdentityService", () => {
   it("preserves provider availability and JIT denial fidelity", async () => {
     const jit = createHarness("jit-disabled-fixture");
     seedProvider(jit.database, { allowJitProvisioning: false });
-    expect(await resolve(jit.database, jit.service, claims())).toEqual({
+    expect(await resolve(jit.database, jit.service, claims(), { invited: false })).toEqual({
       reason: "jit_provisioning_disabled",
       status: "denied",
     });
@@ -860,6 +951,7 @@ describe("OidcIdentityService", () => {
     });
     expect(database.db.select().from(serviceIdentityLinks).all()).toHaveLength(0);
     expect(readAudit(database).map((event) => event.eventType)).toEqual([
+      "auth.invitation.consumed",
       "auth.oidc.identity.jit_provisioned",
       "auth.oidc.identity.login",
     ]);
@@ -1156,6 +1248,7 @@ describe("OidcIdentityService", () => {
     const secondService = new OidcIdentityService(database, {
       clock: () => new Date(LOGIN_TIME.getTime() + 1_000),
       createId: () => `second-fixture-${(secondIdentifier += 1)}`,
+      invitationService: invitationService(database),
       providerBindingVerifier: createOidcProviderRuntimeBindingVerifier(database, {
         encryptionKey: PROTOCOL_KEY,
       }),
@@ -1184,15 +1277,20 @@ describe("OidcIdentityService", () => {
     const service = new OidcIdentityService(database, {
       clock: () => new Date(LOGIN_TIME),
       createId: () => "duplicate-id",
+      invitationService: invitationService(database),
       providerBindingVerifier: createOidcProviderRuntimeBindingVerifier(database, {
         encryptionKey: PROTOCOL_KEY,
       }),
     });
     const grant = await verifiedGrant(database, claims());
 
-    expect(() => service.resolve({ grant, requestId: "request-1" })).toThrow(
-      OidcIdentityServiceError,
-    );
+    expect(() =>
+      service.resolve({
+        grant,
+        invitation: registrationFixture(database),
+        requestId: "request-1",
+      }),
+    ).toThrow(OidcIdentityServiceError);
     expect(database.db.select().from(users).all()).toHaveLength(1);
     expect(database.db.select().from(externalIdentities).all()).toHaveLength(0);
     expect(readAudit(database)).toHaveLength(0);
@@ -1226,7 +1324,11 @@ describe("OidcIdentityService", () => {
       ).toEqual({ reason: "invalid_verified_context", status: "denied" });
     }
 
-    const accepted = service.resolve({ grant, requestId: "valid-request" });
+    const accepted = service.resolve({
+      grant,
+      invitation: registrationFixture(database),
+      requestId: "valid-request",
+    });
     expect(accepted).toMatchObject({ status: "resolved" });
     expect(isVerifiedOidcGrant(grant)).toBe(false);
     expect(service.resolve({ grant, requestId: "replayed-request" })).toEqual({
