@@ -10,6 +10,7 @@ import {
   privateContainerAddress,
   runningContainerState,
   upgradeRehearsalReport,
+  validatePreviousRestoreEvidence,
 } from "../release/upgrade-rehearsal.mjs";
 
 const PREVIOUS_IMAGE =
@@ -264,4 +265,139 @@ test("uses the prior image to restore the original backup and retains candidate 
   );
   assert.match(HARNESS_SOURCE, /"\/backups\/previous\.sqlite"/u);
   assert.match(HARNESS_SOURCE, /"\/backups\/candidate-pre-rollback\.sqlite"/u);
+});
+
+test("validates sanitized previous-restore evidence against source and rollback backups", () => {
+  const sourceDatabaseSha256 = "a".repeat(64);
+  const publishedDatabaseSha256 = "b".repeat(64);
+  const rollbackDatabaseSha256 = "c".repeat(64);
+  const rollbackSchemaSha256 = "d".repeat(64);
+  const previous = { databaseSha256: sourceDatabaseSha256 };
+  const rollback = {
+    databaseSha256: rollbackDatabaseSha256,
+    migrationCount: 18,
+    schemaSha256: rollbackSchemaSha256,
+  };
+  const restored = {
+    databaseSha256: publishedDatabaseSha256,
+    rollback: { ...rollback },
+    sanitizedDatabaseSha256: publishedDatabaseSha256,
+    sourceDatabaseSha256,
+  };
+
+  assert.equal(validatePreviousRestoreEvidence(restored, previous, rollback), true);
+  assert.notEqual(restored.databaseSha256, previous.databaseSha256);
+});
+
+test("rejects missing and malformed previous-restore digests", () => {
+  const evidence = {
+    previous: { databaseSha256: "a".repeat(64) },
+    restored: {
+      databaseSha256: "b".repeat(64),
+      rollback: {
+        databaseSha256: "c".repeat(64),
+        migrationCount: 18,
+        schemaSha256: "d".repeat(64),
+      },
+      sanitizedDatabaseSha256: "b".repeat(64),
+      sourceDatabaseSha256: "a".repeat(64),
+    },
+    rollback: {
+      databaseSha256: "c".repeat(64),
+      migrationCount: 18,
+      schemaSha256: "d".repeat(64),
+    },
+  };
+
+  for (const [name, mutate] of [
+    ["source", (value) => delete value.restored.sourceDatabaseSha256],
+    ["published", (value) => (value.restored.databaseSha256 = "B".repeat(64))],
+    ["sanitized", (value) => (value.restored.sanitizedDatabaseSha256 = "not-a-sha256")],
+    ["rollback database", (value) => delete value.restored.rollback.databaseSha256],
+    ["rollback schema", (value) => (value.rollback.schemaSha256 = "e".repeat(63))],
+  ]) {
+    const candidate = structuredClone(evidence);
+    mutate(candidate);
+    assert.throws(
+      () =>
+        validatePreviousRestoreEvidence(candidate.restored, candidate.previous, candidate.rollback),
+      /previous_restore_invalid/u,
+      name,
+    );
+  }
+});
+
+test("rejects source and published database identity mismatches", () => {
+  const sourceDatabaseSha256 = "a".repeat(64);
+  const publishedDatabaseSha256 = "b".repeat(64);
+  const rollback = {
+    databaseSha256: "c".repeat(64),
+    migrationCount: 18,
+    schemaSha256: "d".repeat(64),
+  };
+  const previous = { databaseSha256: sourceDatabaseSha256 };
+  const restored = {
+    databaseSha256: publishedDatabaseSha256,
+    rollback: { ...rollback },
+    sanitizedDatabaseSha256: publishedDatabaseSha256,
+    sourceDatabaseSha256,
+  };
+
+  for (const mutate of [
+    (value) => (value.restored.sourceDatabaseSha256 = "e".repeat(64)),
+    (value) => (value.restored.sanitizedDatabaseSha256 = "f".repeat(64)),
+    (value) => (value.restored.sanitizedDatabaseSha256 = sourceDatabaseSha256),
+    (value) => {
+      value.restored.databaseSha256 = sourceDatabaseSha256;
+      value.restored.sanitizedDatabaseSha256 = sourceDatabaseSha256;
+    },
+  ]) {
+    const candidate = {
+      previous: { ...previous },
+      restored: { ...restored, rollback: { ...restored.rollback } },
+      rollback: { ...rollback },
+    };
+    mutate(candidate);
+    assert.throws(
+      () =>
+        validatePreviousRestoreEvidence(candidate.restored, candidate.previous, candidate.rollback),
+      /previous_restore_invalid/u,
+    );
+  }
+});
+
+test("rejects every candidate rollback evidence mismatch", () => {
+  const previous = { databaseSha256: "a".repeat(64) };
+  const rollback = {
+    databaseSha256: "c".repeat(64),
+    migrationCount: 18,
+    schemaSha256: "d".repeat(64),
+  };
+  const restored = {
+    databaseSha256: "b".repeat(64),
+    rollback: { ...rollback },
+    sanitizedDatabaseSha256: "b".repeat(64),
+    sourceDatabaseSha256: previous.databaseSha256,
+  };
+
+  for (const mutate of [
+    (value) => (value.restored.rollback.databaseSha256 = "e".repeat(64)),
+    (value) => (value.restored.rollback.schemaSha256 = "f".repeat(64)),
+    (value) => (value.restored.rollback.migrationCount = 19),
+    (value) => (value.rollback.databaseSha256 = "e".repeat(64)),
+    (value) => (value.rollback.schemaSha256 = "f".repeat(64)),
+    (value) => (value.rollback.migrationCount = 19),
+  ]) {
+    const candidate = {
+      previous: { ...previous },
+      restored: { ...restored, rollback: { ...restored.rollback } },
+      rollback: { ...rollback },
+    };
+    mutate(candidate);
+    assert.throws(
+      () =>
+        validatePreviousRestoreEvidence(candidate.restored, candidate.previous, candidate.rollback),
+      /previous_restore_invalid/u,
+    );
+  }
 });

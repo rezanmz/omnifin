@@ -538,6 +538,33 @@ function maintenanceSnapshot(resources, image, fileName, label) {
   return { ...closed, databaseSha256: verified.databaseSha256 };
 }
 
+export function validatePreviousRestoreEvidence(restored, previous, rollback) {
+  const digestFields = [
+    previous?.databaseSha256,
+    restored?.databaseSha256,
+    restored?.sanitizedDatabaseSha256,
+    restored?.sourceDatabaseSha256,
+    restored?.rollback?.databaseSha256,
+    restored?.rollback?.schemaSha256,
+    rollback?.databaseSha256,
+    rollback?.schemaSha256,
+  ];
+  const migrationCounts = [restored?.rollback?.migrationCount, rollback?.migrationCount];
+  if (
+    digestFields.some((digest) => typeof digest !== "string" || !SHA256_PATTERN.test(digest)) ||
+    migrationCounts.some((count) => !Number.isSafeInteger(count) || count < 0) ||
+    restored.sourceDatabaseSha256 !== previous.databaseSha256 ||
+    restored.databaseSha256 !== restored.sanitizedDatabaseSha256 ||
+    restored.sanitizedDatabaseSha256 === previous.databaseSha256 ||
+    restored.rollback.databaseSha256 !== rollback.databaseSha256 ||
+    restored.rollback.schemaSha256 !== rollback.schemaSha256 ||
+    restored.rollback.migrationCount !== rollback.migrationCount
+  ) {
+    throw new RehearsalFailure("previous_restore_invalid");
+  }
+  return true;
+}
+
 function restorePreviousState(resources, priorImage, previous) {
   const restored = maintenanceResult(
     runMaintenance(
@@ -568,14 +595,7 @@ function restorePreviousState(resources, priorImage, previous) {
     "verify",
     "candidate_rollback_backup_verify_result",
   );
-  if (
-    restored.databaseSha256 !== previous.databaseSha256 ||
-    restored.rollback?.databaseSha256 !== rollback.databaseSha256 ||
-    restored.rollback?.schemaSha256 !== rollback.schemaSha256 ||
-    restored.rollback?.migrationCount !== rollback.migrationCount
-  ) {
-    throw new RehearsalFailure("previous_restore_invalid");
-  }
+  validatePreviousRestoreEvidence(restored, previous, rollback);
   return closedState(rollback, "candidate_rollback_backup");
 }
 
