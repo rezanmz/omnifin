@@ -1870,6 +1870,9 @@ describe("TheaterPlayer", () => {
       ),
     ).toBeVisible();
     fireEvent.canPlay(screen.getByLabelText<HTMLVideoElement>(`${media.title} video`));
+    await waitFor(() =>
+      expect(screen.queryByText("Applying your playback defaults…")).not.toBeInTheDocument(),
+    );
     await screen.findByRole("button", { name: `Resume ${media.title}` });
     await user.click(screen.getByRole("button", { name: "Playback settings" }));
     // Soft-fail defaults (remote, 10 Mbps ceiling) map to the balanced preset.
