@@ -13,6 +13,8 @@ import {
   acquisitionSearchResponseSchema,
 } from "@omnifin/contracts/acquisition";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
+import { once } from "node:events";
+import { createConnection } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
@@ -87,6 +89,24 @@ const normalizedResponse: AcquisitionProvenanceResponse = {
   target: { kind: "movie", mediaId: 42, seasonNumber: null, service: "radarr" },
 };
 
+const largeResponse: AcquisitionProvenanceResponse = {
+  ...normalizedResponse,
+  events: Array.from({ length: 250 }, (_, index) => ({
+    ...normalizedResponse.events[0]!,
+    episodeNumbers: Array.from({ length: 100 }, (_, episode) => episode + 1),
+    id: `radarr:history:large-${index}`,
+    occurredAt: new Date(now.getTime() - index * 1_000).toISOString(),
+    release: {
+      ...normalizedResponse.events[0]!.release,
+      downloadClient: "q".repeat(160),
+      indexer: "i".repeat(160),
+      quality: "quality".repeat(20),
+      title: `Large.Release.${"x".repeat(480)}`,
+    },
+    summary: "Large provenance snapshot ".repeat(9),
+  })),
+};
+
 const stalledResponse: AcquisitionProvenanceResponse = {
   ...normalizedResponse,
   events: [
@@ -149,6 +169,7 @@ async function harness(
       connectionLifetimeMs?: number;
       createCursor?: () => string;
       heartbeatIntervalMs?: number;
+      maxConnections?: number;
       maxConnectionsPerSession?: number;
       pollIntervalMs?: number;
       reconnectDelayMs?: number;
@@ -609,6 +630,61 @@ describe("acquisition provenance routes", () => {
       await app.close();
     }
   });
+
+  it("force-closes a paused client after an SSE stall and releases its admission slot", async () => {
+    const implementation = vi.fn(async () => largeResponse);
+    const { app, operator } = await harness(implementation, {
+      eventDependencies: {
+        connectionLifetimeMs: 45_000,
+        heartbeatIntervalMs: 15_000,
+        maxConnections: 1,
+        pollIntervalMs: 60_000,
+        reconnectDelayMs: 3_000,
+      },
+    });
+    let socket: ReturnType<typeof createConnection> | undefined;
+    let reopened: Promise<{ statusCode: number }> | undefined;
+    try {
+      await app.listen({ host: "127.0.0.1", port: 0 });
+      const address = app.server.address();
+      if (!address || typeof address === "string") throw new Error("Test server did not bind.");
+      app.server.on("connection", (connection) => {
+        const writableState = (
+          connection as unknown as { _writableState?: { highWaterMark: number } }
+        )._writableState;
+        if (writableState) writableState.highWaterMark = 1;
+        connection.cork();
+      });
+
+      socket = createConnection({ host: "127.0.0.1", port: address.port });
+      await once(socket, "connect");
+      socket.pause();
+      socket.write(
+        `GET /v1/acquisitions/provenance/events?service=radarr&mediaId=42 HTTP/1.1\r\n` +
+          `Host: localhost\r\nCookie: ${SESSION_COOKIE_NAME}=${operator.sessionToken}\r\n` +
+          "Connection: keep-alive\r\n\r\n",
+      );
+      await vi.waitFor(() => expect(implementation).toHaveBeenCalled());
+      await new Promise((resolve) => setTimeout(resolve, 10_500));
+
+      reopened = app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${operator.sessionToken}` },
+        method: "GET",
+        url: "/v1/acquisitions/provenance/events?service=radarr&mediaId=42",
+      });
+      await vi.waitFor(() => expect(implementation.mock.calls.length).toBeGreaterThan(1));
+      socket.resume();
+      await vi.waitFor(() => expect(socket?.destroyed).toBe(true), {
+        interval: 20,
+        timeout: 2_000,
+      });
+    } finally {
+      socket?.resume();
+      socket?.destroy();
+      await app.close();
+      if (reopened) expect((await reopened).statusCode).toBe(200);
+    }
+  }, 20_000);
 
   it("rejects an untrusted resume cursor before contacting the connector", async () => {
     const { app, implementation, operator } = await harness();

@@ -124,6 +124,31 @@ describe("SystemStatus", () => {
     }
   });
 
+  it("does not poll while the native stream is connecting", async () => {
+    vi.useFakeTimers();
+    let callbacks: SystemStatusWatchCallbacks | undefined;
+    const load = vi.fn(async () => ready);
+    const client: SystemStatusClient = {
+      load,
+      watch: (nextCallbacks) => {
+        callbacks = nextCallbacks;
+        nextCallbacks.onStatus("connecting");
+        return vi.fn();
+      },
+    };
+    try {
+      renderStatus(ready, { client, live: true });
+      await act(async () => vi.advanceTimersByTimeAsync(30_000));
+      expect(load).not.toHaveBeenCalled();
+
+      act(() => callbacks?.onStatus("fallback"));
+      await act(async () => vi.advanceTimersByTimeAsync(30_000));
+      expect(load).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("labels fixture-backed views as a stable snapshot", () => {
     renderStatus();
     expect(screen.getByText("Snapshot")).toBeVisible();

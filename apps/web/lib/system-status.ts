@@ -192,7 +192,7 @@ export function watchSystemStatusEvents(
     if (active && !failedClosed) callbacks.onStatus("connecting");
   };
   source.onerror = () => {
-    if (active && !failedClosed) callbacks.onStatus("fallback");
+    if (active && !failedClosed) callbacks.onStatus("connecting");
   };
   source.onmessage = (message) => {
     void (async () => {

@@ -1477,7 +1477,7 @@ function DownloadQueueContent({
     initialData: initialQueue,
     queryFn: ({ signal }) => client.load(signal),
     queryKey: ["download-queue"],
-    refetchInterval: refreshAvailable && liveStatus !== "live" ? 12_000 : false,
+    refetchInterval: refreshAvailable && liveStatus === "fallback" ? 12_000 : false,
     refetchIntervalInBackground: false,
     retry: false,
     staleTime: 8_000,

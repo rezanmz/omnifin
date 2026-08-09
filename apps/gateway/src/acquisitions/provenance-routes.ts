@@ -28,9 +28,11 @@ import { requirePermission } from "../auth/authorization.js";
 import { sessionCookieName, writeSessionCookie } from "../auth/session-cookie.js";
 import { SafeHttpError } from "../http-error.js";
 import { safeFailureDiagnostics } from "../logger.js";
+import { GatewaySseWriter } from "../runtime/sse-writer.js";
 import {
   AcquisitionProvenanceEventBroker,
   type AcquisitionProvenanceEventBrokerDependencies,
+  type AcquisitionProvenanceEventSubscription,
 } from "./provenance-events.js";
 import {
   AcquisitionProvenanceError,
@@ -553,28 +555,45 @@ export const acquisitionProvenanceRoutes: FastifyPluginAsync<
       }
 
       let closed = false;
-      const close = () => {
+      let hijacked = false;
+      const state: {
+        heartbeat?: ReturnType<typeof setInterval>;
+        lifetime?: ReturnType<typeof setTimeout>;
+        subscription?: AcquisitionProvenanceEventSubscription;
+        writer?: GatewaySseWriter;
+      } = {};
+      const operationAborted = () =>
+        request.operationSignal.aborted || app.runtimeDrain.signal.aborted;
+      const onDrain = () => close();
+      const close = (force = false) => {
         if (closed) return;
         closed = true;
-        clearInterval(heartbeat);
-        clearTimeout(lifetime);
+        if (state.heartbeat !== undefined) clearInterval(state.heartbeat);
+        if (state.lifetime !== undefined) clearTimeout(state.lifetime);
         request.raw.off("aborted", close);
         reply.raw.off("close", close);
-        app.runtimeDrain.signal.removeEventListener("abort", close);
-        if (subscription.accepted) subscription.unsubscribe();
-        if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.end();
+        app.runtimeDrain.signal.removeEventListener("abort", onDrain);
+        if (state.subscription?.accepted) state.subscription.unsubscribe();
+        const blocked = state.writer?.close() ?? false;
+        if (force || blocked) {
+          if (!reply.raw.destroyed) reply.raw.destroy();
+        } else if (hijacked && !reply.raw.destroyed && !reply.raw.writableEnded) {
+          reply.raw.end();
+        }
       };
-      const subscription = eventBroker.subscribe({
+      if (operationAborted()) return;
+      state.subscription = eventBroker.subscribe({
         ...(lastEventId === undefined ? {} : { lastEventId }),
         onClose: close,
         onEvent: (event) => {
           if (closed || reply.raw.destroyed || reply.raw.writableEnded) return;
-          reply.raw.write(`id: ${event.cursor}\ndata: ${JSON.stringify(event)}\n\n`);
+          state.writer?.writeSnapshot(`id: ${event.cursor}\ndata: ${JSON.stringify(event)}\n\n`);
         },
         principal,
         target,
       });
-      if (!subscription.accepted) {
+      if (!state.subscription.accepted) {
+        if (operationAborted()) return;
         reply.header("retry-after", Math.ceil(eventReconnectMs / 1_000));
         throw new SafeHttpError({
           code: "acquisition_provenance_event_capacity_reached",
@@ -583,7 +602,16 @@ export const acquisitionProvenanceRoutes: FastifyPluginAsync<
         });
       }
 
+      if (operationAborted()) {
+        close();
+        return;
+      }
       reply.hijack();
+      hijacked = true;
+      if (operationAborted()) {
+        close();
+        return;
+      }
       copySecurityHeaders(reply);
       reply.raw.setHeader("cache-control", "no-store, no-transform");
       reply.raw.setHeader("content-type", "text/event-stream; charset=utf-8");
@@ -591,18 +619,26 @@ export const acquisitionProvenanceRoutes: FastifyPluginAsync<
       reply.raw.setHeader("vary", "Cookie");
       reply.raw.setHeader("x-accel-buffering", "no");
       reply.raw.writeHead(200);
-      reply.raw.write(`retry: ${eventReconnectMs}\n\n`);
-      const heartbeat = setInterval(() => {
+      state.writer = new GatewaySseWriter(reply.raw, {
+        onClose: (reason, blocked) => close(reason === "error" || blocked),
+        onStall: () => close(true),
+      });
+      state.writer.write(`retry: ${eventReconnectMs}\n\n`);
+      if (closed || operationAborted()) {
+        close();
+        return;
+      }
+      state.heartbeat = setInterval(() => {
         if (!closed && !reply.raw.destroyed && !reply.raw.writableEnded) {
-          reply.raw.write(": keep-alive\n\n");
+          state.writer?.write(": keep-alive\n\n");
         }
       }, eventHeartbeatMs);
-      heartbeat.unref();
-      const lifetime = setTimeout(close, eventLifetimeMs);
-      lifetime.unref();
+      state.heartbeat.unref();
+      state.lifetime = setTimeout(close, eventLifetimeMs);
+      state.lifetime.unref();
       request.raw.once("aborted", close);
       reply.raw.once("close", close);
-      app.runtimeDrain.signal.addEventListener("abort", close, { once: true });
+      app.runtimeDrain.signal.addEventListener("abort", onDrain, { once: true });
       if (app.runtimeDrain.signal.aborted) close();
     },
   );

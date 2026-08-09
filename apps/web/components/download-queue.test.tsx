@@ -1,7 +1,7 @@
 import { ROLE_PERMISSIONS, type SessionPrincipal } from "@omnifin/contracts/auth";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   DownloadQueueClientError,
@@ -39,6 +39,8 @@ const operator: SessionPrincipal = {
   sessionId: "queue-session",
   userId: "queue-operator",
 };
+
+afterEach(() => vi.useRealTimers());
 
 function renderQueue(
   outcome: DownloadQueueLoadOutcome = ready,
@@ -240,6 +242,30 @@ describe("DownloadQueue", () => {
 
     expect(screen.getByText("12s fallback")).toBeVisible();
     expect(screen.getByText(demoDownloadQueue.items[0]!.title)).toBeVisible();
+  });
+
+  it("does not poll while connecting and polls only after fallback", async () => {
+    vi.useFakeTimers();
+    let callbacks: DownloadQueueWatchCallbacks | undefined;
+    const load = vi.fn(async () => demoDownloadQueue);
+    renderQueue(ready, {
+      client: {
+        load,
+        watch: (nextCallbacks) => {
+          callbacks = nextCallbacks;
+          nextCallbacks.onStatus("connecting");
+          return vi.fn();
+        },
+      },
+      live: true,
+    });
+
+    await act(async () => vi.advanceTimersByTimeAsync(12_000));
+    expect(load).not.toHaveBeenCalled();
+
+    act(() => callbacks?.onStatus("fallback"));
+    await act(async () => vi.advanceTimersByTimeAsync(12_000));
+    expect(load).toHaveBeenCalledOnce();
   });
 
   it("provides accessible light, dark, and system appearance controls", async () => {

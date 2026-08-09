@@ -41,6 +41,8 @@ describe("system status client", () => {
       return source;
     });
     source.onopen?.(new Event("open"));
+    expect(onStatus).toHaveBeenLastCalledWith("connecting");
+    expect(onStatus).not.toHaveBeenCalledWith("live");
     source.onmessage?.(
       new MessageEvent("message", {
         data: JSON.stringify(event),
@@ -95,7 +97,7 @@ describe("system status client", () => {
     watchSystemStatusEvents({ onSnapshot: vi.fn(), onStatus }, () => source);
 
     source.onerror?.(new Event("error"));
-    expect(onStatus).toHaveBeenLastCalledWith("fallback");
+    expect(onStatus).toHaveBeenLastCalledWith("connecting");
     expect(source.close).not.toHaveBeenCalled();
 
     source.onmessage?.(

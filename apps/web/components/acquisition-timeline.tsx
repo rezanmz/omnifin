@@ -754,7 +754,7 @@ export function AcquisitionTimeline({
   useEffect(() => {
     if (!open || !operation) return;
     let current = true;
-    let fallbackActive = false;
+    let streamStatus: AcquisitionProvenanceStreamStatus = "connecting";
     let hasData = operation.provenance !== undefined;
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
     let readController: AbortController | undefined;
@@ -789,10 +789,10 @@ export function AcquisitionTimeline({
     };
 
     const schedulePoll = () => {
-      if (!current || !fallbackActive) return;
+      if (!current || streamStatus !== "fallback") return;
       if (pollTimer) clearTimeout(pollTimer);
       pollTimer = setTimeout(() => {
-        if (!current || !fallbackActive) return;
+        if (!current || streamStatus !== "fallback") return;
         if (document.visibilityState === "hidden") {
           schedulePoll();
           return;
@@ -802,8 +802,6 @@ export function AcquisitionTimeline({
     };
 
     const beginFallback = () => {
-      if (fallbackActive) return;
-      fallbackActive = true;
       if (hasData) schedulePoll();
       else void loadSnapshot().finally(schedulePoll);
     };
@@ -818,10 +816,14 @@ export function AcquisitionTimeline({
       onStatus: (status) => {
         if (!current) return;
         setConnectionSnapshot({ operationId, status });
+        streamStatus = status;
         if (status === "fallback") beginFallback();
+        if (status !== "fallback" && pollTimer) {
+          clearTimeout(pollTimer);
+          pollTimer = undefined;
+        }
         if (status === "live") {
-          fallbackActive = false;
-          if (pollTimer) clearTimeout(pollTimer);
+          readController?.abort();
         }
       },
     });
@@ -829,7 +831,7 @@ export function AcquisitionTimeline({
     if (!operation.provenance) void loadSnapshot();
     return () => {
       current = false;
-      fallbackActive = false;
+      streamStatus = "connecting";
       if (pollTimer) clearTimeout(pollTimer);
       readController?.abort();
       stopWatching();
