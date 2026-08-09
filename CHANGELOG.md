@@ -7,6 +7,14 @@
 * **auth:** add single-use administrator invitations with OIDC/Jellyfin onboarding proof,
   lifecycle auditing, and restore-safe replacement handling ([#335](https://github.com/rezanmz/omnifin/issues/335))
 
+## [0.13.0](https://github.com/rezanmz/omnifin/compare/v0.12.0...v0.13.0) (2026-08-09)
+
+
+### Features
+
+* **auth:** add invitation-only onboarding ([#340](https://github.com/rezanmz/omnifin/issues/340)) ([5b320b1](https://github.com/rezanmz/omnifin/commit/5b320b12182ca3b6df31ca33466a501181d4657e))
+* establish v1 safety foundations ([#338](https://github.com/rezanmz/omnifin/issues/338)) ([c33612e](https://github.com/rezanmz/omnifin/commit/c33612ef2266ce3acfa75a4a3a5d43987ce85b7f))
+
 ## [0.12.0](https://github.com/rezanmz/omnifin/compare/v0.11.0...v0.12.0) (2026-08-08)
 
 
