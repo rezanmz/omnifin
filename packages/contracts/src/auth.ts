@@ -1066,3 +1066,33 @@ export const appearanceUpdateResponseJsonSchema = {
   required: ["theme"],
   properties: { theme: { type: "string", enum: ["system", "light", "dark"] } },
 } as const;
+
+export {
+  INVITATION_DEFAULT_TTL_SECONDS,
+  INVITATION_MAX_TTL_SECONDS,
+  INVITATION_MIN_TTL_SECONDS,
+  INVITATION_TOKEN_BYTES,
+  REGISTRATION_HANDOFF_TOKEN_BYTES,
+  REGISTRATION_HANDOFF_TTL_SECONDS,
+  INVITATIONS_PAGE_MAX_COUNT,
+  invitationAdminParamsSchema,
+  invitationCreateRequestSchema,
+  invitationCreateResponseSchema,
+  invitationExchangeRequestSchema,
+  invitationListQuerySchema,
+  invitationListResponseSchema,
+  invitationRevokeResponseSchema,
+  invitationStatusSchema,
+  invitationSummarySchema,
+} from "./invitations.js";
+export type {
+  InvitationAdminParams,
+  InvitationCreateRequest,
+  InvitationCreateResponse,
+  InvitationExchangeRequest,
+  InvitationListQuery,
+  InvitationListResponse,
+  InvitationRevokeResponse,
+  InvitationStatus,
+  InvitationSummary,
+} from "./invitations.js";

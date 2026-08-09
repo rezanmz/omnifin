@@ -42,6 +42,7 @@ describe("ViewingHistory", () => {
     expect(screen.getByRole("heading", { name: "Today" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Yesterday" })).toBeVisible();
     expect(screen.getByText("Only you")).toBeVisible();
+    expect(screen.getByText("Last played Jul 30, 2026, 10:42 AM")).toBeVisible();
     const historyLists = container.querySelectorAll(
       'section[aria-labelledby^="history-day-"] > ul',
     );

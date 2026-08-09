@@ -28,6 +28,7 @@ const requiredTables = [
   "external_identities",
   "external_mutation_dispatches",
   "external_mutation_target_locks",
+  "invitations",
   "jellyfin_quick_connect_transactions",
   "library_artwork_searches",
   "library_mutation_operations",
@@ -190,6 +191,16 @@ const requiredColumns = {
     "owner_dispatch_id",
     "target_digest",
     "target_scope",
+  ],
+  invitations: [
+    "consumed_at",
+    "created_at",
+    "expires_at",
+    "id",
+    "registration_handoff_expires_at",
+    "registration_handoff_hash",
+    "revoked_at",
+    "token_hash",
   ],
   jellyfin_quick_connect_transactions: [
     "browser_binding_hash",
@@ -518,6 +529,12 @@ const requiredIndexes = {
     "external_mutation_dispatches_user_created_idx",
   ],
   external_mutation_target_locks: ["external_mutation_target_locks_owner_idx"],
+  invitations: [
+    "invitations_created_idx",
+    "invitations_expiry_idx",
+    "invitations_registration_handoff_hash_unique",
+    "invitations_token_hash_unique",
+  ],
   jellyfin_quick_connect_transactions: [
     "jellyfin_quick_connect_transactions_browser_expiry_idx",
     "jellyfin_quick_connect_transactions_expiry_idx",
@@ -712,9 +729,10 @@ function writeHistoricalMigrationFixture() {
     [32, "0032_database_key_verifier"],
     [33, "0033_living_risque"],
     [34, "0034_external_mutation_journal"],
+    [35, "0035_invitations"],
   ];
   assertCondition(
-    JSON.stringify(journal.entries.slice(-7).map(({ idx, tag }) => [idx, tag])) ===
+    JSON.stringify(journal.entries.slice(-8).map(({ idx, tag }) => [idx, tag])) ===
       JSON.stringify(expectedTail),
     "Current migration journal must preserve the linear parent, saved-list, and playback-preference ancestry.",
   );
@@ -758,6 +776,9 @@ function writeHistoricalMigrationFixture() {
   const externalMutationSnapshot = JSON.parse(
     readFileSync(path.join(currentMigrationDirectory, "meta/0034_snapshot.json"), "utf8"),
   ) as MigrationSnapshot;
+  const invitationSnapshot = JSON.parse(
+    readFileSync(path.join(currentMigrationDirectory, "meta/0035_snapshot.json"), "utf8"),
+  ) as MigrationSnapshot;
   assertCondition(
     keyVerifierSnapshot.prevId === playbackSnapshot.id &&
       Object.hasOwn(keyVerifierSnapshot.tables, "database_key_verifiers") &&
@@ -767,6 +788,11 @@ function writeHistoricalMigrationFixture() {
       Object.hasOwn(externalMutationSnapshot.tables, "external_mutation_dispatches") &&
       Object.hasOwn(externalMutationSnapshot.tables, "external_mutation_target_locks"),
     "Snapshots 0032 through 0034 must preserve verifier, quarantine, and mutation-journal ancestry.",
+  );
+  assertCondition(
+    invitationSnapshot.prevId === externalMutationSnapshot.id &&
+      Object.hasOwn(invitationSnapshot.tables, "invitations"),
+    "Snapshot 0035 must preserve the external-mutation parent and include invitations.",
   );
   const historicalEntries = journal.entries.filter(({ idx }) => idx <= 2);
   assertCondition(
@@ -843,6 +869,32 @@ function migrationJournalState(database: DatabaseHandle) {
     .get() as { count: number; latestMigrationTimestamp: number };
 }
 
+function assertInvitationMigration(database: DatabaseHandle, context: string) {
+  const table = database.sqlite
+    .prepare("select sql from sqlite_master where type = 'table' and name = 'invitations'")
+    .get() as { sql: string } | undefined;
+  assertCondition(table !== undefined, `${context} did not create the invitations table.`);
+  for (const constraint of [
+    "invitations_id_check",
+    "invitations_token_hash_check",
+    "invitations_registration_handoff_hash_check",
+    "invitations_timestamp_check",
+  ]) {
+    assertCondition(
+      table.sql.includes(`CONSTRAINT "${constraint}"`),
+      `${context} is missing the ${constraint} constraint.`,
+    );
+  }
+  assertCondition(
+    (
+      database.sqlite.prepare("select count(*) as count from invitations").get() as {
+        count: number;
+      }
+    ).count === 0,
+    `${context} unexpectedly populated invitations during migration.`,
+  );
+}
+
 function assertNoForeignKeyViolations(database: DatabaseHandle, context: string) {
   const violations = database.sqlite.pragma("foreign_key_check") as unknown[];
   assertCondition(
@@ -858,9 +910,8 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined &&
-    currentMigrationTag === "0034_external_mutation_journal",
-  "Current migration journal must end at migration 0034_external_mutation_journal.",
+  currentMigrationTimestamp !== undefined && currentMigrationTag === "0035_invitations",
+  "Current migration journal must end at migration 0035_invitations.",
 );
 
 try {
@@ -868,6 +919,15 @@ try {
   try {
     database.migrate();
     database.migrate();
+    assertCondition(
+      JSON.stringify(migrationJournalState(database)) ===
+        JSON.stringify({
+          count: currentMigrationCount,
+          latestMigrationTimestamp: currentMigrationTimestamp,
+        }),
+      "Fresh empty migration did not advance exactly through migration 0035.",
+    );
+    assertInvitationMigration(database, "Fresh empty migration");
     const tables = database.sqlite
       .prepare(
         "select name from sqlite_master where type = 'table' and name not like 'sqlite_%' and name not like '__drizzle_%'",
@@ -1349,8 +1409,9 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0034.",
+      "Production migration did not advance the historical fixture exactly through migration 0035.",
     );
+    assertInvitationMigration(upgradeDatabase, "Historical upgrade migration");
     const reservations = upgradeDatabase.sqlite
       .prepare(
         `select
@@ -1514,7 +1575,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0034, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0035, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });

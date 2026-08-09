@@ -14,6 +14,11 @@ import type { AppConfig } from "../../config.js";
 import type { DatabaseHandle } from "../../db/client.js";
 import { EnvelopeCipher } from "../../security/crypto.js";
 import {
+  InvitationService,
+  InvitationServiceError,
+  type InvitationRegistrationHandoffInput,
+} from "../invitation-service.js";
+import {
   AdministratorRecoveryService,
   type AdministratorRecoveryReplacementResult,
 } from "../administrator-recovery-service.js";
@@ -90,6 +95,7 @@ export interface JellyfinAuthenticatedSignInInput {
   readonly requestId?: string;
   readonly target: JellyfinConnectorTarget;
   readonly userAgent?: string;
+  readonly registrationHandoff?: InvitationRegistrationHandoffInput;
 }
 
 export interface JellyfinAuthenticatedPairingInput {
@@ -117,7 +123,8 @@ export interface JellyfinAuthenticatedAdministratorReplacementInput
   readonly validatedSession?: unknown;
 }
 
-export type JellyfinSignInDenialReason = "account_disabled" | "invalid_credentials";
+export type JellyfinSignInDenialReason =
+  "account_disabled" | "invalid_credentials" | "invitation_identity_already_exists";
 
 export interface JellyfinSignInDeniedResult {
   readonly reason: JellyfinSignInDenialReason;
@@ -183,6 +190,7 @@ export interface JellyfinSignInServiceDependencies {
   ) => Pick<JellyfinAuthenticationClient, "authenticateByName" | "getPublicSystemInfo">;
   readonly createDeviceId?: () => string;
   readonly createId?: () => string;
+  readonly invitationService?: InvitationService;
 }
 
 export class JellyfinSignInServiceError extends Error {
@@ -252,6 +260,7 @@ export class JellyfinSignInService {
   readonly #createId: () => string;
   readonly #database: DatabaseHandle;
   readonly #identityHashKey: Buffer;
+  readonly #invitations: InvitationService | undefined;
   readonly #registry: JellyfinConnectorRegistry;
   readonly #sessionService: SessionService;
 
@@ -266,6 +275,8 @@ export class JellyfinSignInService {
     }
     this.#cipher = new EnvelopeCipher(config.encryptionKey);
     this.#identityHashKey = Buffer.from(config.encryptionKey);
+    this.#invitations =
+      dependencies.invitationService ?? new InvitationService(database, config as AppConfig);
     this.#administratorRecovery = new AdministratorRecoveryService(
       database,
       sessionService,
@@ -367,6 +378,55 @@ export class JellyfinSignInService {
       requestContext: input,
       proof: "password",
       target,
+    });
+  }
+
+  public async signInWithInvitationPassword(
+    input: JellyfinPasswordSignInInput & {
+      readonly registrationHandoff: InvitationRegistrationHandoffInput;
+    },
+  ): Promise<JellyfinSignInResult> {
+    this.#validatePasswordInput(input);
+    const target = this.#resolveConnectorTarget();
+    const deviceId = this.#nextIdentifier(this.#createDeviceId());
+    const client = this.#createClient(target);
+    let publicInfo: JellyfinPublicSystemInfo;
+    let authentication: JellyfinAuthenticationResult;
+    try {
+      publicInfo = await client.getPublicSystemInfo();
+      if (!this.#serverIdentityMatchesTarget(publicInfo.Id, target)) {
+        throw new JellyfinSignInServiceError("server_mismatch");
+      }
+      authentication = await client.authenticateByName({
+        deviceId,
+        password: input.password,
+        username: input.username,
+      });
+    } catch (error) {
+      if (error instanceof SafeConnectorError && error.code === "invalid_credentials") {
+        return internalResult({
+          reason: "invalid_credentials" as const,
+          status: "denied" as const,
+        });
+      }
+      if (error instanceof JellyfinSignInServiceError) throw error;
+      throw new JellyfinSignInServiceError("provider_unavailable", { cause: error });
+    }
+    if (
+      publicInfo.Id !== authentication.ServerId ||
+      !this.#serverIdentityMatchesTarget(publicInfo.Id, target)
+    ) {
+      throw new JellyfinSignInServiceError("server_mismatch");
+    }
+    return this.completeAuthenticatedSignIn({
+      authentication,
+      deviceId,
+      ...(input.ipAddress === undefined ? {} : { ipAddress: input.ipAddress }),
+      proof: "password",
+      ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+      registrationHandoff: input.registrationHandoff,
+      target,
+      ...(input.userAgent === undefined ? {} : { userAgent: input.userAgent }),
     });
   }
 
@@ -572,11 +632,15 @@ export class JellyfinSignInService {
     input: JellyfinAuthenticatedSignInInput,
   ): JellyfinSignInResult {
     this.#validateAuthenticatedSignInInput(input);
+    if (input.registrationHandoff) this.#resolveRegistrationHandoff(input.registrationHandoff);
     return this.#reconcileAndIssueSession({
       authentication: input.authentication,
       deviceId: input.deviceId,
       proof: input.proof,
       requestContext: input,
+      ...(input.registrationHandoff === undefined
+        ? {}
+        : { registrationHandoff: input.registrationHandoff }),
       target: input.target,
     });
   }
@@ -621,6 +685,7 @@ export class JellyfinSignInService {
         .immediate();
     } catch (error) {
       if (error instanceof SessionIssuanceLimitError) throw error;
+      if (error instanceof InvitationServiceError) throw error;
       if (error instanceof JellyfinSignInServiceError) throw error;
       throw new JellyfinSignInServiceError("provider_unavailable", { cause: error });
     }
@@ -689,6 +754,7 @@ export class JellyfinSignInService {
       JellyfinPasswordSignInInput,
       "currentSessionToken" | "ipAddress" | "requestId" | "userAgent"
     >;
+    registrationHandoff?: InvitationRegistrationHandoffInput;
     target: JellyfinConnectorTarget;
   }): JellyfinSignInResult {
     try {
@@ -736,6 +802,7 @@ export class JellyfinSignInService {
         .immediate();
     } catch (error) {
       if (error instanceof SessionIssuanceLimitError) throw error;
+      if (error instanceof InvitationServiceError) throw error;
       if (error instanceof JellyfinSignInServiceError) throw error;
       throw new JellyfinSignInServiceError("provider_unavailable", { cause: error });
     }
@@ -747,7 +814,7 @@ export class JellyfinSignInService {
     occurredAt: number;
     pairingSession: ValidatedOidcPairingSession;
     proof: "password" | "quick_connect";
-    requestContext: Pick<JellyfinPasswordSignInInput, "requestId">;
+    requestContext: Pick<JellyfinPasswordSignInInput, "ipAddress" | "requestId">;
     target: JellyfinConnectorTarget;
   }): JellyfinPairingDeniedResult | { readonly linkId: string; readonly status: "resolved" } {
     if (
@@ -1078,8 +1145,9 @@ export class JellyfinSignInService {
     authentication: JellyfinAuthenticationResult;
     deviceId: string;
     proof: "password" | "quick_connect";
-    requestContext: Pick<JellyfinPasswordSignInInput, "requestId">;
+    requestContext: Pick<JellyfinPasswordSignInInput, "ipAddress" | "requestId">;
     occurredAt: number;
+    registrationHandoff?: InvitationRegistrationHandoffInput;
     target: JellyfinConnectorTarget;
   }):
     | JellyfinSignInDeniedResult
@@ -1128,6 +1196,9 @@ export class JellyfinSignInService {
     if (existing) {
       if (!this.#existingLinkIsValid(existing, input, externalUserId)) {
         throw new JellyfinSignInServiceError("provider_unavailable");
+      }
+      if (input.registrationHandoff) {
+        return this.#denyInvitationForExistingIdentity(input, existing.id, existing.userId);
       }
       if (existing.userStatus === "disabled") {
         this.#insertAudit({
@@ -1217,7 +1288,7 @@ export class JellyfinSignInService {
          where connector_id = ?
            and connector_instance_generation < ?
            and external_user_id = ?
-           and health_state in ('relink_required', 'revoked')
+           ${input.registrationHandoff ? "" : "and health_state in ('relink_required', 'revoked')"}
          limit 1`,
       )
       .get(
@@ -1226,6 +1297,9 @@ export class JellyfinSignInService {
         input.authentication.User.Id,
       ) as { id: string } | undefined;
     if (replacedIdentity) {
+      if (input.registrationHandoff) {
+        return this.#denyInvitationForExistingIdentity(input, replacedIdentity.id);
+      }
       this.#insertAudit({
         eventType: "auth.jellyfin.sign_in",
         metadata: { reason: "proved_relink_required" },
@@ -1242,6 +1316,17 @@ export class JellyfinSignInService {
 
     const userId = this.#nextIdentifier(this.#createId());
     const linkId = this.#nextIdentifier(this.#createId());
+    if (input.registrationHandoff) {
+      if (!this.#invitations) throw new JellyfinSignInServiceError("configuration_invalid");
+      this.#invitations.consumeRegistrationHandoffInExistingTransaction(input.registrationHandoff, {
+        ...(input.requestContext.requestId === undefined
+          ? {}
+          : { requestId: input.requestContext.requestId }),
+        ...(input.requestContext.ipAddress === undefined
+          ? {}
+          : { ipAddress: input.requestContext.ipAddress }),
+      });
+    }
     const encryptedAccessToken = this.#cipher.encrypt(
       input.authentication.AccessToken,
       accessTokenContext(linkId),
@@ -1388,7 +1473,13 @@ export class JellyfinSignInService {
       ) as { id: string } | undefined;
     const identity = this.#reconcileIdentity(input);
     if (identity.status === "denied") {
-      return internalResult({ reason: identity.reason, status: "denied" as const });
+      return internalResult({
+        reason:
+          identity.reason === "invitation_identity_already_exists"
+            ? ("invalid_credentials" as const)
+            : identity.reason,
+        status: "denied" as const,
+      });
     }
     const promoted = this.#database.sqlite
       .prepare(
@@ -1505,12 +1596,55 @@ export class JellyfinSignInService {
       );
   }
 
+  #denyInvitationForExistingIdentity(
+    input: {
+      proof: "password" | "quick_connect";
+      requestContext: Pick<JellyfinPasswordSignInInput, "ipAddress" | "requestId">;
+      occurredAt: number;
+    },
+    targetId: string,
+    actorUserId?: string | null,
+  ): JellyfinSignInDeniedResult {
+    this.#insertAudit({
+      ...(actorUserId === undefined || actorUserId === null ? {} : { actorUserId }),
+      eventType: "auth.jellyfin.sign_in",
+      metadata: { proof: input.proof, reason: "invitation_identity_already_exists" },
+      occurredAt: input.occurredAt,
+      outcome: "denied",
+      ...(input.requestContext.requestId === undefined
+        ? {}
+        : { requestId: input.requestContext.requestId }),
+      targetId,
+      targetType: "service_identity_link",
+    });
+    return internalResult({
+      reason: "invitation_identity_already_exists" as const,
+      status: "denied" as const,
+    });
+  }
+
   #currentTime() {
     const time = this.#clock().getTime();
     if (!Number.isSafeInteger(time) || time < 0) {
       throw new JellyfinSignInServiceError("provider_unavailable");
     }
     return time;
+  }
+
+  #resolveConnectorTarget() {
+    try {
+      return this.#registry.resolve();
+    } catch (error) {
+      if (error instanceof JellyfinConnectorConfigurationError) {
+        throw new JellyfinSignInServiceError("configuration_invalid", { cause: error });
+      }
+      throw error;
+    }
+  }
+
+  #resolveRegistrationHandoff(input: InvitationRegistrationHandoffInput) {
+    if (!this.#invitations) throw new JellyfinSignInServiceError("configuration_invalid");
+    return this.#invitations.resolveRegistrationHandoff(input);
   }
 
   #serverIdentityMatchesTarget(serverId: string, target: JellyfinConnectorTarget) {

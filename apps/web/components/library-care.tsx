@@ -48,6 +48,12 @@ import { LiquidGlassEnvironment } from "./liquid-glass-environment";
 import { useTheme } from "./theme-provider";
 import styles from "./library-care.module.css";
 
+function generatedTimestamp(value: string) {
+  const date = new Date(value);
+  const hour = date.getUTCHours();
+  return `${date.toLocaleString("en-US", { month: "short", timeZone: "UTC" })} ${date.getUTCDate()}, ${date.getUTCFullYear()} at ${hour % 12 || 12}:${String(date.getUTCMinutes()).padStart(2, "0")} ${hour < 12 ? "AM" : "PM"}`;
+}
+
 export interface LibraryCareProperties {
   client?: LibraryOperationsClient;
   initialOutcome?: LibraryLoadOutcome;
@@ -1043,7 +1049,9 @@ function ReadyWorkspace({
         <span>
           <ShieldCheck aria-hidden="true" size={15} /> Changes are authorized locally and audited.
         </span>
-        <span>Generated {new Date(snapshot.attention.generatedAt).toLocaleString()}</span>
+        <time dateTime={snapshot.attention.generatedAt}>
+          Generated {generatedTimestamp(snapshot.attention.generatedAt)}
+        </time>
       </footer>
     </PageFrame>
   );

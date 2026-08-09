@@ -255,11 +255,26 @@ download grants. It forces service relinking, resets cached connector/provider h
 references, detaches saved catalog items from stale library references, and terminalizes pending
 operations while preserving terminal idempotency receipts. Pending download bulk work becomes a
 non-retryable `quarantined` receipt with its key and completed per-target results intact; the gateway
-will not redispatch it. Permanent session-secret reservations,
-OIDC anti-replay receipts, users, preferences, audit history, durable lists, and media issues. A
+will not redispatch it. Permanent session-secret reservations, OIDC anti-replay receipts, users,
+preferences, audit history, durable lists, and media issues are preserved. A
 `database.restore_sanitized` audit event records the boundary without secret material. Command output
 reports both the selected source digest and the final sanitized digest; verify and retain the latter as
 the actual published database identity.
+
+### Invitation state after restore
+
+Restore deliberately invalidates invitation admission state. In both a replacement restore and an
+empty-target restore, every outstanding invitation is revoked and every registration handoff is
+cleared, including handoffs that were active in the selected backup. A copied invite URL or a
+browser that still has its handoff cookie therefore cannot create an account after recovery. The
+restore preserves the surrounding audit lifecycle and records the sanitized restore boundary, but
+it cannot recover or re-display a raw invite bearer.
+
+After the restored deployment passes readiness and authentication checks, use a verified active
+non-recovery administrator session to create replacement invitations for people who still need
+access. Follow [administrator invitations and onboarding](../authentication.md#administrator-invitations-and-onboarding)
+to create them. Do not reuse a pre-restore link, and do not treat a backup as a source for
+extracting one.
 
 Keep the rollback pair until the restored
 deployment passes readiness, authentication, connector decryption, a representative read,

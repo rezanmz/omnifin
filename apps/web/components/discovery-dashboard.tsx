@@ -496,6 +496,7 @@ function DiscoveryDashboardContent({
             <FailedRail key={rail.kind} onRetry={() => void query.refetch()} rail={rail} />
           ) : (
             <MediaRail
+              {...(rail === data.rails[0] ? { className: "media-rail--after-hero" } : {})}
               emptyCopy={RAIL_EMPTY_COPY[rail.kind]}
               emptyTitle="No titles in this rail"
               items={rail.items.map((item) => cardFor(item, requestedIds.has(item.id), language))}

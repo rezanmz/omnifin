@@ -1602,4 +1602,41 @@ describe("OidcAuthorizationTransactionService", () => {
       database.close();
     }
   });
+
+  it("binds invitation transactions only to the invitation id, never to handoff material", async () => {
+    const database = openDatabase(":memory:");
+    try {
+      database.migrate();
+      seedProvider(database);
+      const { service } = createHarness(database);
+      const privateHandoff = opaqueToken(231);
+      const created = await service.create({
+        invitationId: "invite-private",
+        providerId: "oidc-home",
+        purpose: "invitation_registration",
+      });
+      const row = database.sqlite
+        .prepare("select id, encrypted_nonce as encryptedNonce from auth_transactions")
+        .get() as { encryptedNonce: string; id: string };
+      const payload = new EnvelopeCipher(Buffer.alloc(32, 12)).decrypt(
+        row.encryptedNonce,
+        `oidc-transaction:${row.id}:nonce`,
+      );
+
+      expect(payload).toContain('"invitationId":"invite-private"');
+      expect(payload).toContain('"purpose":"invitation_registration"');
+      expect(payload).toContain('"schemaVersion":4');
+      expect(payload).not.toContain(privateHandoff);
+      expect(JSON.stringify(created)).not.toContain(privateHandoff);
+      expect(
+        service.consume({
+          browserBindingToken: created.browserBindingToken,
+          providerId: "oidc-home",
+          state: created.state,
+        }),
+      ).toMatchObject({ invitationId: "invite-private", purpose: "invitation_registration" });
+    } finally {
+      database.close();
+    }
+  });
 });

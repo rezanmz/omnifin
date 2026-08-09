@@ -49,6 +49,10 @@
       "types": "./dist/indexers.d.ts",
       "default": "./dist/indexers.js"
     },
+    "./invitations": {
+      "types": "./dist/invitations.d.ts",
+      "default": "./dist/invitations.js"
+    },
     "./issues": {
       "types": "./dist/issues.d.ts",
       "default": "./dist/issues.js"

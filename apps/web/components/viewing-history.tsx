@@ -137,13 +137,9 @@ function locallyFilteredEntries(
 }
 
 function timestampLabel(timestamp: string) {
-  return new Intl.DateTimeFormat(undefined, {
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    month: "short",
-    year: "numeric",
-  }).format(new Date(timestamp));
+  const date = new Date(timestamp);
+  const hour = date.getUTCHours();
+  return `${date.toLocaleString("en-US", { month: "short", timeZone: "UTC" })} ${date.getUTCDate()}, ${date.getUTCFullYear()}, ${hour % 12 || 12}:${String(date.getUTCMinutes()).padStart(2, "0")} ${hour < 12 ? "AM" : "PM"}`;
 }
 
 function dayLabel(timestamp: string, generatedAt: string) {
@@ -155,11 +151,7 @@ function dayLabel(timestamp: string, generatedAt: string) {
   const yesterday = new Date(generated);
   yesterday.setUTCDate(yesterday.getUTCDate() - 1);
   if (dateKey === yesterday.toISOString().slice(0, 10)) return "Yesterday";
-  return new Intl.DateTimeFormat(undefined, {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  }).format(date);
+  return `${date.toLocaleString("en-US", { month: "long", timeZone: "UTC" })} ${date.getUTCDate()}, ${date.getUTCFullYear()}`;
 }
 
 function groupedEntries(entries: ViewingHistoryEntry[], generatedAt: string) {

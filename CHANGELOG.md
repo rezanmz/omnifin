@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+* **auth:** add single-use administrator invitations with OIDC/Jellyfin onboarding proof,
+  lifecycle auditing, and restore-safe replacement handling ([#335](https://github.com/rezanmz/omnifin/issues/335))
+
 ## [0.12.0](https://github.com/rezanmz/omnifin/compare/v0.11.0...v0.12.0) (2026-08-08)
 
 

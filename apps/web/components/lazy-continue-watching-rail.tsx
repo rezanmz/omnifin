@@ -7,7 +7,7 @@ function ContinueWatchingRailLoader() {
     <section
       aria-busy="true"
       aria-labelledby="continue-watching-chunk-title"
-      className="media-rail"
+      className="media-rail media-rail--after-hero"
     >
       <div className="section-heading">
         <h2 id="continue-watching-chunk-title">Continue watching</h2>

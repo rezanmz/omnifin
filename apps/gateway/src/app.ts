@@ -22,6 +22,14 @@ import {
 } from "./acquisitions/manual-release-routes.js";
 import { auditTrailRoutes, type AuditTrailRoutesOptions } from "./audit/audit-trail-routes.js";
 import { appearanceRoutes } from "./auth/appearance-routes.js";
+import {
+  invitationAdminRoutes,
+  type InvitationAdminRoutesOptions,
+} from "./auth/invitation-admin-routes.js";
+import {
+  invitationPublicRoutes,
+  type InvitationPublicRoutesOptions,
+} from "./auth/invitation-public-routes.js";
 import { authProviderRoutes } from "./auth/provider-routes.js";
 import { identityLinkRoutes, type IdentityLinkRoutesOptions } from "./auth/identity-link-routes.js";
 import { bootstrapConfiguredJellyfinConnector } from "./auth/jellyfin/connector-registry.js";
@@ -154,6 +162,8 @@ export interface CreateAppOptions {
   oidcProviderAdminDependencies?: OidcProviderAdminRoutesOptions["dependencies"];
   oidcRoleMappingAdminDependencies?: OidcRoleMappingAdminRoutesOptions["dependencies"];
   userAccessAdminDependencies?: UserAccessAdminRoutesOptions["dependencies"];
+  invitationAdminDependencies?: InvitationAdminRoutesOptions["dependencies"];
+  invitationPublicDependencies?: InvitationPublicRoutesOptions["dependencies"];
   auditTrailDependencies?: AuditTrailRoutesOptions["dependencies"];
   jellyfinDependencies?: JellyfinRoutesOptions["dependencies"];
   jellyfinQuickConnectDependencies?: JellyfinQuickConnectServiceDependencies;
@@ -641,6 +651,16 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.userAccessAdminDependencies === undefined
         ? {}
         : { dependencies: options.userAccessAdminDependencies }),
+    });
+    await app.register(invitationAdminRoutes, {
+      ...(options.invitationAdminDependencies === undefined
+        ? {}
+        : { dependencies: options.invitationAdminDependencies }),
+    });
+    await app.register(invitationPublicRoutes, {
+      ...(options.invitationPublicDependencies === undefined
+        ? {}
+        : { dependencies: options.invitationPublicDependencies }),
     });
     await app.register(auditTrailRoutes, {
       ...(options.auditTrailDependencies === undefined

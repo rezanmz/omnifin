@@ -3,6 +3,8 @@ import type { AppConfig } from "../config.js";
 
 export const SESSION_COOKIE_NAME = "__Host-omnifin_session";
 export const LOCAL_SESSION_COOKIE_NAME = "omnifin_local_session";
+export const REGISTRATION_HANDOFF_COOKIE_NAME = "__Host-omnifin_registration_handoff";
+export const LOCAL_REGISTRATION_HANDOFF_COOKIE_NAME = "omnifin_local_registration_handoff";
 export const SESSION_CSRF_HEADER = "x-omnifin-csrf";
 
 export function sessionCookieName(config: Pick<AppConfig, "secureCookies">) {
@@ -32,4 +34,22 @@ export function writeSessionCookie(
 
 export function clearSessionCookie(reply: FastifyReply, config: Pick<AppConfig, "secureCookies">) {
   reply.clearCookie(sessionCookieName(config), cookieOptions(config));
+}
+
+export function registrationHandoffCookieName(config: Pick<AppConfig, "secureCookies">) {
+  return config.secureCookies
+    ? REGISTRATION_HANDOFF_COOKIE_NAME
+    : LOCAL_REGISTRATION_HANDOFF_COOKIE_NAME;
+}
+
+export function writeRegistrationHandoffCookie(
+  reply: FastifyReply,
+  config: Pick<AppConfig, "secureCookies">,
+  handoffToken: string,
+  expiresAt: Date,
+) {
+  reply.setCookie(registrationHandoffCookieName(config), handoffToken, {
+    ...cookieOptions(config),
+    expires: expiresAt,
+  });
 }

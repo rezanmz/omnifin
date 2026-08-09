@@ -7,6 +7,7 @@ import type { Metadata } from "next";
 
 import { UserAccessControlLoader } from "../../../../components/user-access-control-loader";
 import { UserAccessPageShell } from "../../../../components/user-access-page-shell";
+import type { InviteLoadOutcome } from "../../../../lib/invite-admin";
 import type { UserAccessAdminLoadOutcome } from "../../../../lib/user-access-admin";
 
 export const metadata: Metadata = { title: "User access" };
@@ -118,11 +119,21 @@ export default async function UserAccessPage({ searchParams }: UserAccessPagePro
   const displayProfile =
     process.env.OMNIFIN_DISPLAY_PROFILE === "ten-foot" ? "ten-foot" : "standard";
   const initialOutcome = testOutcome(parameters["test-view"]);
+  const initialInviteOutcome =
+    initialOutcome?.status === "ready"
+      ? ({
+          csrfToken: initialOutcome.snapshot.csrfToken,
+          invites: [],
+          nextCursor: null,
+          status: "ready",
+        } satisfies InviteLoadOutcome)
+      : undefined;
   return (
     <>
       <UserAccessPageShell displayProfile={displayProfile}>
         <UserAccessControlLoader
           embedded
+          {...(initialInviteOutcome === undefined ? {} : { initialInviteOutcome })}
           {...(initialOutcome === undefined ? {} : { initialOutcome })}
         />
       </UserAccessPageShell>

@@ -26,6 +26,7 @@ const composeFile = join(root, "scripts/integration/oidc-provider/compose.yaml")
 const configTemplateFile = join(root, "scripts/integration/oidc-provider/config.yaml.template");
 const proxyScript = join(root, "scripts/integration/oidc-provider/tls-proxy.mjs");
 const browserScript = join(root, "scripts/integration/oidc-provider/browser-check.mjs");
+const jellyfinScript = join(root, "scripts/integration/oidc-provider/mock-jellyfin.mjs");
 const MAX_CAPTURE_BYTES = 512 * 1_024;
 
 class FixtureError extends Error {
@@ -348,8 +349,17 @@ function browserFailureCategory(stderr) {
   );
   const allowedStages = new Set([
     "authorization_code_pkce",
+    "admin_bootstrap",
     "configuration",
     "discovery_logout",
+    "invitation_consumption",
+    "invitation_create",
+    "uninvited_login",
+    "uninvited_login_approval",
+    "uninvited_login_callback",
+    "uninvited_login_connector",
+    "uninvited_login_invite",
+    "uninvited_login_navigation",
     "local_logout_fallback",
     "local_session_revocation",
     "mapped_cookie",
@@ -381,7 +391,10 @@ function browserFailureCategory(stderr) {
     "viewer_login_approval",
     "viewer_login_callback",
     "viewer_login_connector",
+    "viewer_login_invite",
     "viewer_login_navigation",
+    "viewer_invitation_exchange",
+    "viewer_invitation_start",
     "viewer_cookie",
     "viewer_session",
   ]);
@@ -434,15 +447,15 @@ async function main(options) {
   try {
     mkdirSync(backupDirectory, { mode: 0o700 });
     const host = selectPrivateHost();
-    const [webPort, gatewayPort, webTlsPort, providerHttpPort, providerTlsPort] = await Promise.all(
-      [
+    const [webPort, gatewayPort, webTlsPort, providerHttpPort, providerTlsPort, jellyfinPort] =
+      await Promise.all([
         reservePort("127.0.0.1"),
         reservePort("127.0.0.1"),
         reservePort("0.0.0.0"),
         reservePort("127.0.0.1"),
         reservePort("0.0.0.0"),
-      ],
-    );
+        reservePort(host),
+      ]);
     const webOrigin = `https://${host}:${webTlsPort}`;
     const providerOrigin = `https://${host}:${providerTlsPort}`;
     const issuer = `${providerOrigin}/dex`;
@@ -483,6 +496,17 @@ async function main(options) {
       "tls_proxy",
       async () => proxy.stdout.includes("fixture_tls_ready"),
       proxy,
+      30_000,
+    );
+
+    const jellyfin = spawnRuntime("node", [jellyfinScript], {
+      OMNIFIN_FIXTURE_JELLYFIN_PORT: String(jellyfinPort),
+    });
+    runtimes.push(jellyfin);
+    await waitFor(
+      "jellyfin",
+      async () => jellyfin.stdout.includes("fixture_jellyfin_ready"),
+      jellyfin,
       30_000,
     );
 
@@ -530,6 +554,8 @@ async function main(options) {
         OMNIFIN_ENCRYPTION_KEY: secrets.encryptionKey,
         OMNIFIN_HOST: "127.0.0.1",
         OMNIFIN_IMAGE_REF: gatewayFixtureImageReference,
+        OMNIFIN_JELLYFIN_INSECURE_HTTP_APPROVED: "true",
+        OMNIFIN_JELLYFIN_URL: `http://${host}:${jellyfinPort}`,
         OMNIFIN_LOG_LEVEL: "info",
         OMNIFIN_PORT: String(gatewayPort),
         OMNIFIN_RECOVERY_SECRET: secrets.recoverySecret,
@@ -582,6 +608,7 @@ async function main(options) {
         OMNIFIN_FIXTURE_CLIENT_ID: clientId,
         OMNIFIN_FIXTURE_CLIENT_SECRET: secrets.clientSecret,
         OMNIFIN_FIXTURE_OIDC_ISSUER: issuer,
+        OMNIFIN_FIXTURE_JELLYFIN_ADMIN_PASSWORD: "fixture-admin-password",
         OMNIFIN_FIXTURE_RECOVERY_SECRET: secrets.recoverySecret,
         OMNIFIN_FIXTURE_WEB_ORIGIN: webOrigin,
       },

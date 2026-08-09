@@ -6,6 +6,7 @@ import {
 } from "@omnifin/contracts/auth";
 import { randomUUID } from "node:crypto";
 import type { DatabaseHandle } from "../../db/client.js";
+import { InvitationService } from "../invitation-service.js";
 import {
   SessionService,
   type SessionAttribution,
@@ -39,6 +40,7 @@ export const OIDC_IDENTITY_DENIAL_REASONS = [
   "disabled_user",
   "identity_integrity_failure",
   "identity_provider_mismatch",
+  "invitation_identity_already_linked",
   "invalid_request",
   "invalid_verified_context",
   "jit_provisioning_disabled",
@@ -54,13 +56,21 @@ export type OidcIdentityDenialReason = (typeof OIDC_IDENTITY_DENIAL_REASONS)[num
 
 export interface ResolveOidcIdentityInput {
   readonly grant: VerifiedOidcGrant;
+  readonly invitation?: {
+    readonly handoffToken: unknown;
+    readonly invitationId: string;
+  };
   readonly requestId?: string;
 }
 
 interface ResolveOidcIdentityTransactionOptions {
-  readonly sessionReplacement: {
+  readonly sessionReplacement?: {
     readonly capability: SessionReplacementCapability;
     readonly sessionService: SessionService;
+  };
+  readonly registration?: {
+    readonly handoffToken: unknown;
+    readonly invitationId: string;
   };
 }
 
@@ -94,6 +104,7 @@ export type OidcIdentityResolution =
 export interface OidcIdentityServiceDependencies {
   readonly clock?: () => Date;
   readonly createId?: () => string;
+  readonly invitationService: InvitationService;
   readonly providerBindingVerifier: OidcProviderRuntimeBindingVerifier;
 }
 
@@ -315,12 +326,17 @@ function parseRoleMappings(rows: readonly RoleMappingRow[]): readonly RoleMappin
 }
 
 export class OidcIdentityService {
+  readonly #invitationService: InvitationService;
   readonly #providerBindingVerifier: OidcProviderRuntimeBindingVerifier;
   private readonly clock: () => Date;
   private readonly createId: () => string;
   private readonly database: DatabaseHandle;
 
   public constructor(database: DatabaseHandle, dependencies: OidcIdentityServiceDependencies) {
+    if (!(dependencies.invitationService instanceof InvitationService)) {
+      throw new OidcIdentityServiceError();
+    }
+    this.#invitationService = dependencies.invitationService;
     this.#providerBindingVerifier = dependencies.providerBindingVerifier;
     this.clock = dependencies.clock ?? (() => new Date());
     this.createId = dependencies.createId ?? randomUUID;
@@ -339,7 +355,12 @@ export class OidcIdentityService {
   public resolve(input: ResolveOidcIdentityInput): OidcIdentityResolution {
     try {
       return this.database.sqlite
-        .transaction(() => this.resolveInExistingTransaction(input))
+        .transaction(() =>
+          this.resolveInExistingTransaction(
+            input,
+            input.invitation === undefined ? undefined : { registration: input.invitation },
+          ),
+        )
         .immediate();
     } catch (error) {
       if (error instanceof OidcIdentityServiceError) throw error;
@@ -358,7 +379,13 @@ export class OidcIdentityService {
 
     try {
       const replacement = this.verifySessionReplacement(options);
-      const resolution = this.resolveInCurrentTransaction(input, replacement, false);
+      const resolution = this.resolveInCurrentTransaction(
+        input,
+        replacement,
+        false,
+        undefined,
+        options?.registration,
+      );
       if (replacement) {
         replacement.sessionService.completeReplacementIdentityResolution(
           replacement.capability,
@@ -397,6 +424,7 @@ export class OidcIdentityService {
     replacement: VerifiedSessionReplacement | undefined,
     administratorBootstrap: boolean,
     bootstrapOperationTime?: number,
+    registration?: ResolveOidcIdentityTransactionOptions["registration"],
   ): OidcIdentityResolution {
     const occurredAt = bootstrapOperationTime ?? replacement?.operationTime ?? this.currentTime();
     let grant: unknown;
@@ -546,8 +574,20 @@ export class OidcIdentityService {
       .get(provider.issuer, identity.claims.subject) as ExistingIdentityRow | undefined;
 
     if (!existing) {
-      if (!administratorBootstrap && provider.allowJitProvisioning !== 1) {
+      if (!administratorBootstrap && registration === undefined) {
         return this.deny("jit_provisioning_disabled");
+      }
+      if (!administratorBootstrap && expectedResolution.role === "admin") {
+        return this.deny("role_mapping_denied");
+      }
+      if (!administratorBootstrap && registration !== undefined) {
+        this.#invitationService.consumeRegistrationHandoffInExistingTransaction(
+          {
+            handoffToken: registration.handoffToken,
+            invitationId: registration.invitationId,
+          },
+          requestId === undefined ? {} : { requestId },
+        );
       }
       return this.provision({
         claims: identity.claims,
@@ -586,6 +626,9 @@ export class OidcIdentityService {
       existing.userCreatedAt > existing.userUpdatedAt
     ) {
       return this.deny("identity_integrity_failure");
+    }
+    if (!administratorBootstrap && registration !== undefined) {
+      return this.deny("invitation_identity_already_linked");
     }
     if (existing.status === "disabled") {
       return this.deny("disabled_user");
@@ -685,10 +728,36 @@ export class OidcIdentityService {
     if (typeof options !== "object" || options === null) {
       throw new OidcIdentityServiceError();
     }
-    const optionKeys = Reflect.ownKeys(options);
-    if (optionKeys.length !== 1 || optionKeys[0] !== "sessionReplacement") {
+    const optionKeys = Reflect.ownKeys(options).sort((left, right) =>
+      String(left).localeCompare(String(right)),
+    );
+    if (
+      optionKeys.some((key) => key !== "registration" && key !== "sessionReplacement") ||
+      optionKeys.length === 0
+    ) {
       throw new OidcIdentityServiceError();
     }
+    if (Object.hasOwn(options, "registration")) {
+      const registration = options.registration;
+      const registrationKeys =
+        typeof registration === "object" && registration !== null
+          ? Reflect.ownKeys(registration).sort((left, right) =>
+              String(left).localeCompare(String(right)),
+            )
+          : [];
+      if (
+        typeof registration !== "object" ||
+        registration === null ||
+        registrationKeys.length !== 2 ||
+        registrationKeys[0] !== "handoffToken" ||
+        registrationKeys[1] !== "invitationId" ||
+        !validIdentifier(registration.invitationId) ||
+        registration.handoffToken === undefined
+      ) {
+        throw new OidcIdentityServiceError();
+      }
+    }
+    if (options.sessionReplacement === undefined) return undefined;
     const replacement = options.sessionReplacement;
     if (typeof replacement !== "object" || replacement === null) {
       throw new OidcIdentityServiceError();

@@ -98,11 +98,23 @@ function scrollFocusedItem(target: HTMLElement, scope: HTMLElement, selector?: s
     }
   }
 
-  target.scrollIntoView?.({
-    behavior: reducedMotion ? "auto" : "smooth",
-    block: "nearest",
-    inline: "nearest",
-  });
+  // The container scroll above is sufficient for horizontal rails. Calling
+  // scrollIntoView as well can move the document vertically on large-display
+  // layouts, even though focus only moved within the rail.
+  const isTenFoot = Boolean(document.querySelector('[data-display-profile="ten-foot"]'));
+  if (!selector || !isTenFoot) {
+    target.scrollIntoView?.({
+      behavior: reducedMotion ? "auto" : "smooth",
+      block: "nearest",
+      inline: "nearest",
+    });
+    const mobileNavigation = document.querySelector<HTMLElement>(".mobile-navigation");
+    if (mobileNavigation) {
+      const overlap =
+        target.getBoundingClientRect().bottom - mobileNavigation.getBoundingClientRect().top + 4;
+      if (overlap > 0) window.scrollBy({ top: overlap, behavior: "auto" });
+    }
+  }
 }
 
 export function handleDirectionalFocus(

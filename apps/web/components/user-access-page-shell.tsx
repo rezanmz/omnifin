@@ -22,7 +22,7 @@ export function UserAccessPageShell({
       <main className={styles.shell} id="main-content" tabIndex={-1}>
         <header className={styles.topbar}>
           <BrandMark />
-          <Link className={styles.back} href="/settings">
+          <Link className={styles.back} href="/settings" prefetch={false}>
             <ArrowLeft aria-hidden="true" size={17} /> Account &amp; access
           </Link>
         </header>

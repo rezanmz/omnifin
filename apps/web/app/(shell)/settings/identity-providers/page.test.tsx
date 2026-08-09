@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import IdentityProvidersPage from "./page";
@@ -45,14 +45,9 @@ describe("IdentityProvidersPage", () => {
     expect(await screen.findByText(/media-operators/)).toBeVisible();
   });
 
-  it("defers the administration bundle until the browser is idle", async () => {
-    let idleCallback: IdleRequestCallback | undefined;
-    const requestIdleCallback = vi.fn((callback: IdleRequestCallback) => {
-      idleCallback = callback;
-      return 41;
-    });
+  it("starts the administration bundle during initial hydration", async () => {
+    const requestIdleCallback = vi.fn();
     vi.stubGlobal("requestIdleCallback", requestIdleCallback);
-    vi.stubGlobal("cancelIdleCallback", vi.fn());
     vi.stubEnv("OMNIFIN_TEST_MODE", "true");
 
     render(
@@ -61,9 +56,7 @@ describe("IdentityProvidersPage", () => {
       }),
     );
 
-    expect(requestIdleCallback).toHaveBeenCalledOnce();
-    expect(screen.getByLabelText("Loading identity provider administration")).toBeVisible();
-    act(() => idleCallback?.({ didTimeout: false, timeRemaining: () => 50 }));
+    expect(requestIdleCallback).not.toHaveBeenCalled();
     expect(await screen.findByRole("heading", { name: "Authentik" })).toBeVisible();
   });
 });

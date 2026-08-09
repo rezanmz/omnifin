@@ -126,6 +126,9 @@ function GlobalSearchPlaceholder({
             return;
           }
           activate?.(true, position);
+          if (position) {
+            window.setTimeout(() => restoreDocumentScrollPosition(position), 0);
+          }
         }}
         ref={inputReference}
         role="combobox"

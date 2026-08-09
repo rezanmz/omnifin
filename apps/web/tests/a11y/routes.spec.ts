@@ -310,6 +310,21 @@ for (const route of routes) {
   });
 }
 
+test("skip link is exposed inside a semantic landmark", async ({ page }, testInfo) => {
+  test.skip(
+    !supportedProjects.has(testInfo.project.name),
+    "Covered by representative Chromium viewports",
+  );
+  await page.goto("/history?test-view=ready");
+  const skipNavigation = page.getByRole("navigation", { name: "Skip links" });
+  await expect(skipNavigation.getByRole("link", { name: "Skip to main content" })).toHaveAttribute(
+    "href",
+    "#main-content",
+  );
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});
+
 test("connected discovery dashboard has no automatically detectable accessibility violations", async ({
   page,
 }, testInfo) => {

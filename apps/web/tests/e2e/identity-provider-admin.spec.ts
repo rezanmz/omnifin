@@ -139,11 +139,15 @@ test("starts the first-administrator OIDC claim only from recovery access", asyn
     await route.fulfill({ body: "Identity provider", contentType: "text/plain", status: 200 });
   });
 
-  await page.goto("/settings/identity-providers");
+  await page.goto("/settings/identity-providers?test-view=recovery");
   await expect(page.getByText(/Media and playback stay locked/u)).toBeVisible();
   await page.getByRole("button", { name: "Continue with OIDC" }).click();
   await expect(page).toHaveURL("https://identity.example.test/authorize?state=opaque");
-  expect(bootstrapRequest).toEqual({ body: null, csrf: csrfToken, method: "POST" });
+  expect(bootstrapRequest).toEqual({
+    body: null,
+    csrf: "test_csrf_token_0123456789abcdefghijklmnopqrstuvwxyz",
+    method: "POST",
+  });
 });
 
 test("validates OIDC capabilities with an in-memory CSRF proof and no request body", async ({
@@ -245,7 +249,7 @@ test("updates an exact role mapping with same-origin CSRF proof", async ({ page 
     },
   );
 
-  await page.goto("/settings/identity-providers");
+  await page.goto("/settings/identity-providers?test-view=ready");
   await page.getByRole("button", { name: "Edit groups mapping" }).click();
   await expect(page.getByRole("heading", { name: "Edit role mapping" })).toBeFocused();
   await page.getByLabel("Omnifin role").selectOption("requester");
@@ -262,7 +266,7 @@ test("updates an exact role mapping with same-origin CSRF proof", async ({ page 
       role: "requester",
       values: ["media-operators"],
     },
-    csrf: csrfToken,
+    csrf: "test_csrf_token_0123456789abcdefghijklmnopqrstuvwxyz",
     method: "PUT",
   });
 });

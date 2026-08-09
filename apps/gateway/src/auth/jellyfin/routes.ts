@@ -20,11 +20,17 @@ import { SafeHttpError } from "../../http-error.js";
 import { clientNetworkGroup } from "../../security/client-network.js";
 import { privacyHash } from "../../security/crypto.js";
 import { requirePermission } from "../authorization.js";
+import { InvitationService, InvitationServiceError } from "../invitation-service.js";
 import {
   AdministratorRecoveryError,
   type AdministratorRecoveryReplacementResult,
 } from "../administrator-recovery-service.js";
-import { sessionCookieName, writeSessionCookie } from "../session-cookie.js";
+import {
+  registrationHandoffCookieName,
+  sessionCookieName,
+  writeRegistrationHandoffCookie,
+  writeSessionCookie,
+} from "../session-cookie.js";
 import { SESSION_ISSUANCE_WINDOW_MS, SessionIssuanceLimitError } from "../session-service.js";
 import {
   jellyfinQuickConnectBrowserBindingCookieName,
@@ -74,18 +80,16 @@ function auditFailureReason(error: unknown) {
 }
 
 export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (app, options) => {
-  const signIn = new JellyfinSignInService(
-    app.database,
-    app.appConfig,
-    app.sessionService,
-    options.dependencies,
-  );
-  const quickConnect = new JellyfinQuickConnectService(
-    app.database,
-    app.appConfig,
-    signIn,
-    options.quickConnectDependencies,
-  );
+  const invitations =
+    options.dependencies?.invitationService ?? new InvitationService(app.database, app.appConfig);
+  const signIn = new JellyfinSignInService(app.database, app.appConfig, app.sessionService, {
+    ...(options.dependencies ?? {}),
+    invitationService: invitations,
+  });
+  const quickConnect = new JellyfinQuickConnectService(app.database, app.appConfig, signIn, {
+    ...(options.quickConnectDependencies ?? {}),
+    invitationService: invitations,
+  });
   const globalCredentialRateLimit = app.createRateLimit({
     keyGenerator: () => "jellyfin-password-global:v1",
     max: 512,
@@ -112,6 +116,57 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
     timeWindow: "10 minutes",
   });
   const recordedRequests = new WeakSet<FastifyRequest>();
+
+  const invitationHandoff = (request: FastifyRequest, reply: FastifyReply) => {
+    if (app.sessionService.resolveAndRefresh(request.cookies[sessionCookieName(app.appConfig)])) {
+      throw new SafeHttpError({
+        code: "invitation_onboarding_invalid",
+        message: "The invitation could not be used for Jellyfin onboarding.",
+        statusCode: 400,
+      });
+    }
+    const handoffToken = request.cookies[registrationHandoffCookieName(app.appConfig)];
+    if (typeof handoffToken !== "string") throw invitationInvalid();
+    try {
+      const handoff = invitations.beginRegistrationHandoff(handoffToken);
+      writeRegistrationHandoffCookie(reply, app.appConfig, handoffToken, handoff.expiresAt);
+      return { handoffToken, invitationId: handoff.invitationId };
+    } catch (error) {
+      if (error instanceof InvitationServiceError) {
+        throw new SafeHttpError({
+          cause: error,
+          code: "invitation_onboarding_invalid",
+          message: "The invitation could not be used for Jellyfin onboarding.",
+          statusCode: 400,
+        });
+      }
+      throw error;
+    }
+  };
+
+  const clearInvitationHandoff = (reply: FastifyReply) => {
+    reply.clearCookie(registrationHandoffCookieName(app.appConfig), {
+      httpOnly: true,
+      path: "/",
+      sameSite: "lax",
+      secure: app.appConfig.secureCookies,
+    });
+  };
+
+  const invitationInvalid = (cause?: unknown) =>
+    new SafeHttpError({
+      ...(cause === undefined ? {} : { cause }),
+      code: "invitation_onboarding_invalid",
+      message: "The invitation could not be used for Jellyfin onboarding.",
+      statusCode: 400,
+    });
+
+  const invitationIdentityConflict = () =>
+    new SafeHttpError({
+      code: "invitation_identity_already_exists",
+      message: "This Jellyfin account is already linked to Omnifin and cannot use an invitation.",
+      statusCode: 409,
+    });
 
   const recordFailure = (
     request: FastifyRequest,
@@ -598,6 +653,125 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
   );
 
   app.post(
+    "/v1/auth/invitations/jellyfin/password",
+    {
+      bodyLimit: PASSWORD_REQUEST_BODY_LIMIT_BYTES,
+      config: {
+        omnifinSecurity: { kind: "public-browser" },
+        rateLimit: { max: 30, timeWindow: "1 minute" },
+      },
+      onError: async (request, _reply, error) => {
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          (error.code === "csrf_denied" || error.code === "origin_denied")
+        ) {
+          return;
+        }
+        recordFailure(request, auditFailureReason(error));
+      },
+      onSend: async (_request, reply, payload) => {
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+        reply.header("referrer-policy", "no-referrer");
+        return payload;
+      },
+    },
+    async (request, reply) => {
+      const clientLimit = await clientCredentialRateLimit(request);
+      if (!clientLimit.isAllowed && clientLimit.isExceeded) {
+        setRateLimitHeaders(reply, clientLimit);
+        recordFailure(request, "rate_limited");
+        throw new SafeHttpError({
+          code: "rate_limit_exceeded",
+          message: "Too many Jellyfin sign-in attempts were received.",
+          statusCode: 429,
+        });
+      }
+      const globalLimit = await globalCredentialRateLimit(request);
+      if (!globalLimit.isAllowed && globalLimit.isExceeded) {
+        setRateLimitHeaders(reply, globalLimit);
+        recordFailure(request, "rate_limited");
+        throw new SafeHttpError({
+          code: "rate_limit_exceeded",
+          message: "Jellyfin sign-in is temporarily rate limited.",
+          statusCode: 429,
+        });
+      }
+      const parsed = jellyfinPasswordAuthenticationRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        recordFailure(request, "invalid_request");
+        throw new SafeHttpError({
+          code: "invalid_request",
+          message: "The Jellyfin sign-in request is invalid.",
+          statusCode: 400,
+        });
+      }
+      const handoff = invitationHandoff(request, reply);
+      let result;
+      try {
+        result = await signIn.signInWithInvitationPassword({
+          ...parsed.data,
+          ...requestContext(request),
+          registrationHandoff: handoff,
+        });
+      } catch (error) {
+        if (error instanceof InvitationServiceError) throw invitationInvalid(error);
+        if (error instanceof SessionIssuanceLimitError) {
+          reply.header("retry-after", Math.ceil(SESSION_ISSUANCE_WINDOW_MS / 1_000));
+          recordFailure(request, "rate_limited");
+          throw new SafeHttpError({
+            code: "rate_limit_exceeded",
+            message: "Jellyfin sign-in is temporarily rate limited.",
+            statusCode: 429,
+          });
+        }
+        if (error instanceof JellyfinSignInServiceError) {
+          recordFailure(
+            request,
+            error.reason === "configuration_invalid"
+              ? "configuration_invalid"
+              : "upstream_unavailable",
+          );
+          throw new SafeHttpError({
+            cause: error,
+            code: "authentication_unavailable",
+            message: "Jellyfin authentication is currently unavailable.",
+            statusCode: 503,
+          });
+        }
+        throw error;
+      }
+      if (result.status === "denied") {
+        if (result.reason === "invitation_identity_already_exists") {
+          recordedRequests.add(request);
+          throw invitationIdentityConflict();
+        }
+        recordFailure(request, "authentication_denied");
+        throw new SafeHttpError({
+          code: "authentication_denied",
+          message: "The Jellyfin username or password was not accepted.",
+          statusCode: 401,
+        });
+      }
+      recordedRequests.add(request);
+      const response = authenticatedSessionResponseSchema.parse({
+        csrfToken: result.session.csrfToken,
+        principal: result.session.principal,
+      });
+      writeSessionCookie(
+        reply,
+        app.appConfig,
+        result.session.sessionToken,
+        result.session.absoluteExpiresAt,
+      );
+      clearInvitationHandoff(reply);
+      return response;
+    },
+  );
+
+  app.post(
     "/v1/auth/jellyfin/quick-connect",
     {
       bodyLimit: QUICK_CONNECT_REQUEST_BODY_LIMIT_BYTES,
@@ -673,6 +847,190 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
         pollAfterMs: started.pollAfterMs,
         transactionId: started.transactionId,
       });
+    },
+  );
+
+  app.post(
+    "/v1/auth/invitations/jellyfin/quick-connect",
+    {
+      bodyLimit: QUICK_CONNECT_REQUEST_BODY_LIMIT_BYTES,
+      config: {
+        omnifinSecurity: { kind: "public-browser" },
+        rateLimit: { max: 20, timeWindow: "1 minute" },
+      },
+      onError: async (request, _reply, error) => {
+        recordFailure(request, auditFailureReason(error));
+      },
+      onSend: async (_request, reply, payload) => {
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+        reply.header("referrer-policy", "no-referrer");
+        return payload;
+      },
+    },
+    async (request, reply) => {
+      await enforceRateLimit(
+        clientQuickConnectStartRateLimit,
+        request,
+        reply,
+        "Too many Jellyfin Quick Connect attempts were started.",
+      );
+      await enforceRateLimit(
+        globalQuickConnectStartRateLimit,
+        request,
+        reply,
+        "Jellyfin Quick Connect is temporarily rate limited.",
+      );
+      if (!jellyfinQuickConnectInitiationRequestSchema.safeParse(request.body).success) {
+        recordFailure(request, "invalid_request");
+        throw new SafeHttpError({
+          code: "invalid_request",
+          message: "The Jellyfin Quick Connect request is invalid.",
+          statusCode: 400,
+        });
+      }
+      const handoff = invitationHandoff(request, reply);
+      let started;
+      try {
+        started = await quickConnect.startInvitation({
+          browserBindingToken:
+            request.cookies[jellyfinQuickConnectBrowserBindingCookieName(app.appConfig)],
+          registrationHandoff: handoff,
+        });
+      } catch (error) {
+        if (error instanceof InvitationServiceError) throw invitationInvalid(error);
+        if (error instanceof JellyfinQuickConnectServiceError) {
+          recordFailure(
+            request,
+            error.reason === "configuration_invalid"
+              ? "configuration_invalid"
+              : "upstream_unavailable",
+          );
+          throw new SafeHttpError({
+            cause: error,
+            code: "authentication_unavailable",
+            message: "Jellyfin Quick Connect is currently unavailable.",
+            statusCode: 503,
+          });
+        }
+        throw error;
+      }
+      recordedRequests.add(request);
+      writeJellyfinQuickConnectBrowserBindingCookie(
+        reply,
+        app.appConfig,
+        started.browserBindingToken,
+        started.expiresAt,
+      );
+      return jellyfinQuickConnectInitiationResponseSchema.parse({
+        code: started.code,
+        expiresAt: started.expiresAt.toISOString(),
+        pollAfterMs: started.pollAfterMs,
+        transactionId: started.transactionId,
+      });
+    },
+  );
+
+  app.post<{ Params: { transactionId: string } }>(
+    "/v1/auth/invitations/jellyfin/quick-connect/:transactionId/poll",
+    {
+      bodyLimit: QUICK_CONNECT_REQUEST_BODY_LIMIT_BYTES,
+      config: {
+        omnifinSecurity: { kind: "public-browser" },
+        rateLimit: { max: 90, timeWindow: "1 minute" },
+      },
+      onError: async (request, _reply, error) => {
+        recordFailure(request, auditFailureReason(error));
+      },
+      onSend: async (_request, reply, payload) => {
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+        reply.header("referrer-policy", "no-referrer");
+        return payload;
+      },
+    },
+    async (request, reply) => {
+      await enforceRateLimit(
+        globalQuickConnectPollRateLimit,
+        request,
+        reply,
+        "Jellyfin Quick Connect polling is temporarily rate limited.",
+      );
+      if (
+        !TRANSACTION_ID_PATTERN.test(request.params.transactionId) ||
+        !jellyfinQuickConnectInitiationRequestSchema.safeParse(request.body).success
+      ) {
+        recordFailure(request, "invalid_request");
+        throw new SafeHttpError({
+          code: "invalid_request",
+          message: "The Jellyfin Quick Connect poll request is invalid.",
+          statusCode: 400,
+        });
+      }
+      if (app.sessionService.resolveAndRefresh(request.cookies[sessionCookieName(app.appConfig)])) {
+        throw invitationInvalid();
+      }
+      const handoffToken = request.cookies[registrationHandoffCookieName(app.appConfig)];
+      let result;
+      try {
+        result = await quickConnect.pollInvitation({
+          browserBindingToken:
+            request.cookies[jellyfinQuickConnectBrowserBindingCookieName(app.appConfig)],
+          ...requestContext(request),
+          registrationHandoffToken: handoffToken,
+          transactionId: request.params.transactionId,
+        });
+      } catch (error) {
+        if (error instanceof InvitationServiceError) throw invitationInvalid(error);
+        if (error instanceof JellyfinQuickConnectServiceError) {
+          if (error.reason === "invalid_transaction") throw invitationInvalid(error);
+          throw new SafeHttpError({
+            cause: error,
+            code: "authentication_unavailable",
+            message: "Jellyfin Quick Connect is currently unavailable.",
+            statusCode: 503,
+          });
+        }
+        throw error;
+      }
+      if (result.status === "expired") {
+        recordedRequests.add(request);
+        return jellyfinQuickConnectPollResponseSchema.parse({ status: "expired" });
+      }
+      if (result.status === "pending") {
+        recordedRequests.add(request);
+        return jellyfinQuickConnectPollResponseSchema.parse({
+          expiresAt: result.expiresAt.toISOString(),
+          pollAfterMs: result.pollAfterMs,
+          status: "pending",
+        });
+      }
+      if (result.status === "denied") {
+        if (result.reason === "invitation_identity_already_exists") {
+          recordedRequests.add(request);
+          throw invitationIdentityConflict();
+        }
+        recordFailure(request, "authentication_denied");
+        throw new SafeHttpError({
+          code: "authentication_denied",
+          message: "The Jellyfin account is not permitted to sign in.",
+          statusCode: 401,
+        });
+      }
+      recordedRequests.add(request);
+      const response = jellyfinQuickConnectPollResponseSchema.parse({
+        csrfToken: result.session.csrfToken,
+        principal: result.session.principal,
+        status: "signed_in",
+      });
+      writeSessionCookie(
+        reply,
+        app.appConfig,
+        result.session.sessionToken,
+        result.session.absoluteExpiresAt,
+      );
+      clearInvitationHandoff(reply);
+      return response;
     },
   );
 

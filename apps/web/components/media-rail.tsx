@@ -16,6 +16,7 @@ export function MediaRail({
   onRequest,
   onSelect,
   onViewAll,
+  className,
   statusMessage,
   title,
   viewAllHref,
@@ -26,6 +27,7 @@ export function MediaRail({
   onRequest?: (item: MediaCardModel) => void;
   onSelect?: (item: MediaCardModel) => void;
   onViewAll?: () => void;
+  className?: string;
   statusMessage?: string;
   title: string;
   viewAllHref?: string;
@@ -37,7 +39,10 @@ export function MediaRail({
       ? "Start watching something in Jellyfin and it will appear here with your progress."
       : "Discovery will return when connected metadata and library services have suggestions.");
   return (
-    <section className="media-rail" aria-labelledby={headingId}>
+    <section
+      className={`media-rail${className ? ` ${className}` : ""}`}
+      aria-labelledby={headingId}
+    >
       <div className="section-heading">
         <h2 id={headingId}>{title}</h2>
         <div className="section-heading__actions">
@@ -175,6 +180,16 @@ export function MediaRail({
                     className="button button--glass media-card__request"
                     data-directional-item
                     onClick={() => onRequest(item)}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Tab" || event.shiftKey) return;
+                      const nextCard = event.currentTarget.closest("article")?.nextElementSibling;
+                      const nextAction = nextCard?.querySelector<HTMLButtonElement>(
+                        'button[data-interactive="true"]',
+                      );
+                      if (!nextAction) return;
+                      event.preventDefault();
+                      nextAction.focus({ preventScroll: true });
+                    }}
                     type="button"
                   >
                     <Sparkles aria-hidden="true" />

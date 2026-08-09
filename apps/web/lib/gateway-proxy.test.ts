@@ -102,6 +102,65 @@ describe("trusted edge address selection", () => {
 });
 
 describe("gateway proxy transport", () => {
+  it.each([
+    {
+      body: '{"token":"invite-token"}',
+      expectedBody: '{"token":"invite-token"}',
+      method: "POST",
+      path: "/api/auth/invitations/exchange?source=invite%2F001",
+      upstreamPath: "/v1/auth/invitations/exchange?source=invite%2F001",
+    },
+    {
+      body: "{}",
+      expectedBody: "{}",
+      method: "POST",
+      path: "/api/auth/invitations/oidc/provider/start?returnPath=%2Fsettings",
+      upstreamPath: "/v1/auth/invitations/oidc/provider/start?returnPath=%2Fsettings",
+    },
+    {
+      body: undefined,
+      expectedBody: undefined,
+      method: "GET",
+      path: "/api/admin/invites?cursor=page-2&status=active",
+      upstreamPath: "/v1/admin/invites?cursor=page-2&status=active",
+    },
+    {
+      body: undefined,
+      expectedBody: null,
+      method: "POST",
+      path: "/api/admin/invites/invite-001/revoke?reason=user-requested",
+      upstreamPath: "/v1/admin/invites/invite-001/revoke?reason=user-requested",
+    },
+  ])(
+    "forwards $path to the exact gateway path, method, body, and query",
+    async ({ body, expectedBody, method, path, upstreamPath }) => {
+      const upstream = vi.fn(async (endpoint: URL | string | Request, init?: RequestInit) => {
+        expect(String(endpoint)).toBe(`http://127.0.0.1:4000${upstreamPath}`);
+        expect(init?.method).toBe(method);
+        const sentBody =
+          init?.body === undefined
+            ? undefined
+            : init.body === null
+              ? null
+              : await new Response(init.body).text();
+        expect(sentBody).toBe(expectedBody);
+        return Response.json({ accepted: true });
+      });
+      vi.stubGlobal("fetch", upstream);
+
+      const response = await createGatewayProxy({ gatewayUrl: "http://127.0.0.1:4000" })(
+        requestFixture({
+          method,
+          path,
+          ...(body === undefined ? {} : { body }),
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(upstream).toHaveBeenCalledOnce();
+    },
+  );
+
   it("keeps negotiated HLS masters, nested manifests, and segments on the public API path", async () => {
     const sessionId = `playback_${"p".repeat(22)}`;
     const mediaReferenceId = `media_${"m".repeat(22)}`;

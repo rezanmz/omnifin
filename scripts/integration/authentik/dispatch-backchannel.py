@@ -12,7 +12,7 @@ tokens = list(
         revoked=False,
         user__username="akadmin",
     )
-    .order_by("pk")[:2]
+    .order_by("-pk")[:1]
 )
 if len(tokens) != 1 or tokens[0].session is None:
     raise RuntimeError("fixture_access_token_unavailable")

@@ -29,7 +29,7 @@ and contributors changing a security-sensitive flow.
 The gateway exposes browser-safe provider metadata, OIDC start and callback endpoints,
 direct Jellyfin password and Quick Connect authentication, CSRF-protected password
 and Quick Connect pairing for pending OIDC users, session inspection and revocation,
-and hidden recovery access. A discovered OIDC
+single-use administrator invitations, and hidden recovery access. A discovered OIDC
 provider is offered by the sign-in screen only when its persisted capability snapshot
 is internally consistent and ready. Unchecked, failed, or malformed providers fail
 closed as unavailable or misconfigured.
@@ -101,9 +101,72 @@ Successful OIDC callbacks with a pending-link principal are sent directly to
 with the authorization transaction. The pairing screen rechecks the opaque session
 before revealing credential controls and keeps its CSRF proof only in memory.
 
+## Administrator invitations and onboarding
+
+An invitation is a controlled admission proof for one new Omnifin account. It is not an
+account, a Jellyfin user, or a role assignment. The complete workflow is also covered by the
+[security model](security-model.md) and the [backup and restore runbook](operations/backup-and-restore.md).
+
+### Create and share an invitation
+
+Only an active local `admin` using a normal OIDC- or Jellyfin-backed session can manage
+invitations. The session must have `identities.manage`; a recovery session, suspended account,
+pending-link account, or other role cannot create, list, or revoke invitations. In the web
+application, open **Account & access → Invitations**.
+
+1. Select a lifetime from 1 hour through 30 days. The default is 7 days; the available
+   presets are 1 hour, 24 hours, 7 days, and 30 days.
+2. Select **Create invite**.
+3. Copy the link from the one-time reveal and send it through a channel appropriate for a
+   bearer credential. Omnifin shows the link only in that reveal; the invitation list retains
+   lifecycle metadata, not the link.
+
+The link is fragment-only, in the form `https://<your-omnifin-origin>/invite#invite=<token>`.
+The token is not sent in a request until the invite page exchanges it for a short-lived,
+HttpOnly browser handoff. The page then removes the fragment from the address bar. The server
+never persists the raw invite token or raw handoff token: only one-way token hashes are retained,
+and the browser keeps the handoff only in its protected cookie. There is no
+recovery or re-display operation. If the link may have been copied or leaked, revoke that
+active invitation immediately from the invitation list and create a replacement after
+confirming the intended recipient.
+
+### Guide the recipient through proof
+
+The recipient opens the link while signed out and chooses one of the available proof methods.
+The invitation does not reveal or carry a role.
+
+- **OIDC:** The recipient completes the configured identity-provider sign-in. A new OIDC
+  identity creates a local account in `pending_link`; with the default mapping its local role
+  is `viewer`. Omnifin then sends the user to Jellyfin linking, where they must prove control
+  of their own Jellyfin account with a fresh password or Quick Connect approval before media
+  access is enabled. If a non-admin OIDC role mapping is configured, that mapping remains the
+  authority for the local role; the invitation itself never grants it.
+- **Jellyfin:** The recipient supplies their Jellyfin username and password, or completes
+  Quick Connect. Omnifin sends proof to Jellyfin through the gateway, creates a local `viewer`,
+  and links that account to the one proven Jellyfin identity. The raw password is discarded;
+  a Quick Connect secret exists only inside its encrypted, five-minute transaction. Neither is
+  exposed to the browser or retained after the proof flow; only the resulting Jellyfin access
+  token is retained encrypted at rest.
+
+An OIDC subject or Jellyfin identity that already belongs to an Omnifin account cannot use an
+invitation to merge, relink, or create another account. The recipient must use ordinary sign-in
+and the account's normal relinking flow instead. A failed proof leaves an otherwise valid
+invitation available for another attempt. Successful new-account completion consumes the
+invitation and clears its handoff atomically; a consumed invitation, expired invitation, or
+revoked invitation cannot be replayed. One invitation can therefore complete at most one local
+account.
+
+Creation, revocation, and successful consumption produce attributable `auth.invitation.*`
+audit events in the same database transaction as their state changes. Expiration is derived
+from the stored deadline and is shown as `expired`; the invitation list reports `active`,
+`expired`, `consumed`, or `revoked` and does not require a separate expiry job.
+The audit history remains part of the sensitive SQLite and verified-backup lifecycle. A restore
+revokes outstanding invitations and clears registration handoffs, so restore operators must
+create replacement invitations after recovery verification.
+
 ## Phase 1 sign-in choices
 
-When Phase 1 is complete, a normal user will be able to sign in through either:
+A normal user can sign in through either:
 
 - a configured OpenID Connect provider, such as Authentik; or
 - Jellyfin username and password or Jellyfin Quick Connect.
@@ -197,6 +260,14 @@ gateway directly.
 | `DELETE /api/admin/auth/oidc/providers/{providerId}/role-mappings/{mappingId}`                  | Delete a rule and revoke affected role-derived sessions.                                                                           |
 | `GET /api/admin/users`                                                                          | List bounded, browser-safe account authority and activity summaries.                                                               |
 | `PATCH /api/admin/users/{userId}`                                                               | Apply a revision-bound role or local-state change and revoke sessions.                                                             |
+| `GET /api/admin/invites`                                                                        | List invitation lifecycle metadata; requires an active non-recovery administrator.                                                 |
+| `POST /api/admin/invites`                                                                       | Create a bounded-lifetime invitation and return its one-time fragment link; requires session CSRF.                                 |
+| `POST /api/admin/invites/{invitationId}/revoke`                                                 | Revoke an active invitation and its registration handoff.                                                                          |
+| `POST /api/auth/invitations/exchange`                                                           | Exchange a fragment bearer for a short-lived registration handoff; signed-out browsers only.                                       |
+| `POST /api/auth/invitations/oidc/{providerId}/start`                                            | Start OIDC proof bound to the invitation handoff.                                                                                  |
+| `POST /api/auth/invitations/jellyfin/password`                                                  | Complete invitation onboarding with fresh Jellyfin password proof.                                                                 |
+| `POST /api/auth/invitations/jellyfin/quick-connect`                                             | Start invitation onboarding with Jellyfin Quick Connect proof.                                                                     |
+| `POST /api/auth/invitations/jellyfin/quick-connect/{transactionId}/poll`                        | Poll the invitation-bound Quick Connect proof and complete the account.                                                            |
 
 Register the exact callback
 `<OMNIFIN_BASE_URL>/api/auth/oidc/callback/{providerId}`, post-logout redirect

@@ -19,7 +19,11 @@ function loadSections() {
 
 function RailSkeleton({ title }: { title: string }) {
   return (
-    <section aria-busy="true" aria-label={`Loading ${title}`} className="media-rail">
+    <section
+      aria-busy="true"
+      aria-label={`Loading ${title}`}
+      className="media-rail media-rail--after-hero"
+    >
       <div className="section-heading">
         <h2>{title}</h2>
       </div>
