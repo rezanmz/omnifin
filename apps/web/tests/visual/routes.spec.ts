@@ -125,6 +125,17 @@ async function stabilizeDashboardForFullPageCapture(page: Page) {
   );
 }
 
+async function stabilizeDrawerScrolling(page: Page) {
+  // The app sets `scroll-behavior: smooth` globally (foundation.css), which
+  // media-detail__scroll inherits. Playwright's actionability scroll then
+  // animates the drawer container, and a screenshot taken mid-scroll captures
+  // a random offset (observed 4-6% pixel diffs on identical trees). Force
+  // instant scrolling so scrollIntoViewIfNeeded lands deterministically.
+  await page.addStyleTag({
+    content: "* { scroll-behavior: auto !important; }",
+  });
+}
+
 async function mockQuietContinueWatching(page: Page) {
   await page.route("**/api/media/continue-watching", async (route) => {
     await route.fulfill({
@@ -1256,11 +1267,19 @@ test("rich owned movie detail visual baseline", async ({ page }, testInfo) => {
     "Owned movie details cover representative desktop and phone geometry",
   );
   await page.goto("/library?test-view=ready");
+  await stabilizeDrawerScrolling(page);
   await page.getByRole("button", { name: /View details for Ember Coast/u }).click();
   const dialog = page.getByRole("dialog", { name: "Ember Coast details" });
   await expect(dialog.getByText("The horizon remembers.")).toBeVisible();
   await dialog.getByText("Media information").click();
   await expect(dialog.getByRole("heading", { name: "4K · HEVC · MKV" })).toBeVisible();
+  // The <details> expansion below the summary makes the container's scroll
+  // anchoring land at varying offsets on small viewports. Pin the section to a
+  // fixed offset so the capture is deterministic (stabilizeDrawerScrolling
+  // makes this instant).
+  await dialog.locator(".library-title__media-information").evaluate((section) => {
+    section.scrollIntoView({ block: "start" });
+  });
   await removeDevelopmentIndicator(page);
   await expect(dialog).toHaveScreenshot("media-library-movie-detail.png");
 });
@@ -1272,10 +1291,18 @@ test("light rich owned movie detail visual baseline", async ({ page }, testInfo)
   );
   await useLightTheme(page);
   await page.goto("/library?test-view=ready");
+  await stabilizeDrawerScrolling(page);
   await page.getByRole("button", { name: /View details for Ember Coast/u }).click();
   const dialog = page.getByRole("dialog", { name: "Ember Coast details" });
   await dialog.getByText("Media information").click();
   await expect(dialog.getByRole("heading", { name: "4K · HEVC · MKV" })).toBeVisible();
+  // The <details> expansion below the summary makes the container's scroll
+  // anchoring land at varying offsets on small viewports. Pin the section to a
+  // fixed offset so the capture is deterministic (stabilizeDrawerScrolling
+  // makes this instant).
+  await dialog.locator(".library-title__media-information").evaluate((section) => {
+    section.scrollIntoView({ block: "start" });
+  });
   await removeDevelopmentIndicator(page);
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await expect(dialog).toHaveScreenshot("media-library-movie-detail-light.png");
