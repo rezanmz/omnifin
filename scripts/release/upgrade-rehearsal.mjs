@@ -267,6 +267,14 @@ function privateGatewayUrl(container, operation) {
 }
 
 function startGateway(resources, image, label) {
+  const gatewayRuntimeArguments = [
+    "--volume",
+    `${resources.backupVolume}:/backups`,
+    "--env",
+    "OMNIFIN_BACKUP_DIRECTORY=/backups",
+    "--env",
+    `OMNIFIN_IMAGE_REF=${image.reference}`,
+  ];
   const name = `${resources.prefix}-${label}`;
   resources.containers.add(name);
   docker(
@@ -310,6 +318,7 @@ function startGateway(resources, image, label) {
       "OMNIFIN_RECOVERY_SECRET_FILE=/run/secrets/omnifin_recovery_secret",
       "--env",
       "OMNIFIN_SECURE_COOKIES=true",
+      ...gatewayRuntimeArguments,
       image.reference,
       "gateway",
     ],
@@ -529,11 +538,11 @@ function maintenanceSnapshot(resources, image, fileName, label) {
   return { ...closed, databaseSha256: verified.databaseSha256 };
 }
 
-function restorePreviousState(resources, candidateImage, previous) {
+function restorePreviousState(resources, priorImage, previous) {
   const restored = maintenanceResult(
     runMaintenance(
       resources,
-      candidateImage,
+      priorImage,
       "previous-restore",
       [
         "restore",
@@ -551,7 +560,7 @@ function restorePreviousState(resources, candidateImage, previous) {
   const rollback = maintenanceResult(
     runMaintenance(
       resources,
-      candidateImage,
+      priorImage,
       "candidate-rollback-backup-verify",
       ["verify", "--input", "/backups/candidate-pre-rollback.sqlite"],
       "candidate_rollback_backup_verify",
@@ -701,7 +710,7 @@ async function exercise(options, checks) {
     checks.push("candidate_backup_verified");
     stopGateway(resources, candidateGateway, "candidate");
 
-    const candidateRollback = restorePreviousState(resources, options.candidate, previous);
+    const candidateRollback = restorePreviousState(resources, options.previous, previous);
     if (
       candidateRollback.migrationCount !== candidate.migrationCount ||
       candidateRollback.schemaSha256 !== candidate.schemaSha256
