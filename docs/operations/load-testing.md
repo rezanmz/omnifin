@@ -42,6 +42,21 @@ The JSON artifact records the profile, budgets, status counts, latency distribut
 throughput, and memory observations. It contains no database path, encryption key,
 cookie, client identifier, or upstream response.
 
+## Compose runtime-policy envelope
+
+The supported Compose deployment independently limits the gateway and maintenance services to
+768 MiB and 2.0 CPUs, and the web service to 1 GiB and 2.0 CPUs. All three services allow at most
+256 processes and use 30-second graceful stops. Their container logs use `json-file` rotation with
+`max-size: "10m"` and `max-file: "3"`. Treat these as the container boundary for a rehearsal; the
+gateway load profile's resident-memory and latency budgets remain separate application budgets.
+
+The gateway's private Docker healthcheck uses `/readyz`, while the web container's published
+healthcheck uses `/healthz`. The web waits for a healthy gateway before starting. Docker marks a
+running container unhealthy after failed healthchecks but does not restart it for that reason;
+`restart: unless-stopped` responds to process exit. During a rehearsal, record unhealthy status
+separately from process restarts and diagnose the service rather than treating a healthcheck failure
+as an automatic recovery mechanism.
+
 ## Deployment-specific rehearsal
 
 Before a release or material capacity change, run a separate isolated environment with

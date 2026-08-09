@@ -64,14 +64,23 @@ function validFiles() {
     "  read_only: true",
     "  cap_drop: [ALL]",
     "  security_opt: [no-new-privileges:true]",
+    "  pids_limit: 256",
+    "  stop_grace_period: 30s",
+    '  logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }',
+    '  tmpfs: ["/tmp:size=64m,mode=1777"]',
     "services:",
     "  gateway:",
     "    <<: *service",
+    "    mem_limit: 768m",
+    "    cpus: 2.0",
     "    environment:",
     "      OMNIFIN_IMAGE_REF: ${OMNIFIN_IMAGE:?Set OMNIFIN_IMAGE from the release environment file}",
-    "    healthcheck: { test: [CMD, healthcheck, http://127.0.0.1:4000/healthz] }",
+    "    volumes: [omnifin_data:/data]",
+    "    healthcheck: { test: [CMD, healthcheck, http://127.0.0.1:4000/readyz] }",
     "  maintenance:",
     "    <<: *service",
+    "    mem_limit: 768m",
+    "    cpus: 2.0",
     "    environment:",
     "      NODE_ENV: production",
     "      OMNIFIN_BACKUP_DIRECTORY: /backups",
@@ -81,9 +90,14 @@ function validFiles() {
     "      OMNIFIN_GATEWAY_READY_URL: http://gateway:4000/readyz",
     "      OMNIFIN_IMAGE_REF: ${OMNIFIN_IMAGE:?Set OMNIFIN_IMAGE from the release environment file}",
     "    secrets: [omnifin_encryption_key]",
+    "    volumes: [omnifin_data:/data]",
     "  web:",
     "    <<: *service",
+    "    mem_limit: 1g",
+    "    cpus: 2.0",
     '    ports: ["127.0.0.1:3000:3000"]',
+    '    tmpfs: ["/tmp:size=64m,mode=1777", "/opt/omnifin/web/.next/cache:size=256m,uid=65532,gid=65532,mode=0700", "/opt/omnifin/web/apps/web/.next/cache:size=256m,uid=65532,gid=65532,mode=0700"]',
+    "    depends_on: { gateway: { condition: service_healthy } }",
     "    healthcheck: { test: [CMD, healthcheck, http://127.0.0.1:3000/healthz] }",
     "secrets:",
     "  omnifin_encryption_key:",
@@ -110,6 +124,13 @@ function validFiles() {
     "  quality:",
     "    steps:",
     "      - run: pnpm foundation:check",
+    "  container:",
+    "    steps:",
+    "      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271",
+    "        with:",
+    "          version: ${{ env.PNPM_VERSION }}",
+    "      - run: pnpm install --frozen-lockfile --ignore-scripts",
+    "      - run: node scripts/ci/foundation-contract.mjs --compose-policy",
     "",
   ].join("\n");
   files["apps/gateway/drizzle/0000_foundation.sql"] = "select 1;\n";
@@ -172,12 +193,76 @@ test("rejects a deployment that publishes the gateway", async () => {
   await withRepository(
     (files) => {
       files["compose.yaml"] = files["compose.yaml"].replace(
-        "    healthcheck: { test: [CMD, healthcheck, http://127.0.0.1:4000/healthz] }",
-        '    ports: ["4000:4000"]\n    healthcheck: { test: [CMD, healthcheck, http://127.0.0.1:4000/healthz] }',
+        "    healthcheck: { test: [CMD, healthcheck, http://127.0.0.1:4000/readyz] }",
+        '    ports: ["4000:4000"]\n    healthcheck: { test: [CMD, healthcheck, http://127.0.0.1:4000/readyz] }',
       );
     },
     async (root) => {
       await assert.rejects(checkFoundationContract({ root }), /gateway must not publish/u);
+    },
+  );
+});
+
+const composePolicyFailures = [
+  ["a missing memory limit", "mem_limit: 768m", /exact standalone memory limit/u],
+  ["a missing CPU limit", "cpus: 2.0", /exact standalone CPU limit/u],
+  ["a missing PID limit", "pids_limit: 256", /pids_limit to exactly 256/u],
+  ["a missing stop grace period", "stop_grace_period: 30s", /stop_grace_period to exactly 30s/u],
+  [
+    "a missing log rotation policy",
+    '  logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }',
+    /exact json-file rotation/u,
+  ],
+  ["an incorrect gateway health target", "4000/readyz", /gateway must healthcheck \/readyz/u],
+];
+
+for (const [description, fragment, expectedMessage] of composePolicyFailures) {
+  test(`rejects Compose with ${description}`, async () => {
+    await withRepository(
+      (files) => {
+        files["compose.yaml"] = files["compose.yaml"].replace(fragment, "");
+      },
+      async (root) => {
+        await assert.rejects(checkFoundationContract({ root }), expectedMessage);
+      },
+    );
+  });
+}
+
+test("rejects a gateway without the canonical data volume", async () => {
+  await withRepository(
+    (files) => {
+      files["compose.yaml"] = files["compose.yaml"].replace(
+        "    volumes: [omnifin_data:/data]\n    healthcheck:",
+        "    healthcheck:",
+      );
+    },
+    async (root) => {
+      await assert.rejects(checkFoundationContract({ root }), /gateway must mount.*\/data/u);
+    },
+  );
+});
+
+test("rejects an incorrect web health target", async () => {
+  await withRepository(
+    (files) => {
+      files["compose.yaml"] = files["compose.yaml"].replace("3000/healthz", "3000/readyz");
+    },
+    async (root) => {
+      await assert.rejects(checkFoundationContract({ root }), /web must healthcheck \/healthz/u);
+    },
+  );
+});
+
+test("rejects maintenance without the canonical data volume", async () => {
+  await withRepository(
+    (files) => {
+      const lines = files["compose.yaml"].split("\n");
+      lines.splice(lines.lastIndexOf("    volumes: [omnifin_data:/data]"), 1);
+      files["compose.yaml"] = lines.join("\n");
+    },
+    async (root) => {
+      await assert.rejects(checkFoundationContract({ root }), /maintenance must mount.*\/data/u);
     },
   );
 });
@@ -235,6 +320,23 @@ test("rejects CI that can bypass the foundation check", async () => {
       await assert.rejects(
         checkFoundationContract({ root }),
         /must execute pnpm foundation:check/u,
+      );
+    },
+  );
+});
+
+test("rejects a Compose policy lane that uses pnpm without its pinned setup", async () => {
+  await withRepository(
+    (files) => {
+      files[".github/workflows/ci.yml"] = files[".github/workflows/ci.yml"].replace(
+        "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271",
+        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      );
+    },
+    async (root) => {
+      await assert.rejects(
+        checkFoundationContract({ root }),
+        /container Compose policy lane must use the pinned pnpm setup action/u,
       );
     },
   );

@@ -27,6 +27,21 @@ authorization, and audit records. The runtime includes permission-checked identi
 media-operation surfaces; the compatibility matrix, not the presence of a route, determines which
 upstream versions have enough evidence for a release claim.
 
+The Compose runtime policy gives the gateway and maintenance services a 768 MiB memory limit and
+2.0 CPUs each; the web service has a 1 GiB memory limit and 2.0 CPUs. Every service is read-only,
+non-root, drops all capabilities, disallows privilege escalation, and is limited to 256 processes.
+Each receives a 64 MiB `/tmp` tmpfs (the web service also receives its two bounded 256 MiB Next.js
+cache tmpfs mounts), and Compose allows 30 seconds for graceful stop. Container logs use the
+`json-file` driver with `max-size: "10m"` and `max-file: "3"`; these limits are container runtime
+policy, not application memory or log-content guarantees.
+
+The gateway healthcheck targets private readiness at `/readyz`, while the published web healthcheck
+targets `/healthz` for web liveness. The web service still waits for the gateway's
+`service_healthy` dependency before starting. A failed Docker healthcheck marks a still-running
+container unhealthy; it does not restart that process. `restart: unless-stopped` reacts to a process
+exit, so investigate unhealthy status and application logs rather than expecting the healthcheck
+alone to restart a live container.
+
 The gateway also has a narrow writable bind mount at `/backups`. It is used only for bounded private
 database inspection and to publish a verified retained recovery pair before recovering an unclean
 WAL timeline or applying a pending migration. Prepare it with the same private ownership as the
