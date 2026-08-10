@@ -4,6 +4,7 @@ import {
   type JellyfinPlaybackNegotiationInput,
   type JellyfinPlaybackResult,
   type JellyfinPlaybackSourceSelection,
+  type JellyfinPlaybackTarget,
 } from "@omnifin/connectors/media/jellyfin-playback-client";
 import type { ConnectorTransport } from "@omnifin/connectors/types";
 import { ROLE_PERMISSIONS, sessionPrincipalSchema } from "@omnifin/contracts/auth";
@@ -17,6 +18,10 @@ import type { AppConfig } from "../src/config.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
 import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
 import { MediaReferenceService } from "../src/media/media-reference-service.js";
+import {
+  MAX_PLAYBACK_ASSET_HANDLES_GLOBAL,
+  MAX_PLAYBACK_ASSET_HANDLES_PER_SESSION,
+} from "../src/media/playback-limits.js";
 import { playbackSourceReferenceId } from "../src/media/playback-source-reference.js";
 import {
   PlaybackSessionService,
@@ -25,7 +30,7 @@ import {
   type PlaybackSessionDependencies,
 } from "../src/media/playback-session-service.js";
 import { ExternalMutationJournal } from "../src/operations/external-mutation-journal.js";
-import { EnvelopeCipher } from "../src/security/crypto.js";
+import { EnvelopeCipher, privacyHash } from "../src/security/crypto.js";
 
 const now = new Date("2026-07-28T06:00:00.000Z");
 const privateAccessToken = "private-jellyfin-access-token";
@@ -261,7 +266,11 @@ function harness(
   referenceKind: "extra" | "movie" = "movie",
   dependencyOverrides: Pick<
     PlaybackSessionDependencies,
-    "beforeProgressCompletion" | "clock" | "createToken" | "playbackTransferLimits"
+    | "beforeProgressCompletion"
+    | "clock"
+    | "createAssetToken"
+    | "createToken"
+    | "playbackTransferLimits"
   > = {},
 ) {
   const config = testConfig();
@@ -295,7 +304,9 @@ function harness(
   const reportPlaybackEvent = vi.fn<JellyfinPlaybackClient["reportPlaybackEvent"]>(
     async () => undefined,
   );
-  const resolvePlaybackTarget = vi.fn((parent) => parent);
+  const resolvePlaybackTarget = vi.fn<JellyfinPlaybackClient["resolvePlaybackTarget"]>(
+    (parent) => parent,
+  );
   const mockedCreateClient = vi.fn((_input: PlaybackClientFactoryInput) => ({
     negotiate,
     readPlaybackTarget,
@@ -305,10 +316,21 @@ function harness(
     streamPlaybackTarget,
   }));
   const createClient = createClientOverride ?? mockedCreateClient;
+  const createAssetToken =
+    dependencyOverrides.createAssetToken ??
+    (() => {
+      let index = 0;
+      return () => {
+        const current = index;
+        index += 1;
+        return current.toString(36).padStart(22, "a");
+      };
+    })();
   const service = new PlaybackSessionService(database, config, {
     ...dependencyOverrides,
     clock: dependencyOverrides.clock ?? (() => now),
     createClient,
+    createAssetToken,
     createToken: dependencyOverrides.createToken ?? (() => "p".repeat(22)),
     ...(dependencyOverrides.playbackTransferLimits === undefined
       ? {}
@@ -325,6 +347,7 @@ function harness(
     reportPlaybackEvent,
     service,
     streamPlaybackTarget,
+    resolvePlaybackTarget,
   };
 }
 
@@ -335,6 +358,31 @@ const negotiation = {
   positionSeconds: 900,
   subtitleStreamIndex: null,
 };
+
+function seedHandleRows(database: DatabaseHandle, sessionIds: readonly string[], count: number) {
+  const sessionCases = sessionIds.map((_, index) => `when ${index} then ?`).join(" ");
+  const timestamp = now.getTime();
+  database.sqlite
+    .prepare(
+      `with recursive x(value) as (
+         select 0 union all select value + 1 from x where value < 499
+       ), y(value) as (
+         select 0 union all select value + 1 from y where value < 499
+       )
+       insert into playback_asset_handles (
+         id, playback_session_id, target_digest, encrypted_target,
+         expires_at, last_used_at, created_at, updated_at
+       )
+       select
+         'asset_h1.' || printf('%022d', x.value * 500 + y.value),
+         case ((x.value * 500 + y.value) % ${sessionIds.length}) ${sessionCases} end,
+         printf('%022d', x.value * 500 + y.value), 'x',
+         ${timestamp + 60 * 60 * 1_000}, ${timestamp}, ${timestamp}, ${timestamp}
+       from x cross join y
+       where x.value * 500 + y.value < ${count}`,
+    )
+    .run(...sessionIds);
+}
 
 function seedProgressReservation(
   database: DatabaseHandle,
@@ -1800,6 +1848,420 @@ describe("PlaybackSessionService", () => {
       await expect(second).resolves.toMatchObject({ status: 200 });
     } finally {
       upstreamGate.resolve(undefined);
+      database.close();
+    }
+  });
+
+  it("plans mixed existing, new, and duplicate references before deterministic rendering", async () => {
+    const { database, negotiate, readPlaybackTarget, reference, resolvePlaybackTarget, service } =
+      harness();
+    negotiate.mockResolvedValueOnce(hlsNegotiatedResult());
+    resolvePlaybackTarget.mockImplementation((_parent: JellyfinPlaybackTarget, uri: string) => ({
+      path: `videos/${privateItemId}/master.m3u8`,
+      query: `segment=${uri}`,
+    }));
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      readPlaybackTarget
+        .mockResolvedValueOnce({
+          body: new TextEncoder().encode("#EXTM3U\n#EXTINF:4.000,\na.m4s\n"),
+          headers: new Headers(),
+          status: 200,
+        })
+        .mockResolvedValueOnce({
+          body: new TextEncoder().encode(
+            '#EXTM3U\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:4.000,\na.m4s\nb.m4s\na.m4s\n',
+          ),
+          headers: new Headers(),
+          status: 200,
+        })
+        .mockResolvedValueOnce({
+          body: new TextEncoder().encode(
+            '#EXTM3U\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:4.000,\na.m4s\nb.m4s\na.m4s\n',
+          ),
+          headers: new Headers(),
+          status: 200,
+        });
+
+      const first = await service.readManifest({ principal: principal() }, playback.sessionId);
+      const second = await service.readManifest({ principal: principal() }, playback.sessionId);
+      const third = await service.readManifest({ principal: principal() }, playback.sessionId);
+
+      expect(second.body).toBe(third.body);
+      expect(second.body).toContain('#EXT-X-MAP:URI="hls/');
+      expect(second.body.match(/hls\/asset_h1\.[A-Za-z0-9_-]{22}/gu)).toHaveLength(4);
+      expect(new Set(second.body.match(/hls\/asset_h1\.[A-Za-z0-9_-]{22}/gu))).toHaveProperty(
+        "size",
+        3,
+      );
+      expect(first.body).toMatch(/^#EXTM3U\n#EXTINF:4\.000,\nhls\/asset_h1\./u);
+      expect(
+        database.sqlite
+          .prepare(
+            "select count(*) as count from playback_asset_handles where playback_session_id = ?",
+          )
+          .get(playback.sessionId),
+      ).toEqual({ count: 3 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("serializes identical concurrent manifests into one reusable handle set", async () => {
+    const { database, negotiate, readPlaybackTarget, reference, service } = harness();
+    negotiate.mockResolvedValueOnce(hlsNegotiatedResult());
+    readPlaybackTarget.mockResolvedValue({
+      body: new TextEncoder().encode("#EXTM3U\n#EXTINF:4.000,\nsegment.m4s\n"),
+      headers: new Headers(),
+      status: 200,
+    });
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      const [first, second] = await Promise.all([
+        service.readManifest({ principal: principal() }, playback.sessionId),
+        service.readManifest({ principal: principal() }, playback.sessionId),
+      ]);
+
+      expect(first.body).toBe(second.body);
+      expect(
+        database.sqlite
+          .prepare(
+            "select count(*) as count from playback_asset_handles where playback_session_id = ?",
+          )
+          .get(playback.sessionId),
+      ).toEqual({ count: 1 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rolls back new allocation when an existing ciphertext no longer matches its digest", async () => {
+    const {
+      config,
+      database,
+      negotiate,
+      readPlaybackTarget,
+      reference,
+      resolvePlaybackTarget,
+      service,
+    } = harness();
+    negotiate.mockResolvedValueOnce(hlsNegotiatedResult());
+    resolvePlaybackTarget.mockImplementation((_parent: JellyfinPlaybackTarget, uri: string) => ({
+      path: `videos/${privateItemId}/master.m3u8`,
+      query: `segment=${uri}`,
+    }));
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      readPlaybackTarget.mockResolvedValueOnce({
+        body: new TextEncoder().encode("#EXTM3U\nsegment-a.m4s\n"),
+        headers: new Headers(),
+        status: 200,
+      });
+      await expect(
+        service.readManifest({ principal: principal() }, playback.sessionId),
+      ).resolves.toMatchObject({ status: 200 });
+
+      const row = database.sqlite
+        .prepare("select id from playback_asset_handles where playback_session_id = ?")
+        .get(playback.sessionId) as { id: string };
+      const corruptTarget = JSON.stringify({
+        schemaVersion: 1,
+        target: { path: `videos/${privateItemId}/master.m3u8`, query: "segment=corrupt" },
+      });
+      const targetBDigest = privacyHash(
+        "playback_asset",
+        `${playback.sessionId}\u0000${JSON.stringify({
+          schemaVersion: 1,
+          target: { path: `videos/${privateItemId}/master.m3u8`, query: "segment=segment-b.m4s" },
+        })}`,
+        config.encryptionKey,
+      );
+      database.sqlite
+        .prepare("update playback_asset_handles set encrypted_target = ? where id = ?")
+        .run(
+          new EnvelopeCipher(config.encryptionKey).encrypt(
+            corruptTarget,
+            `playback_asset_handle:jellyfin:${playback.sessionId}:${row.id}`,
+          ),
+          row.id,
+        );
+      database.sqlite
+        .prepare("update playback_asset_handles set target_digest = ? where id = ?")
+        .run(targetBDigest, row.id);
+      readPlaybackTarget.mockResolvedValueOnce({
+        body: new TextEncoder().encode("#EXTM3U\nsegment-a.m4s\nsegment-b.m4s\n"),
+        headers: new Headers(),
+        status: 200,
+      });
+
+      await expect(
+        service.readManifest({ principal: principal() }, playback.sessionId),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+      expect(
+        database.sqlite
+          .prepare(
+            "select count(*) as count from playback_asset_handles where playback_session_id = ?",
+          )
+          .get(playback.sessionId),
+      ).toEqual({ count: 1 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("enforces exact session quota boundaries without partial inserts", async () => {
+    const { database, negotiate, readPlaybackTarget, reference, resolvePlaybackTarget, service } =
+      harness();
+    negotiate.mockResolvedValueOnce(hlsNegotiatedResult());
+    resolvePlaybackTarget.mockImplementation((_parent: JellyfinPlaybackTarget, uri: string) => ({
+      path: `videos/${privateItemId}/master.m3u8`,
+      query: `segment=${uri}`,
+    }));
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      seedHandleRows(database, [playback.sessionId], MAX_PLAYBACK_ASSET_HANDLES_PER_SESSION - 1);
+      const count = () =>
+        database.sqlite
+          .prepare(
+            "select count(*) as count from playback_asset_handles where playback_session_id = ?",
+          )
+          .get(playback.sessionId) as { count: number };
+
+      readPlaybackTarget.mockResolvedValueOnce({
+        body: new TextEncoder().encode("#EXTM3U\nsegment-a.m4s\nsegment-b.m4s\n"),
+        headers: new Headers(),
+        status: 200,
+      });
+      await expect(
+        service.readManifest({ principal: principal() }, playback.sessionId),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+      expect(count()).toEqual({ count: MAX_PLAYBACK_ASSET_HANDLES_PER_SESSION - 1 });
+
+      readPlaybackTarget.mockResolvedValueOnce({
+        body: new TextEncoder().encode("#EXTM3U\nsegment-a.m4s\n"),
+        headers: new Headers(),
+        status: 200,
+      });
+      await expect(
+        service.readManifest({ principal: principal() }, playback.sessionId),
+      ).resolves.toMatchObject({ status: 200 });
+      expect(count()).toEqual({ count: MAX_PLAYBACK_ASSET_HANDLES_PER_SESSION });
+
+      readPlaybackTarget.mockResolvedValueOnce({
+        body: new TextEncoder().encode("#EXTM3U\nsegment-b.m4s\n"),
+        headers: new Headers(),
+        status: 200,
+      });
+      await expect(
+        service.readManifest({ principal: principal() }, playback.sessionId),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+      expect(count()).toEqual({ count: MAX_PLAYBACK_ASSET_HANDLES_PER_SESSION });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("enforces the global last slot with one safe concurrent winner", async () => {
+    let tokenIndex = 0;
+    const { database, negotiate, readPlaybackTarget, reference, resolvePlaybackTarget, service } =
+      harness(undefined, "movie", {
+        createToken: () => {
+          const current = tokenIndex;
+          tokenIndex += 1;
+          return current.toString(36).padStart(22, "a");
+        },
+      });
+    negotiate.mockResolvedValue(hlsNegotiatedResult());
+    resolvePlaybackTarget.mockImplementation((_parent: JellyfinPlaybackTarget, uri: string) => ({
+      path: `videos/${privateItemId}/master.m3u8`,
+      query: `segment=${uri}`,
+    }));
+    try {
+      const playbacks = [];
+      for (let index = 0; index < 13; index += 1) {
+        playbacks.push(await service.negotiate({ principal: principal() }, reference, negotiation));
+      }
+      seedHandleRows(
+        database,
+        playbacks.map(({ sessionId }) => sessionId),
+        MAX_PLAYBACK_ASSET_HANDLES_GLOBAL - 1,
+      );
+      const globalCount = () =>
+        database.sqlite.prepare("select count(*) as count from playback_asset_handles").get() as {
+          count: number;
+        };
+
+      readPlaybackTarget.mockResolvedValueOnce({
+        body: new TextEncoder().encode("#EXTM3U\nsegment-a.m4s\nsegment-b.m4s\n"),
+        headers: new Headers(),
+        status: 200,
+      });
+      await expect(
+        service.readManifest({ principal: principal() }, playbacks[0]!.sessionId),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+      expect(globalCount()).toEqual({ count: MAX_PLAYBACK_ASSET_HANDLES_GLOBAL - 1 });
+
+      readPlaybackTarget.mockResolvedValue({
+        body: new TextEncoder().encode("#EXTM3U\nsegment-c.m4s\n"),
+        headers: new Headers(),
+        status: 200,
+      });
+      const results = await Promise.allSettled([
+        service.readManifest({ principal: principal() }, playbacks[11]!.sessionId),
+        service.readManifest({ principal: principal() }, playbacks[12]!.sessionId),
+      ]);
+      expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+      expect(results.filter(({ status }) => status === "rejected")).toHaveLength(1);
+      const rejected = results.find(({ status }) => status === "rejected");
+      expect(rejected?.status).toBe("rejected");
+      if (rejected?.status === "rejected") {
+        expect(rejected.reason).toMatchObject({ reason: "unavailable" });
+      }
+      expect(globalCount()).toEqual({ count: MAX_PLAYBACK_ASSET_HANDLES_GLOBAL });
+    } finally {
+      database.close();
+    }
+  }, 30_000);
+
+  it("rolls back every handle when a later batched insert fails", async () => {
+    const { database, negotiate, readPlaybackTarget, reference, resolvePlaybackTarget, service } =
+      harness();
+    negotiate.mockResolvedValueOnce(hlsNegotiatedResult());
+    resolvePlaybackTarget.mockImplementation((_parent: JellyfinPlaybackTarget, uri: string) => ({
+      path: `videos/${privateItemId}/master.m3u8`,
+      query: `segment=${uri}`,
+    }));
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      database.sqlite.exec(`
+        create trigger playback_asset_handles_batch_failure
+        before insert on playback_asset_handles
+        when (select count(*) from playback_asset_handles where playback_session_id = new.playback_session_id) >= 100
+        begin
+          select raise(abort, 'deterministic playback handle failure');
+        end
+      `);
+      const body = Array.from({ length: 101 }, (_, index) => `segment-${index}.m4s`).join("\n");
+      readPlaybackTarget.mockResolvedValueOnce({
+        body: new TextEncoder().encode(`#EXTM3U\n${body}\n`),
+        headers: new Headers(),
+        status: 200,
+      });
+      const prepareSpy = vi.spyOn(database.sqlite, "prepare");
+
+      await expect(
+        service.readManifest({ principal: principal() }, playback.sessionId),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+      const handleInsertStatements = prepareSpy.mock.calls.filter(([sql]) =>
+        String(sql).includes("insert into playback_asset_handles"),
+      );
+      const candidateLookups = prepareSpy.mock.calls.filter(([sql]) =>
+        String(sql).includes("select id from playback_asset_handles where id in"),
+      );
+      expect(handleInsertStatements).toHaveLength(2);
+      expect(candidateLookups).toHaveLength(2);
+      expect(
+        prepareSpy.mock.calls.some(([sql]) =>
+          String(sql).includes("select 1 from playback_asset_handles where id = ?"),
+        ),
+      ).toBe(false);
+      expect(String(handleInsertStatements[0]?.[0])).toContain("), (?");
+      expect(
+        database.sqlite
+          .prepare(
+            "select count(*) as count from playback_asset_handles where playback_session_id = ?",
+          )
+          .get(playback.sessionId),
+      ).toEqual({ count: 0 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("regenerates only database-colliding candidates after bounded ID lookup", async () => {
+    const candidates = [`${"c".repeat(22)}`, `${"d".repeat(22)}`];
+    const { database, negotiate, readPlaybackTarget, reference, service } = harness(
+      undefined,
+      "movie",
+      { createAssetToken: () => candidates.shift() ?? "e".repeat(22) },
+    );
+    negotiate.mockResolvedValueOnce(hlsNegotiatedResult());
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      database.sqlite
+        .prepare(
+          `insert into playback_asset_handles (
+             id, playback_session_id, target_digest, encrypted_target,
+             expires_at, last_used_at, created_at, updated_at
+           ) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          `asset_h1.${"c".repeat(22)}`,
+          playback.sessionId,
+          "z".repeat(22),
+          "x",
+          now.getTime() + 60_000,
+          now.getTime(),
+          now.getTime(),
+          now.getTime(),
+        );
+      readPlaybackTarget.mockResolvedValueOnce({
+        body: new TextEncoder().encode("#EXTM3U\nsegment.m4s\n"),
+        headers: new Headers(),
+        status: 200,
+      });
+      const prepareSpy = vi.spyOn(database.sqlite, "prepare");
+
+      const response = await service.readManifest({ principal: principal() }, playback.sessionId);
+
+      expect(response.body).toContain(`asset_h1.${"d".repeat(22)}`);
+      expect(
+        prepareSpy.mock.calls.filter(([sql]) =>
+          String(sql).includes("select id from playback_asset_handles where id in"),
+        ),
+      ).toHaveLength(2);
+      expect(
+        database.sqlite
+          .prepare(
+            "select count(*) as count from playback_asset_handles where playback_session_id = ?",
+          )
+          .get(playback.sessionId),
+      ).toEqual({ count: 2 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("does not allocate handles when the session stops during manifest fetch", async () => {
+    const fetchGate = deferred<void>();
+    const { database, negotiate, readPlaybackTarget, reference, service } = harness();
+    negotiate.mockResolvedValueOnce(hlsNegotiatedResult());
+    readPlaybackTarget.mockImplementationOnce(async () => {
+      await fetchGate.promise;
+      return {
+        body: new TextEncoder().encode("#EXTM3U\nsegment.m4s\n"),
+        headers: new Headers(),
+        status: 200,
+      };
+    });
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      const manifest = service.readManifest({ principal: principal() }, playback.sessionId);
+      await vi.waitFor(() => expect(readPlaybackTarget).toHaveBeenCalledOnce());
+      await expect(
+        service.report({ principal: principal() }, playback.sessionId, {
+          event: "stopped",
+          positionSeconds: 901,
+        }),
+      ).resolves.toMatchObject({ state: "stopped" });
+      fetchGate.resolve(undefined);
+
+      await expect(manifest).rejects.toMatchObject({ reason: "not_found" });
+      expect(
+        database.sqlite.prepare("select count(*) as count from playback_asset_handles").get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      fetchGate.resolve(undefined);
       database.close();
     }
   });
