@@ -13,6 +13,13 @@ const SAFE_FAILURE_STAGES = new Set([
   "session_payload_validation",
   "session_persistence",
 ]);
+const SAFE_CANCELLATION_SOURCES = new Set([
+  "client_abort",
+  "response_closed",
+  "response_error",
+  "timeout",
+  "runtime_drain",
+]);
 const SAFE_INFRASTRUCTURE_ERROR_CODES = new Set([
   "SQLITE_BUSY",
   "SQLITE_BUSY_SNAPSHOT",
@@ -120,6 +127,7 @@ export function safeFailureDiagnostics(error: unknown) {
   let current: unknown = error;
   let failureReason: string | undefined;
   let failureStage: string | undefined;
+  let cancellationSource: string | undefined;
   let infrastructureCode: string | undefined;
   let upstreamStatus: number | undefined;
   const seen = new WeakSet<object>();
@@ -133,6 +141,12 @@ export function safeFailureDiagnostics(error: unknown) {
         connectorOperation = current.operation;
         connectorService = current.service;
         if (current.status !== null) upstreamStatus = current.status;
+        if (
+          typeof current.cancellationSource === "string" &&
+          SAFE_CANCELLATION_SOURCES.has(current.cancellationSource)
+        ) {
+          cancellationSource = current.cancellationSource;
+        }
       }
       if (
         failureReason === undefined &&
@@ -167,6 +181,7 @@ export function safeFailureDiagnostics(error: unknown) {
     ...(connectorService === undefined ? {} : { connectorService }),
     ...(failureReason === undefined ? {} : { failureReason }),
     ...(failureStage === undefined ? {} : { failureStage }),
+    ...(cancellationSource === undefined ? {} : { cancellationSource }),
     ...(infrastructureCode === undefined ? {} : { infrastructureCode }),
     ...(upstreamStatus === undefined ? {} : { upstreamStatus }),
   };

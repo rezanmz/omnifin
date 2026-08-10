@@ -41,6 +41,9 @@ export interface SafeRequestOptions {
   acceptedStatuses?: readonly number[];
 }
 
+export type ConnectorCancellationSource =
+  "client_abort" | "response_closed" | "response_error" | "timeout" | "runtime_drain";
+
 export interface SafeTextResponse {
   status: number;
   body: string;
@@ -61,12 +64,36 @@ export interface SafeStreamResponse {
 
 const MAX_STREAM_RESPONSE_BYTES = 128 * 1_024 * 1_024 * 1_024 * 1_024;
 
+const connectorCancellationSources = new Set<ConnectorCancellationSource>([
+  "client_abort",
+  "response_closed",
+  "response_error",
+  "timeout",
+  "runtime_drain",
+]);
+
+function cancellationSourceFromReason(reason: unknown): ConnectorCancellationSource | undefined {
+  if ((typeof reason !== "object" && typeof reason !== "function") || reason === null) {
+    return undefined;
+  }
+  try {
+    const source = (reason as { cancellationSource?: unknown }).cancellationSource;
+    return typeof source === "string" &&
+      connectorCancellationSources.has(source as ConnectorCancellationSource)
+      ? (source as ConnectorCancellationSource)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 interface RequestLifecycle {
   controller: AbortController;
   armTimeout: () => void;
   clearTimeout: () => void;
   cleanup: () => void;
   didTimeout: () => boolean;
+  cancellationSource: () => ConnectorCancellationSource | undefined;
 }
 
 export class SafeConnectorError extends Error {
@@ -76,6 +103,7 @@ export class SafeConnectorError extends Error {
   readonly retryable: boolean;
   readonly status: number | null;
   readonly retryAfterSeconds: number | undefined;
+  readonly cancellationSource: ConnectorCancellationSource | undefined;
 
   constructor(options: {
     service: ConnectorService;
@@ -85,6 +113,7 @@ export class SafeConnectorError extends Error {
     retryable: boolean;
     status?: number;
     retryAfterSeconds?: number;
+    cancellationSource?: ConnectorCancellationSource;
   }) {
     super(options.message);
     this.name = "SafeConnectorError";
@@ -94,6 +123,7 @@ export class SafeConnectorError extends Error {
     this.retryable = options.retryable;
     this.status = options.status ?? null;
     this.retryAfterSeconds = options.retryAfterSeconds;
+    this.cancellationSource = options.cancellationSource;
   }
 
   toPartialFailure(occurredAt: Date): PartialFailure {
@@ -280,6 +310,8 @@ function requestLifecycle(timeoutMs: number, signal: AbortSignal | undefined): R
       signal?.removeEventListener("abort", abortFromCaller);
     },
     controller,
+    cancellationSource: () =>
+      timedOut ? "timeout" : cancellationSourceFromReason(controller.signal.reason),
     didTimeout: () => timedOut,
   };
 }
@@ -438,7 +470,12 @@ export class SafeHttpClient {
 
       return { status: response.status, body: responseBody, headers: response.headers };
     } catch (error) {
-      throw this.#requestError(error, lifecycle.didTimeout(), options.operation);
+      throw this.#requestError(
+        error,
+        lifecycle.didTimeout(),
+        options.operation,
+        lifecycle.cancellationSource(),
+      );
     } finally {
       requestSignalCleanup();
       lease?.release();
@@ -516,7 +553,12 @@ export class SafeHttpClient {
       requestSignalCleanup();
       lease?.release();
       lifecycle.cleanup();
-      throw this.#requestError(error, lifecycle.didTimeout(), options.operation);
+      throw this.#requestError(
+        error,
+        lifecycle.didTimeout(),
+        options.operation,
+        lifecycle.cancellationSource(),
+      );
     }
   }
 
@@ -643,6 +685,7 @@ export class SafeHttpClient {
         new DOMException("Aborted", "AbortError"),
         lifecycle.didTimeout(),
         operation,
+        cancellationSourceFromReason(requestSignal.reason),
       );
       outputController?.error(error);
       void finish(true, requestSignal.reason);
@@ -703,7 +746,14 @@ export class SafeHttpClient {
         } catch (error) {
           if (finalizing || finalized) return;
           await finish(false);
-          controller.error(this.#requestError(error, lifecycle.didTimeout(), operation));
+          controller.error(
+            this.#requestError(
+              error,
+              lifecycle.didTimeout(),
+              operation,
+              cancellationSourceFromReason(requestSignal.reason),
+            ),
+          );
         }
       },
       cancel: async (reason) => {
@@ -713,7 +763,12 @@ export class SafeHttpClient {
     });
   }
 
-  #requestError(error: unknown, timedOut: boolean, operation: string) {
+  #requestError(
+    error: unknown,
+    timedOut: boolean,
+    operation: string,
+    cancellationSource?: ConnectorCancellationSource,
+  ) {
     if (error instanceof SafeConnectorError) return error;
     return new SafeConnectorError({
       service: this.service,
@@ -723,6 +778,7 @@ export class SafeHttpClient {
         ? `${this.service} did not respond before the deadline.`
         : `${this.service} could not be reached.`,
       retryable: true,
+      ...(cancellationSource === undefined ? {} : { cancellationSource }),
     });
   }
 

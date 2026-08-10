@@ -2,20 +2,35 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { RuntimeDrainCoordinator } from "./drain.js";
 
 interface RequestOperation {
-  abort: (reason: DOMException) => void;
+  abort: (reason: DOMException, source: CancellationSource) => void;
   cleanup: () => void;
 }
 
+export type CancellationSource =
+  "client_abort" | "response_closed" | "response_error" | "timeout" | "runtime_drain";
+
 const requestOperations = new WeakMap<FastifyRequest, RequestOperation>();
 
-function abortReason(message: string) {
-  return new DOMException(message, "AbortError");
+function addCancellationSource(reason: DOMException, source: CancellationSource) {
+  if ("cancellationSource" in reason) return reason;
+  Object.defineProperty(reason, "cancellationSource", {
+    configurable: false,
+    enumerable: false,
+    value: source,
+    writable: false,
+  });
+  return reason;
 }
 
-function preserveAbortError(reason: unknown, fallbackMessage: string) {
-  return reason instanceof DOMException && reason.name === "AbortError"
-    ? reason
-    : abortReason(fallbackMessage);
+function abortReason(message: string, source: CancellationSource) {
+  return addCancellationSource(new DOMException(message, "AbortError"), source);
+}
+
+function preserveAbortError(reason: unknown, fallbackMessage: string, source: CancellationSource) {
+  if (reason instanceof DOMException && reason.name === "AbortError") {
+    return addCancellationSource(reason, source);
+  }
+  return abortReason(fallbackMessage, source);
 }
 
 function installRequestSignal(
@@ -26,25 +41,33 @@ function installRequestSignal(
   const controller = new AbortController();
   let cleaned = false;
 
-  const onRequestSignal = () =>
-    abort(preserveAbortError(request.signal.reason, "The request was aborted."));
-  const onRequestAborted = () => abort(abortReason("The request was aborted."));
+  const onRequestAborted = () =>
+    abort(abortReason("The request was aborted.", "client_abort"), "client_abort");
   const onReplyFinished = () => cleanup();
   const onReplyClosed = () => {
     if (!reply.raw.writableFinished) {
-      abort(abortReason("The response was closed before completion."));
+      abort(
+        abortReason("The response was closed before completion.", "response_closed"),
+        "response_closed",
+      );
       return;
     }
     cleanup();
   };
-  const onReplyError = () => abort(abortReason("The response failed before completion."));
+  const onReplyError = () =>
+    abort(
+      abortReason("The response failed before completion.", "response_error"),
+      "response_error",
+    );
   const onDrain = () =>
-    abort(preserveAbortError(coordinator.signal.reason, "The gateway is draining."));
+    abort(
+      preserveAbortError(coordinator.signal.reason, "The gateway is draining.", "runtime_drain"),
+      "runtime_drain",
+    );
 
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
-    request.signal.removeEventListener("abort", onRequestSignal);
     request.raw.off("aborted", onRequestAborted);
     reply.raw.off("finish", onReplyFinished);
     reply.raw.off("close", onReplyClosed);
@@ -53,7 +76,8 @@ function installRequestSignal(
     requestOperations.delete(request);
   };
 
-  function abort(reason: DOMException) {
+  function abort(reason: DOMException, source: CancellationSource) {
+    addCancellationSource(reason, source);
     if (!controller.signal.aborted) controller.abort(reason);
     cleanup();
   }
@@ -62,10 +86,6 @@ function installRequestSignal(
   requestOperations.set(request, operation);
   request.operationSignal = controller.signal;
 
-  if (request.signal.aborted) {
-    onRequestSignal();
-    return;
-  }
   if (request.raw.aborted) {
     onRequestAborted();
     return;
@@ -75,7 +95,6 @@ function installRequestSignal(
     return;
   }
 
-  request.signal.addEventListener("abort", onRequestSignal, { once: true });
   request.raw.once("aborted", onRequestAborted);
   reply.raw.once("finish", onReplyFinished);
   reply.raw.once("close", onReplyClosed);
@@ -83,8 +102,8 @@ function installRequestSignal(
   coordinator.signal.addEventListener("abort", onDrain, { once: true });
 }
 
-function abortRequest(request: FastifyRequest, reason: DOMException) {
-  requestOperations.get(request)?.abort(reason);
+function abortRequest(request: FastifyRequest, reason: DOMException, source: CancellationSource) {
+  requestOperations.get(request)?.abort(reason, source);
 }
 
 function cleanupRequest(request: FastifyRequest) {
@@ -101,10 +120,10 @@ export function installRequestOperationSignal(
     installRequestSignal(request, reply, coordinator);
   });
   app.addHook("onRequestAbort", async (request) => {
-    abortRequest(request, abortReason("The request was aborted."));
+    abortRequest(request, abortReason("The request was aborted.", "client_abort"), "client_abort");
   });
   app.addHook("onTimeout", async (request) => {
-    abortRequest(request, abortReason("The request timed out."));
+    abortRequest(request, abortReason("The request timed out.", "timeout"), "timeout");
   });
   app.addHook("onResponse", async (request) => {
     cleanupRequest(request);
