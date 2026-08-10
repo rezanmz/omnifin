@@ -2,12 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  gitCommandTimeoutMs,
   gitSafetyArguments,
   normalizeReleaseCommit,
+  replaceWithLease,
   prepareAdditions,
   pullRequestBaseReadAttempts,
   pullRequestHeadReadAttempts,
   releaseReferenceReadAttempts,
+  temporaryReferenceFetchAttempts,
+  temporaryReferenceFetchRetryDelaysMs,
   releaseConfiguration,
   validateComparison,
   validateGitHubEndpoints,
@@ -203,12 +207,50 @@ function dependencies(options = {}) {
     pause: async (milliseconds) => calls.push(["pause", milliseconds]),
     replaceWithLease: async (input) => {
       calls.push(["replaceWithLease", input]);
+      if (options.temporaryFetchExhausted) {
+        throw new Error("The temporary signing reference could not be fetched.");
+      }
       if (options.leaseFailure) throw new Error("stale lease");
       assert.equal(input.expectedHeadSha, currentHead);
       currentHead = input.signedSha;
     },
   };
   return { calls, dependencySet };
+}
+
+function replacementInput() {
+  return {
+    branch: releaseBranch,
+    environment: { GIT_TERMINAL_PROMPT: "0" },
+    expectedHeadSha: headSha,
+    remote: "https://github.com/rezanmz/omnifin.git",
+    signedSha,
+    temporaryBranch: "automation/release-signing/test-ref",
+    workspace: "/tmp/workspace",
+  };
+}
+
+function gitReplacement({ fetchErrors = [], pushError } = {}) {
+  const calls = [];
+  let fetchAttempts = 0;
+  const runGit = async (arguments_, options) => {
+    calls.push({ arguments_, options });
+    if (arguments_.includes("fetch")) {
+      const error = fetchErrors[fetchAttempts];
+      fetchAttempts += 1;
+      if (error) throw error;
+    } else if (pushError) {
+      throw pushError;
+    }
+  };
+  const pauses = [];
+  return {
+    calls,
+    fetchAttempts: () => fetchAttempts,
+    pauses,
+    pause: async (ms) => pauses.push(ms),
+    runGit,
+  };
 }
 
 test("parses only the exact release workflow context", () => {
@@ -295,6 +337,107 @@ test("authenticated Git operations disable hooks and inherited credential helper
     "-c",
     "credential.helper=!gh auth git-credential",
   ]);
+});
+
+test("retries a temporary-reference fetch timeout once, then pushes exactly once", async () => {
+  const runner = gitReplacement({
+    fetchErrors: [
+      {
+        code: null,
+        killed: true,
+        signal: "SIGTERM",
+        stderr: "remote: injected timeout diagnostic",
+      },
+    ],
+  });
+
+  await replaceWithLease(replacementInput(), runner);
+
+  assert.equal(runner.fetchAttempts(), 2);
+  assert.deepEqual(runner.pauses, [temporaryReferenceFetchRetryDelaysMs[0]]);
+  assert.equal(runner.calls.filter(({ arguments_ }) => arguments_.includes("fetch")).length, 2);
+  assert.equal(runner.calls.filter(({ arguments_ }) => arguments_.includes("push")).length, 1);
+  assert.equal(runner.calls[0].options.timeout, gitCommandTimeoutMs);
+  assert.equal(runner.calls[1].options.timeout, gitCommandTimeoutMs);
+  assert.equal(runner.calls[2].options.timeout, gitCommandTimeoutMs);
+});
+
+test("retries the exact temporary-reference propagation error, then pushes exactly once", async () => {
+  const input = replacementInput();
+  const runner = gitReplacement({
+    fetchErrors: [
+      {
+        code: 128,
+        killed: false,
+        signal: null,
+        stderr: `fatal: couldn't find remote ref refs/heads/${input.temporaryBranch}\n`,
+      },
+    ],
+  });
+
+  await replaceWithLease(input, runner);
+
+  assert.equal(runner.fetchAttempts(), 2);
+  assert.deepEqual(runner.pauses, [temporaryReferenceFetchRetryDelaysMs[0]]);
+  assert.equal(runner.calls.filter(({ arguments_ }) => arguments_.includes("push")).length, 1);
+});
+
+test("exhausts temporary-reference fetch retries without pushing or leaking Git diagnostics", async () => {
+  const input = replacementInput();
+  const injectedStderr = `fatal: couldn't find remote ref refs/heads/${input.temporaryBranch}\n`;
+  const runner = gitReplacement({
+    fetchErrors: [
+      { code: 128, killed: false, signal: null, stderr: injectedStderr },
+      { code: 128, killed: false, signal: null, stderr: injectedStderr },
+      { code: 128, killed: false, signal: null, stderr: injectedStderr },
+    ],
+  });
+
+  await assert.rejects(replaceWithLease(input, runner), (error) => {
+    assert.equal(error.message, "The temporary signing reference could not be fetched.");
+    assert.equal(error.message.includes(input.temporaryBranch), false);
+    assert.equal(error.message.includes(injectedStderr), false);
+    assert.equal(error.message.includes(input.remote), false);
+    return true;
+  });
+  assert.equal(runner.fetchAttempts(), temporaryReferenceFetchAttempts);
+  assert.deepEqual(runner.pauses, temporaryReferenceFetchRetryDelaysMs);
+  assert.equal(runner.calls.filter(({ arguments_ }) => arguments_.includes("push")).length, 0);
+});
+
+test("does not retry a generic or authentication exit 128 fetch failure", async () => {
+  const injectedStderr =
+    "fatal: Authentication failed for 'https://token@capture.example/repo.git'";
+  const runner = gitReplacement({
+    fetchErrors: [{ code: 128, killed: false, signal: null, stderr: injectedStderr }],
+  });
+
+  await assert.rejects(replaceWithLease(replacementInput(), runner), (error) => {
+    assert.equal(error.message, "The temporary signing reference could not be fetched.");
+    assert.equal(error.message.includes(injectedStderr), false);
+    return true;
+  });
+  assert.equal(runner.fetchAttempts(), 1);
+  assert.deepEqual(runner.pauses, []);
+  assert.equal(runner.calls.filter(({ arguments_ }) => arguments_.includes("push")).length, 0);
+});
+
+test("never retries a push timeout, authentication failure, or lease rejection", async () => {
+  for (const pushError of [
+    { code: null, killed: true, signal: "SIGTERM", stderr: "injected push timeout" },
+    { code: 128, killed: false, signal: null, stderr: "fatal: Authentication failed" },
+    { code: 1, killed: false, signal: null, stderr: "injected stale lease diagnostic" },
+  ]) {
+    const runner = gitReplacement({ pushError });
+    await assert.rejects(replaceWithLease(replacementInput(), runner), (error) => {
+      assert.equal(error.message, "The lease-protected release branch replacement failed.");
+      assert.equal(error.message.includes(pushError.stderr), false);
+      return true;
+    });
+    assert.equal(runner.fetchAttempts(), 1);
+    assert.equal(runner.calls.filter(({ arguments_ }) => arguments_.includes("push")).length, 1);
+    assert.deepEqual(runner.pauses, []);
+  }
 });
 
 test("accepts only canonical Release Please output", () => {
@@ -780,6 +923,16 @@ test("leaves the release branch untouched when it moves before replacement", asy
 test("cleans the temporary reference when the atomic lease rejects the push", async () => {
   const { calls, dependencySet } = dependencies({ leaseFailure: true });
   await assert.rejects(normalizeReleaseCommit(configuration(), dependencySet), /stale lease/u);
+  assert.equal(calls.filter(([name]) => name === "replaceWithLease").length, 1);
+  assert.equal(calls.filter(([name]) => name === "deleteReference").length, 1);
+});
+
+test("cleans the temporary reference when fetch retries are exhausted", async () => {
+  const { calls, dependencySet } = dependencies({ temporaryFetchExhausted: true });
+  await assert.rejects(
+    normalizeReleaseCommit(configuration(), dependencySet),
+    /temporary signing reference could not be fetched/u,
+  );
   assert.equal(calls.filter(([name]) => name === "replaceWithLease").length, 1);
   assert.equal(calls.filter(([name]) => name === "deleteReference").length, 1);
 });
