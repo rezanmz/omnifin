@@ -7,6 +7,27 @@
 * **auth:** add single-use administrator invitations with OIDC/Jellyfin onboarding proof,
   lifecycle auditing, and restore-safe replacement handling ([#335](https://github.com/rezanmz/omnifin/issues/335))
 
+## [0.14.0](https://github.com/rezanmz/omnifin/compare/v0.13.1...v0.14.0) (2026-08-10)
+
+
+### Features
+
+* **connectors:** bound pinned HTTP requests ([#357](https://github.com/rezanmz/omnifin/issues/357)) ([21ff4a0](https://github.com/rezanmz/omnifin/commit/21ff4a0088e3fc0c552fe67e8604ca0f16bae7ee))
+* **gateway:** add graceful drain coordination ([b92add2](https://github.com/rezanmz/omnifin/commit/b92add25559f64eb84507d9c3331e383a36c5ce4))
+* **gateway:** batch HLS manifest handles ([#358](https://github.com/rezanmz/omnifin/issues/358)) ([6df2b5b](https://github.com/rezanmz/omnifin/commit/6df2b5bd5aa4ee1a3b88983485c52130f861203c))
+* **gateway:** bound playback transfer leases ([#356](https://github.com/rezanmz/omnifin/issues/356)) ([bad4083](https://github.com/rezanmz/omnifin/commit/bad4083ac483e9f256e478a0d70d356bb2163d9e))
+* **gateway:** bound SSE streaming backpressure ([#345](https://github.com/rezanmz/omnifin/issues/345)) ([2baba2a](https://github.com/rezanmz/omnifin/commit/2baba2a501536d9719560efd8ffc68b2b2c08822))
+
+
+### Fixes
+
+* **gateway:** preserve live playback operation signals ([#363](https://github.com/rezanmz/omnifin/issues/363)) ([8f47662](https://github.com/rezanmz/omnifin/commit/8f47662f026851a55615eb1b9927f735da188fc5))
+* **gateway:** preserve unowned discovery requestability ([#364](https://github.com/rezanmz/omnifin/issues/364)) ([1a11062](https://github.com/rezanmz/omnifin/commit/1a110625a77b3ac9031623a763546151c7a09382))
+* **release:** retry rate-limited edge candidate publication ([#359](https://github.com/rezanmz/omnifin/issues/359)) ([de18caf](https://github.com/rezanmz/omnifin/commit/de18cafa8e12d7273b8122118280a657fa2ea06d))
+* **release:** retry temporary signing ref fetch ([#362](https://github.com/rezanmz/omnifin/issues/362)) ([6c1dcd7](https://github.com/rezanmz/omnifin/commit/6c1dcd7cd89f2b5ab6c96959f1ea415d3b35d200))
+* **release:** validate sanitized rollback evidence ([#349](https://github.com/rezanmz/omnifin/issues/349)) ([9f41dc4](https://github.com/rezanmz/omnifin/commit/9f41dc458f98403ddc2684bfb3325e0acbde69cc))
+* **web:** recover stale HLS sessions ([#350](https://github.com/rezanmz/omnifin/issues/350)) ([232e3e5](https://github.com/rezanmz/omnifin/commit/232e3e5c97661b73bd5ec3cad5cfafa7ebcd56d2))
+
 ## [0.13.1](https://github.com/rezanmz/omnifin/compare/v0.13.0...v0.13.1) (2026-08-09)
 
 
