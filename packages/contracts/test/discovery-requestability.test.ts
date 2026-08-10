@@ -1,51 +1,86 @@
 import { readFileSync } from "node:fs";
 
+import * as ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 import type { DiscoveryAvailability, DiscoveryMediaRecordState } from "../src/discovery.js";
 import { isDiscoveryMediaRequestable } from "../src/discovery-requestability.js";
 
-const requestabilityMatrix = [
-  ["available", "present", false],
-  ["available", "absent", false],
-  ["available", "unknown", false],
-  ["partial", "present", true],
-  ["partial", "absent", true],
-  ["partial", "unknown", false],
-  ["requested", "present", false],
-  ["requested", "absent", false],
-  ["requested", "unknown", false],
-  ["processing", "present", false],
-  ["processing", "absent", false],
-  ["processing", "unknown", false],
-  ["unavailable", "present", true],
-  ["unavailable", "absent", true],
-  ["unavailable", "unknown", false],
-  ["unknown", "present", false],
-  ["unknown", "absent", true],
-  ["unknown", "unknown", false],
-] satisfies ReadonlyArray<readonly [DiscoveryAvailability, DiscoveryMediaRecordState, boolean]>;
+const requestabilityMatrix: Record<
+  DiscoveryAvailability,
+  Record<DiscoveryMediaRecordState, boolean>
+> = {
+  available: { present: false, absent: false, unknown: false },
+  partial: { present: true, absent: true, unknown: false },
+  requested: { present: false, absent: false, unknown: false },
+  processing: { present: false, absent: false, unknown: false },
+  unavailable: { present: true, absent: true, unknown: false },
+  unknown: { present: false, absent: true, unknown: false },
+};
 
 describe("discovery requestability", () => {
-  it.each(requestabilityMatrix)(
-    "treats %s+%s requestability as %s",
-    (availability, mediaRecordState, expected) => {
-      expect(isDiscoveryMediaRequestable({ availability, mediaRecordState })).toBe(expected);
-    },
-  );
+  for (const availability of Object.keys(requestabilityMatrix) as DiscoveryAvailability[]) {
+    for (const mediaRecordState of Object.keys(
+      requestabilityMatrix[availability],
+    ) as DiscoveryMediaRecordState[]) {
+      it(`treats ${availability}+${mediaRecordState} requestability as ${String(requestabilityMatrix[availability][mediaRecordState])}`, () => {
+        expect(isDiscoveryMediaRequestable({ availability, mediaRecordState })).toBe(
+          requestabilityMatrix[availability][mediaRecordState],
+        );
+      });
+    }
+  }
 
-  it("keeps the emitted leaf free of discovery schema runtime imports", async () => {
-    const emittedModule = readFileSync(
-      new URL("../dist/discovery-requestability.js", import.meta.url),
+  it("keeps the source leaf free of runtime module imports and re-exports", () => {
+    const source = readFileSync(
+      new URL("../src/discovery-requestability.ts", import.meta.url),
       "utf8",
     );
+    const transpiled = ts.transpileModule(source, {
+      compilerOptions: {
+        module: ts.ModuleKind.NodeNext,
+        target: ts.ScriptTarget.ES2023,
+        verbatimModuleSyntax: true,
+      },
+      fileName: "discovery-requestability.ts",
+    }).outputText;
+    const output = ts.createSourceFile(
+      "discovery-requestability.js",
+      transpiled,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.JS,
+    );
+    const runtimeModuleSyntax: ts.Node[] = [];
 
-    expect(emittedModule).not.toMatch(/from\s+["']\.\/discovery\.js["']/u);
-    expect(emittedModule).not.toMatch(/from\s+["']zod["']/u);
+    function inspect(node: ts.Node) {
+      if (
+        ts.isImportDeclaration(node) ||
+        ts.isImportEqualsDeclaration(node) ||
+        (ts.isExportDeclaration(node) && node.moduleSpecifier !== undefined) ||
+        (ts.isCallExpression(node) &&
+          (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+            (ts.isIdentifier(node.expression) && node.expression.text === "require")))
+      ) {
+        runtimeModuleSyntax.push(node);
+      }
+      ts.forEachChild(node, inspect);
+    }
+    inspect(output);
 
-    const leaf = await import("../dist/discovery-requestability.js");
-    expect(
-      leaf.isDiscoveryMediaRequestable({ availability: "unknown", mediaRecordState: "absent" }),
-    ).toBe(true);
+    expect(runtimeModuleSyntax).toHaveLength(0);
+  });
+
+  it("publishes the leaf through the contracts package export map", () => {
+    const manifest = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    ) as {
+      exports: Record<string, { default: string; types: string }>;
+    };
+
+    expect(manifest.exports["./discovery-requestability"]).toEqual({
+      default: "./dist/discovery-requestability.js",
+      types: "./dist/discovery-requestability.d.ts",
+    });
   });
 });
