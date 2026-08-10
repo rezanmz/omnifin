@@ -267,6 +267,129 @@ describe("TheaterPlayer", () => {
     expect(screen.getByRole("button", { name: "Enter full screen" })).toBeVisible();
   });
 
+  it("does not reattach HLS when playback time updates", async () => {
+    const hlsSession: PlaybackNegotiationResponse = {
+      ...session,
+      delivery: "hls",
+      streamPath: `/v1/playback/${sessionId}/master.m3u8`,
+    };
+    render(
+      <TheaterPlayer
+        client={readyClient(hlsSession)}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
+
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(1));
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    fireEvent.canPlay(video);
+    const instance = hlsHarness.instances[0];
+    video.currentTime = 1_210;
+    fireEvent.timeUpdate(video);
+    video.currentTime = 1_220;
+    fireEvent.timeUpdate(video);
+    expect(hlsHarness.instances).toHaveLength(1);
+    expect(instance?.loadSource).toHaveBeenCalledOnce();
+    expect(instance?.destroy).not.toHaveBeenCalled();
+  });
+
+  it("ignores the predecessor canplay while a replacement is negotiating", async () => {
+    const user = userEvent.setup();
+    const replacementSession: PlaybackNegotiationResponse = {
+      ...session,
+      positionSeconds: 1_250,
+      sessionId: `playback_${"z".repeat(22)}`,
+      streamPath: `/v1/playback/playback_${"z".repeat(22)}/stream`,
+    };
+    const client = readyClient();
+    const replacement = deferred<Awaited<ReturnType<PlaybackClient["prepare"]>>>();
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
+
+    const video = await screen.findByLabelText<HTMLVideoElement>(`${media.title} video`);
+    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    client.prepare.mockReturnValueOnce(replacement.promise);
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Playback quality" }),
+      "balanced",
+    );
+    fireEvent.canPlay(video);
+    expect(client.report).not.toHaveBeenCalledWith(
+      sessionId,
+      expect.objectContaining({ event: "stopped" }),
+      csrfToken,
+      expect.anything(),
+    );
+
+    replacement.resolve({ canManageLibrary: false, csrfToken, session: replacementSession });
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(2));
+    fireEvent.canPlay(video);
+    expect(client.report).not.toHaveBeenCalledWith(
+      sessionId,
+      expect.objectContaining({ event: "stopped" }),
+      csrfToken,
+      expect.anything(),
+    );
+    await waitFor(() =>
+      expect(video).toHaveAttribute("src", `/api/playback/${replacementSession.sessionId}/stream`),
+    );
+    fireEvent.canPlay(video);
+    await waitFor(() =>
+      expect(client.report).toHaveBeenCalledWith(
+        sessionId,
+        expect.objectContaining({ event: "stopped" }),
+        csrfToken,
+        expect.anything(),
+      ),
+    );
+  });
+
+  it("reattaches an HLS predecessor after replacement negotiation fails", async () => {
+    const user = userEvent.setup();
+    const hlsSession: PlaybackNegotiationResponse = {
+      ...session,
+      delivery: "hls",
+      streamPath: `/v1/playback/${sessionId}/master.m3u8`,
+    };
+    const client = readyClient(hlsSession);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
+
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(1));
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    fireEvent.canPlay(video);
+    client.prepare.mockRejectedValueOnce(new Error("replacement unavailable"));
+    await user.click(screen.getByRole("button", { name: "Playback settings" }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Playback quality" }),
+      "balanced",
+    );
+
+    await screen.findByText("That change could not be applied. Your current stream is unchanged.");
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(2));
+    expect(hlsHarness.instances[0]?.destroy).toHaveBeenCalledOnce();
+    expect(hlsHarness.instances[1]?.loadSource).toHaveBeenCalledWith(
+      `/api/playback/${sessionId}/master.m3u8`,
+    );
+    fireEvent.canPlay(video);
+    expect(screen.getByRole("button", { name: `Resume ${media.title}` })).toBeVisible();
+  });
+
   it("uses source-quality compatibility negotiation by default", async () => {
     const client = readyClient();
     render(
@@ -1315,8 +1438,8 @@ describe("TheaterPlayer", () => {
       expect.any(AbortSignal),
       expect.objectContaining({ mode: "auto" }),
     );
-    const instance = hlsHarness.instances[0];
-    await waitFor(() => expect(instance?.loadSource).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(2));
+    expect(hlsHarness.instances[1]?.loadSource).toHaveBeenCalledOnce();
   });
 
   it("destroys the hls.js engine on close", async () => {
@@ -1350,9 +1473,10 @@ describe("TheaterPlayer", () => {
       delivery: "hls",
       streamPath: `/v1/playback/${sessionId}/master.m3u8`,
     };
+    const client = readyClient(hlsSession);
     render(
       <TheaterPlayer
-        client={readyClient(hlsSession)}
+        client={client}
         media={media}
         onClose={() => undefined}
         preferenceClient={readyPreferenceClient()}
@@ -1387,6 +1511,7 @@ describe("TheaterPlayer", () => {
 
     onError?.("error", privateFailure);
     expect(await screen.findByRole("alert")).toHaveTextContent("saved progress is safe");
+    expect(client.prepare).toHaveBeenCalledTimes(1);
     expect(warning).toHaveBeenCalledWith(
       JSON.stringify({
         details: "levelLoadError",
@@ -1438,6 +1563,773 @@ describe("TheaterPlayer", () => {
 
     instance?.handlers.get("error")?.("error", { fatal: true, type: "mediaError" });
     expect(await screen.findByRole("alert")).toHaveTextContent("saved progress is safe");
+  });
+
+  it("automatically replaces an established HLS session once after exhausted transient failure", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const hlsSessionA: PlaybackNegotiationResponse = {
+      ...session,
+      delivery: "hls",
+      positionSeconds: 1_000,
+      streamPath: `/v1/playback/${sessionId}/master.m3u8`,
+    };
+    const sessionIdB = `playback_${"b".repeat(22)}`;
+    const hlsSessionB: PlaybackNegotiationResponse = {
+      ...hlsSessionA,
+      positionSeconds: 1_000,
+      sessionId: sessionIdB,
+      streamPath: `/v1/playback/${sessionIdB}/master.m3u8`,
+    };
+    const client = readyClient(hlsSessionA);
+    client.prepare
+      .mockImplementationOnce(async () => ({
+        canManageLibrary: false,
+        csrfToken,
+        session: hlsSessionA,
+      }))
+      .mockImplementationOnce(async () => ({
+        canManageLibrary: false,
+        csrfToken,
+        session: hlsSessionB,
+      }));
+    render(
+      <TheaterPlayer
+        client={client}
+        media={{ ...media, positionSeconds: 1_000 }}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
+
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(1));
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    fireEvent.canPlay(video);
+    video.currentTime = 25;
+    fireEvent.play(video);
+    const instanceA = hlsHarness.instances[0];
+    const failure = {
+      details: "fragLoadError",
+      fatal: true,
+      response: { code: 503 },
+      type: "networkError",
+    };
+    instanceA?.handlers.get("error")?.("error", failure);
+    instanceA?.handlers.get("error")?.("error", failure);
+    instanceA?.handlers.get("error")?.("error", failure);
+
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(2));
+    expect(client.prepare).toHaveBeenLastCalledWith(media.id, 1_025, expect.any(AbortSignal), {
+      audioStreamIndex: null,
+      maxStreamingBitrate: 200_000_000,
+      mode: "auto",
+      subtitleStreamIndex: null,
+    });
+    expect(instanceA?.destroy).toHaveBeenCalledOnce();
+    expect(client.report).not.toHaveBeenCalledWith(
+      sessionId,
+      expect.objectContaining({ event: "stopped" }),
+      csrfToken,
+      expect.anything(),
+    );
+    fireEvent.canPlay(video);
+    await waitFor(() =>
+      expect(client.report).toHaveBeenCalledWith(
+        sessionId,
+        { event: "stopped", positionSeconds: 1_025 },
+        csrfToken,
+        { keepalive: false },
+      ),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    const recoveryDiagnostics = warning.mock.calls
+      .flat()
+      .filter(
+        (entry): entry is string =>
+          typeof entry === "string" && entry.includes("hls_session_recovery"),
+      );
+    expect(
+      recoveryDiagnostics.some(
+        (entry) =>
+          entry.includes('"decision":"started"') &&
+          entry.includes('"stage":"fragment"') &&
+          entry.includes('"status":503') &&
+          /"operation":"recovery_\d+"/u.test(entry),
+      ),
+    ).toBe(true);
+    expect(recoveryDiagnostics.some((entry) => entry.includes('"outcome":"committed"'))).toBe(true);
+    expect(recoveryDiagnostics.some((entry) => entry.includes('"outcome":"cancelled"'))).toBe(
+      false,
+    );
+  });
+
+  it("coalesces terminal callbacks while recovery negotiation is still in flight", async () => {
+    const hlsSessionA: PlaybackNegotiationResponse = {
+      ...session,
+      delivery: "hls",
+      positionSeconds: 1_000,
+      streamPath: `/v1/playback/${sessionId}/master.m3u8`,
+    };
+    const sessionIdB = `playback_${"f".repeat(22)}`;
+    const hlsSessionB: PlaybackNegotiationResponse = {
+      ...hlsSessionA,
+      sessionId: sessionIdB,
+      streamPath: `/v1/playback/${sessionIdB}/master.m3u8`,
+    };
+    const client = readyClient(hlsSessionA);
+    const deferredRecovery = deferred<Awaited<ReturnType<PlaybackClient["prepare"]>>>();
+    client.prepare
+      .mockImplementationOnce(async () => ({
+        canManageLibrary: false,
+        csrfToken,
+        session: hlsSessionA,
+      }))
+      .mockImplementationOnce(() => deferredRecovery.promise);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={{ ...media, positionSeconds: 1_000 }}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
+
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(1));
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    fireEvent.canPlay(video);
+    const instanceA = hlsHarness.instances[0];
+    const failure = {
+      details: "fragLoadError",
+      fatal: true,
+      response: { code: 503 },
+      type: "networkError",
+    };
+    instanceA?.handlers.get("error")?.("error", failure);
+    instanceA?.handlers.get("error")?.("error", failure);
+    instanceA?.handlers.get("error")?.("error", failure);
+    instanceA?.handlers.get("error")?.("error", failure);
+    instanceA?.handlers.get("error")?.("error", failure);
+
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(2));
+    expect(client.prepare.mock.calls[1]?.[1]).toBe(1_000);
+    expect(client.prepare.mock.calls[1]?.[2]).toBeInstanceOf(AbortSignal);
+    expect(client.prepare.mock.calls[1]?.[3]).toEqual({
+      audioStreamIndex: null,
+      maxStreamingBitrate: 200_000_000,
+      mode: "auto",
+      subtitleStreamIndex: null,
+    });
+    expect(client.prepare).toHaveBeenCalledTimes(2);
+
+    deferredRecovery.resolve({ canManageLibrary: false, csrfToken, session: hlsSessionB });
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(2));
+    await waitFor(() => expect(hlsHarness.instances[1]?.loadSource).toHaveBeenCalled());
+    await waitFor(() => {
+      fireEvent.canPlay(video);
+      expect(client.report).toHaveBeenCalledWith(
+        sessionId,
+        { event: "stopped", positionSeconds: 1_000 },
+        csrfToken,
+        { keepalive: false },
+      );
+    });
+    const recoveryDiagnostics = warning.mock.calls
+      .flat()
+      .filter(
+        (entry): entry is string =>
+          typeof entry === "string" && entry.includes("hls_session_recovery"),
+      );
+    expect(
+      recoveryDiagnostics.filter((entry) => entry.includes('"decision":"started"')),
+    ).toHaveLength(1);
+    expect(
+      recoveryDiagnostics.filter((entry) => entry.includes('"outcome":"committed"')),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    ["playing", true],
+    ["paused", false],
+  ] as const)(
+    "preserves the %s intent and absolute position with non-default recovery options",
+    async (_intent, shouldResume) => {
+      const sourceReferenceIdB = `source_${"b".repeat(22)}`;
+      const sessionIdA = `playback_${"g".repeat(22)}`;
+      const sessionIdAEstablished = `playback_${"h".repeat(22)}`;
+      const sessionIdAWithQuality = `playback_${"o".repeat(22)}`;
+      const sessionIdB = `playback_${"i".repeat(22)}`;
+      const audioTracks = [
+        {
+          channels: 6,
+          codec: "aac",
+          default: true,
+          index: 1,
+          language: "eng",
+          selected: true,
+          title: "English 5.1",
+        },
+        {
+          channels: 2,
+          codec: "aac",
+          default: false,
+          index: 3,
+          language: "spa",
+          selected: false,
+          title: "Español",
+        },
+      ];
+      const subtitleTracks = [
+        {
+          codec: "ass",
+          default: false,
+          delivery: "video" as const,
+          forced: false,
+          index: 7,
+          language: "spa",
+          selected: false,
+          title: "Español",
+        },
+      ];
+      const makeSession = (id: string): PlaybackNegotiationResponse => ({
+        ...session,
+        audioTracks,
+        delivery: "hls",
+        playMethod: "transcode",
+        positionSeconds: 1_000,
+        sessionId: id,
+        streamPath: `/v1/playback/${id}/master.m3u8`,
+        subtitleTracks,
+      });
+      const sessionA = makeSession(sessionIdA);
+      const sessionAWithAudio = makeSession(sessionIdAEstablished);
+      const sessionAWithSubtitle = makeSession(`playback_${"n".repeat(22)}`);
+      const sessionAWithQuality = makeSession(sessionIdAWithQuality);
+      const sessionB = makeSession(sessionIdB);
+      const selectedMedia: TheaterMedia = {
+        ...versionedMedia,
+        sourceReferenceId: sourceReferenceIdB,
+      };
+      const client = readyClient(sessionA);
+      const deferredRecovery = deferred<Awaited<ReturnType<PlaybackClient["prepare"]>>>();
+      client.prepare
+        .mockImplementationOnce(async () => ({
+          canManageLibrary: false,
+          csrfToken,
+          session: sessionA,
+        }))
+        .mockImplementationOnce(async () => ({
+          canManageLibrary: false,
+          csrfToken,
+          session: sessionAWithAudio,
+        }))
+        .mockImplementationOnce(async () => ({
+          canManageLibrary: false,
+          csrfToken,
+          session: sessionAWithSubtitle,
+        }))
+        .mockImplementationOnce(async () => ({
+          canManageLibrary: false,
+          csrfToken,
+          session: sessionAWithQuality,
+        }))
+        .mockImplementationOnce(() => deferredRecovery.promise);
+      const user = userEvent.setup();
+      const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+      render(
+        <TheaterPlayer
+          client={client}
+          media={selectedMedia}
+          onClose={() => undefined}
+          preferenceClient={readyPreferenceClient()}
+        />,
+      );
+
+      const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+      await waitFor(() => {
+        fireEvent.canPlay(video);
+        expect(screen.getByRole("button", { name: `Resume ${media.title}` })).toBeVisible();
+      });
+
+      await user.click(screen.getByRole("button", { name: "Playback settings" }));
+      await user.selectOptions(screen.getByRole("combobox", { name: "Audio track" }), "3");
+      await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(hlsHarness.instances).toHaveLength(2));
+      await waitFor(() => expect(hlsHarness.instances[1]?.loadSource).toHaveBeenCalled());
+      await waitFor(() => {
+        fireEvent.canPlay(video);
+        expect(screen.getByRole("button", { name: `Resume ${media.title}` })).toBeVisible();
+      });
+
+      await user.click(screen.getByRole("button", { name: "Playback settings" }));
+      await user.selectOptions(screen.getByRole("combobox", { name: "Subtitle track" }), "7");
+      await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(3));
+      await waitFor(() => expect(hlsHarness.instances).toHaveLength(3));
+      await waitFor(() => expect(hlsHarness.instances[2]?.loadSource).toHaveBeenCalled());
+      await waitFor(() => {
+        fireEvent.canPlay(video);
+        expect(screen.getByRole("button", { name: `Resume ${media.title}` })).toBeVisible();
+      });
+
+      await user.click(screen.getByRole("button", { name: "Playback settings" }));
+      await user.selectOptions(
+        screen.getByRole("combobox", { name: "Playback quality" }),
+        "balanced",
+      );
+      await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(4));
+      await waitFor(() => expect(hlsHarness.instances).toHaveLength(4));
+      await waitFor(() => expect(hlsHarness.instances[3]?.loadSource).toHaveBeenCalled());
+      await waitFor(() => {
+        fireEvent.canPlay(video);
+        expect(screen.getByRole("button", { name: `Resume ${media.title}` })).toBeVisible();
+      });
+
+      video.currentTime = 444;
+      const playCallsBeforeRecovery = play.mock.calls.length;
+      if (shouldResume) fireEvent.play(video);
+      const instanceAEstablished = hlsHarness.instances[3];
+      const failure = {
+        details: "fragLoadError",
+        fatal: true,
+        response: { code: 503 },
+        type: "networkError",
+      };
+      instanceAEstablished?.handlers.get("error")?.("error", failure);
+      instanceAEstablished?.handlers.get("error")?.("error", failure);
+      instanceAEstablished?.handlers.get("error")?.("error", failure);
+
+      await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(5));
+      expect(client.prepare).toHaveBeenLastCalledWith(media.id, 1_444, expect.any(AbortSignal), {
+        audioStreamIndex: 3,
+        maxStreamingBitrate: 10_000_000,
+        mode: "transcode",
+        sourceReferenceId: sourceReferenceIdB,
+        subtitleStreamIndex: 7,
+      });
+
+      deferredRecovery.resolve({ canManageLibrary: false, csrfToken, session: sessionB });
+      await waitFor(() => expect(hlsHarness.instances).toHaveLength(5));
+      await waitFor(() => expect(hlsHarness.instances[4]?.loadSource).toHaveBeenCalled());
+      await waitFor(() => {
+        fireEvent.canPlay(video);
+        expect(Math.abs(video.currentTime - 444)).toBeLessThanOrEqual(1);
+      });
+      await waitFor(() =>
+        expect(
+          client.report.mock.calls.filter(
+            ([reportedSessionId, request]) =>
+              reportedSessionId === sessionIdAWithQuality && request.event === "stopped",
+          ),
+        ).toHaveLength(1),
+      );
+      expect(play.mock.calls.length).toBe(
+        shouldResume ? playCallsBeforeRecovery + 1 : playCallsBeforeRecovery,
+      );
+    },
+  );
+
+  it("does not recurse after a failed recovery and resets the budget on Try again", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const makeHlsSession = (id: string): PlaybackNegotiationResponse => ({
+      ...session,
+      delivery: "hls",
+      streamPath: `/v1/playback/${id}/master.m3u8`,
+      sessionId: id,
+    });
+    const sessionIdC = `playback_${"c".repeat(22)}`;
+    const sessionIdD = `playback_${"d".repeat(22)}`;
+    const sessionC = makeHlsSession(sessionIdC);
+    const sessionD = makeHlsSession(sessionIdD);
+    const client = readyClient(makeHlsSession(sessionId));
+    client.prepare
+      .mockImplementationOnce(async () => ({
+        canManageLibrary: false,
+        csrfToken,
+        session: makeHlsSession(sessionId),
+      }))
+      .mockRejectedValueOnce(new Error("recovery unavailable"))
+      .mockImplementationOnce(async () => ({
+        canManageLibrary: false,
+        csrfToken,
+        session: sessionC,
+      }))
+      .mockImplementationOnce(async () => ({
+        canManageLibrary: false,
+        csrfToken,
+        session: sessionD,
+      }));
+    const view = render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
+
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(1));
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    fireEvent.canPlay(video);
+    const failure = {
+      details: "fragLoadError",
+      fatal: true,
+      response: { code: 503 },
+      type: "networkError",
+    };
+    const instanceA = hlsHarness.instances[0];
+    instanceA?.handlers.get("error")?.("error", failure);
+    instanceA?.handlers.get("error")?.("error", failure);
+    instanceA?.handlers.get("error")?.("error", failure);
+    expect(await screen.findByRole("alert")).toHaveTextContent("saved progress is safe");
+    expect(client.prepare).toHaveBeenCalledTimes(2);
+
+    await userEvent.setup().click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(2));
+    fireEvent.canPlay(video);
+    await waitFor(() =>
+      expect(client.report).toHaveBeenCalledWith(
+        sessionId,
+        expect.objectContaining({ event: "stopped" }),
+        csrfToken,
+        expect.anything(),
+      ),
+    );
+
+    const instanceC = hlsHarness.instances[1];
+    instanceC?.handlers.get("error")?.("error", failure);
+    instanceC?.handlers.get("error")?.("error", failure);
+    instanceC?.handlers.get("error")?.("error", failure);
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(4));
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(3));
+    fireEvent.canPlay(video);
+    view.unmount();
+    const outcomes = warning.mock.calls
+      .flat()
+      .filter(
+        (entry): entry is string =>
+          typeof entry === "string" && entry.includes("hls_session_recovery"),
+      );
+    expect(outcomes.filter((entry) => entry.includes('"outcome":"failed"'))).toHaveLength(1);
+    expect(outcomes.some((entry) => entry.includes('"outcome":"cancelled"'))).toBe(false);
+  });
+
+  it("retires A and failed B without starting a third recovery", async () => {
+    const makeHlsSession = (id: string): PlaybackNegotiationResponse => ({
+      ...session,
+      delivery: "hls",
+      streamPath: `/v1/playback/${id}/master.m3u8`,
+      sessionId: id,
+    });
+    const sessionIdB = `playback_${"e".repeat(22)}`;
+    const sessionA = makeHlsSession(sessionId);
+    const sessionB = makeHlsSession(sessionIdB);
+    const client = readyClient(sessionA);
+    client.prepare
+      .mockImplementationOnce(async () => ({
+        canManageLibrary: false,
+        csrfToken,
+        session: sessionA,
+      }))
+      .mockImplementationOnce(async () => ({
+        canManageLibrary: false,
+        csrfToken,
+        session: sessionB,
+      }));
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
+
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(1));
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    fireEvent.canPlay(video);
+    const failure = {
+      details: "fragLoadError",
+      fatal: true,
+      response: { code: 503 },
+      type: "networkError",
+    };
+    const instanceA = hlsHarness.instances[0];
+    instanceA?.handlers.get("error")?.("error", failure);
+    instanceA?.handlers.get("error")?.("error", failure);
+    instanceA?.handlers.get("error")?.("error", failure);
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(2));
+    const instanceB = hlsHarness.instances[1];
+    instanceB?.handlers.get("error")?.("error", failure);
+    instanceB?.handlers.get("error")?.("error", failure);
+    instanceB?.handlers.get("error")?.("error", failure);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("saved progress is safe");
+    expect(client.prepare).toHaveBeenCalledTimes(2);
+    await waitFor(() =>
+      expect(
+        client.report.mock.calls.filter(([, request]) => request.event === "stopped"),
+      ).toHaveLength(2),
+    );
+    const stopped = client.report.mock.calls.filter(([, request]) => request.event === "stopped");
+    expect(stopped.map(([id]) => id).sort()).toEqual([sessionId, sessionIdB].sort());
+    expect(instanceB?.destroy).toHaveBeenCalledOnce();
+    fireEvent.canPlay(video);
+    expect(client.prepare).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows the stable recovery error when B never reaches readiness", async () => {
+    const sessionIdB = `playback_${"j".repeat(22)}`;
+    const sessionA: PlaybackNegotiationResponse = {
+      ...session,
+      delivery: "hls",
+      streamPath: `/v1/playback/${sessionId}/master.m3u8`,
+    };
+    const sessionB: PlaybackNegotiationResponse = {
+      ...sessionA,
+      sessionId: sessionIdB,
+      streamPath: `/v1/playback/${sessionIdB}/master.m3u8`,
+    };
+    const client = readyClient(sessionA);
+    const deferredRecovery = deferred<Awaited<ReturnType<PlaybackClient["prepare"]>>>();
+    client.prepare
+      .mockImplementationOnce(async () => ({
+        canManageLibrary: false,
+        csrfToken,
+        session: sessionA,
+      }))
+      .mockImplementationOnce(() => deferredRecovery.promise);
+    render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
+
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(1));
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    fireEvent.canPlay(video);
+    const instanceA = hlsHarness.instances[0];
+    const failure = {
+      details: "fragLoadError",
+      fatal: true,
+      response: { code: 503 },
+      type: "networkError",
+    };
+    instanceA?.handlers.get("error")?.("error", failure);
+    instanceA?.handlers.get("error")?.("error", failure);
+    instanceA?.handlers.get("error")?.("error", failure);
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(2));
+
+    vi.useFakeTimers();
+    try {
+      deferredRecovery.resolve({ canManageLibrary: false, csrfToken, session: sessionB });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(hlsHarness.instances).toHaveLength(2);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_001);
+      });
+      expect(screen.getByRole("alert")).toHaveTextContent("saved progress is safe");
+      expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
+      expect(client.prepare).toHaveBeenCalledTimes(2);
+      expect(hlsHarness.instances[1]?.destroy).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not mutate playback or duplicate stops after unmounting during recovery", async () => {
+    const sessionIdB = `playback_${"k".repeat(22)}`;
+    const sessionB: PlaybackNegotiationResponse = {
+      ...session,
+      delivery: "hls",
+      sessionId: sessionIdB,
+      streamPath: `/v1/playback/${sessionIdB}/master.m3u8`,
+    };
+    const client = readyClient({
+      ...session,
+      delivery: "hls",
+      streamPath: `/v1/playback/${sessionId}/master.m3u8`,
+    });
+    const deferredRecovery = deferred<Awaited<ReturnType<PlaybackClient["prepare"]>>>();
+    client.prepare
+      .mockImplementationOnce(async () => ({
+        canManageLibrary: false,
+        csrfToken,
+        session: {
+          ...session,
+          delivery: "hls",
+          streamPath: `/v1/playback/${sessionId}/master.m3u8`,
+        },
+      }))
+      .mockImplementationOnce(() => deferredRecovery.promise);
+    const view = render(
+      <TheaterPlayer
+        client={client}
+        media={media}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
+
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(1));
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    fireEvent.canPlay(video);
+    const instanceA = hlsHarness.instances[0];
+    const failure = {
+      details: "fragLoadError",
+      fatal: true,
+      response: { code: 503 },
+      type: "networkError",
+    };
+    instanceA?.handlers.get("error")?.("error", failure);
+    instanceA?.handlers.get("error")?.("error", failure);
+    instanceA?.handlers.get("error")?.("error", failure);
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(2));
+
+    view.unmount();
+    deferredRecovery.resolve({ canManageLibrary: false, csrfToken, session: sessionB });
+    instanceA?.handlers.get("error")?.("error", failure);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(
+        client.report.mock.calls.filter(([, request]) => request.event === "stopped"),
+      ).toHaveLength(2),
+    );
+    const stopped = client.report.mock.calls.filter(([, request]) => request.event === "stopped");
+    expect(stopped.map(([reportedSessionId]) => reportedSessionId).sort()).toEqual(
+      [sessionId, sessionIdB].sort(),
+    );
+    expect(stopped.filter(([reportedSessionId]) => reportedSessionId === sessionId)).toHaveLength(
+      1,
+    );
+    expect(stopped.filter(([reportedSessionId]) => reportedSessionId === sessionIdB)).toHaveLength(
+      1,
+    );
+    expect(client.prepare).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels stale recovery when a newer source-backed preference operation wins", async () => {
+    const sourceReferenceIdB = `source_${"b".repeat(22)}`;
+    const sessionIdB = `playback_${"l".repeat(22)}`;
+    const sessionIdC = `playback_${"m".repeat(22)}`;
+    const subtitleTracks = [
+      {
+        codec: "ass",
+        default: false,
+        delivery: "video" as const,
+        forced: false,
+        index: 7,
+        language: "spa",
+        selected: false,
+        title: "Español",
+      },
+    ];
+    const sessionA: PlaybackNegotiationResponse = {
+      ...session,
+      delivery: "hls",
+      streamPath: `/v1/playback/${sessionId}/master.m3u8`,
+      subtitleTracks,
+    };
+    const sessionB: PlaybackNegotiationResponse = {
+      ...sessionA,
+      sessionId: sessionIdB,
+      streamPath: `/v1/playback/${sessionIdB}/master.m3u8`,
+    };
+    const sessionC: PlaybackNegotiationResponse = {
+      ...sessionA,
+      sessionId: sessionIdC,
+      streamPath: `/v1/playback/${sessionIdC}/master.m3u8`,
+    };
+    const selectedMedia: TheaterMedia = {
+      ...versionedMedia,
+      sourceReferenceId: sourceReferenceIdB,
+    };
+    const client = readyClient(sessionA);
+    const deferredRecovery = deferred<Awaited<ReturnType<PlaybackClient["prepare"]>>>();
+    client.prepare
+      .mockImplementationOnce(async () => ({
+        canManageLibrary: false,
+        csrfToken,
+        session: sessionA,
+      }))
+      .mockImplementationOnce(() => deferredRecovery.promise)
+      .mockResolvedValueOnce({ canManageLibrary: false, csrfToken, session: sessionC });
+    render(
+      <TheaterPlayer
+        client={client}
+        media={selectedMedia}
+        onClose={() => undefined}
+        preferenceClient={readyPreferenceClient()}
+      />,
+    );
+
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(1));
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    fireEvent.canPlay(video);
+    const instanceA = hlsHarness.instances[0];
+    const failure = {
+      details: "fragLoadError",
+      fatal: true,
+      response: { code: 503 },
+      type: "networkError",
+    };
+    instanceA?.handlers.get("error")?.("error", failure);
+    instanceA?.handlers.get("error")?.("error", failure);
+    instanceA?.handlers.get("error")?.("error", failure);
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(2));
+
+    // Keyboard subtitle selection remains a valid newer playback operation
+    // even while the recovery overlay disables the settings controls.
+    fireEvent.keyDown(screen.getByRole("dialog", { name: media.title }), { key: "c" });
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(3));
+    expect(client.prepare).toHaveBeenLastCalledWith(media.id, 1_200, expect.any(AbortSignal), {
+      audioStreamIndex: null,
+      maxStreamingBitrate: 80_000_000,
+      mode: "auto",
+      sourceReferenceId: sourceReferenceIdB,
+      subtitleStreamIndex: 7,
+    });
+    await waitFor(() => expect(hlsHarness.instances).toHaveLength(2));
+    await waitFor(() => expect(hlsHarness.instances[1]?.loadSource).toHaveBeenCalled());
+    fireEvent.canPlay(video);
+    await waitFor(() =>
+      expect(
+        client.report.mock.calls.filter(
+          ([reportedSessionId, request]) =>
+            reportedSessionId === sessionId && request.event === "stopped",
+        ),
+      ).toHaveLength(1),
+    );
+
+    deferredRecovery.resolve({ canManageLibrary: false, csrfToken, session: sessionB });
+    instanceA?.handlers.get("error")?.("error", failure);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(client.prepare).toHaveBeenCalledTimes(3);
+    expect(hlsHarness.instances).toHaveLength(2);
+    expect(screen.getByRole("dialog", { name: media.title })).toHaveAttribute(
+      "data-status",
+      "ready",
+    );
+    const stopped = client.report.mock.calls.filter(([, request]) => request.event === "stopped");
+    expect(stopped.filter(([reportedSessionId]) => reportedSessionId === sessionId)).toHaveLength(
+      1,
+    );
+    expect(stopped.filter(([reportedSessionId]) => reportedSessionId === sessionIdB)).toHaveLength(
+      1,
+    );
   });
 
   it("uses native HLS when available and explains unsupported browsers", async () => {
@@ -1840,8 +2732,11 @@ describe("TheaterPlayer", () => {
       mode: "transcode",
       subtitleStreamIndex: null,
     });
-    fireEvent.canPlay(screen.getByLabelText<HTMLVideoElement>(`${media.title} video`));
-    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    await waitFor(() => {
+      fireEvent.canPlay(video);
+      expect(screen.getByRole("button", { name: `Resume ${media.title}` })).toBeVisible();
+    });
     await user.click(screen.getByRole("button", { name: "Playback settings" }));
     expect(screen.getByRole("combobox", { name: "Audio track" })).toHaveValue("3");
   });
@@ -1869,7 +2764,13 @@ describe("TheaterPlayer", () => {
         "Account defaults were unavailable; conservative playback defaults are in use.",
       ),
     ).toBeVisible();
-    fireEvent.canPlay(screen.getByLabelText<HTMLVideoElement>(`${media.title} video`));
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    fireEvent.canPlay(video);
+    await waitFor(() => expect(client.prepare).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      fireEvent.canPlay(video);
+      expect(screen.getByRole("button", { name: `Resume ${media.title}` })).toBeVisible();
+    });
     await waitFor(() =>
       expect(screen.queryByText("Applying your playback defaults…")).not.toBeInTheDocument(),
     );
@@ -1909,8 +2810,11 @@ describe("TheaterPlayer", () => {
       mode: "transcode",
       subtitleStreamIndex: null,
     });
-    fireEvent.canPlay(screen.getByLabelText<HTMLVideoElement>(`${media.title} video`));
-    await screen.findByRole("button", { name: `Resume ${media.title}` });
+    const video = screen.getByLabelText<HTMLVideoElement>(`${media.title} video`);
+    await waitFor(() => {
+      fireEvent.canPlay(video);
+      expect(screen.getByRole("button", { name: `Resume ${media.title}` })).toBeVisible();
+    });
     await user.click(screen.getByRole("button", { name: "Playback settings" }));
     expect(screen.getByRole("combobox", { name: "Playback quality" })).toHaveValue("balanced");
   });
