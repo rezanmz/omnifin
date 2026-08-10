@@ -170,6 +170,7 @@ export class SeerrIssueClient {
         : { tlsCaCertificatePem: config.tlsCaCertificatePem }),
       ...(config.tlsPolicy === undefined ? {} : { tlsPolicy: config.tlsPolicy }),
       ...(config.transport === undefined ? {} : { transport: config.transport }),
+      ...(config.lane === undefined ? {} : { lane: config.lane }),
     });
   }
 

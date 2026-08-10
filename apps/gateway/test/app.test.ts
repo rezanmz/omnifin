@@ -1,15 +1,18 @@
 import { apiErrorSchema } from "@omnifin/contracts/errors";
 import { runtimeIdentitySchema } from "@omnifin/contracts/runtime";
+import { ConnectorHttpLane } from "@omnifin/connectors/http/connector-http-lane";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import type { AppConfig } from "../src/config.js";
+import { ConnectorHttpLaneRegistry } from "../src/connectors/http-lane-registry.js";
 import { openDatabase } from "../src/db/client.js";
 import { oidcProviders } from "../src/db/schema.js";
 import { SafeHttpError } from "../src/http-error.js";
 import { startupFailureDetails } from "../src/startup-error.js";
+import { createRuntimeDrainCoordinator } from "../src/runtime/drain.js";
 
 function testConfig(): AppConfig {
   return {
@@ -95,6 +98,47 @@ describe("gateway application", () => {
 
     expect(close).toHaveBeenCalledOnce();
     expect(() => database.sqlite.prepare("select 1").get()).toThrow(/not open/i);
+  });
+
+  it("closes connector lanes in preClose after drain begins and before the database", async () => {
+    const database = openDatabase(":memory:");
+    const runtimeDrain = createRuntimeDrainCoordinator();
+    const events: string[] = [];
+    const registry = new ConnectorHttpLaneRegistry({
+      createLane: (service) => new ConnectorHttpLane({ maxActive: 1, maxQueued: 1, service }),
+    });
+    const lane = registry.laneFor("jellyfin", "home");
+    const active = await lane.acquire({ operation: "active" });
+    const queued = lane.acquire({ operation: "queued" });
+    let queuedRejected = false;
+    void queued.catch(() => {
+      queuedRejected = true;
+    });
+    const closeRegistry = vi.spyOn(registry, "close");
+    closeRegistry.mockImplementation(() => {
+      events.push(`lanes:${runtimeDrain.state}`);
+      ConnectorHttpLaneRegistry.prototype.close.call(registry);
+      expect(active.signal.aborted).toBe(true);
+    });
+    const closeDatabase = vi.spyOn(database, "close").mockImplementation(() => {
+      events.push("database");
+      expect(queuedRejected).toBe(true);
+    });
+    const app = await createApp({
+      config: testConfig(),
+      database,
+      connectorHttpLaneRegistry: registry,
+      runtimeDrain,
+    });
+
+    await app.close();
+    expect(closeRegistry).toHaveBeenCalledOnce();
+    expect(closeDatabase).toHaveBeenCalledOnce();
+    expect(events).toEqual(["lanes:draining", "database"]);
+    expect(active.signal.aborted).toBe(true);
+    await expect(queued).rejects.toMatchObject({ code: "unreachable" });
+    closeDatabase.mockRestore();
+    database.close();
   });
 
   it("exposes the public runtime identity without requiring a session", async () => {

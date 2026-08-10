@@ -74,11 +74,11 @@ export const stackVerificationRoutes: FastifyPluginAsync<StackVerificationRoutes
   app,
   options,
 ) => {
-  const connectors = new ConnectorAdminService(
-    app.database,
-    app.appConfig,
-    options.dependencies?.connectorAdmin,
-  );
+  const connectors = new ConnectorAdminService(app.database, app.appConfig, {
+    ...(options.dependencies?.connectorAdmin ?? {}),
+    laneProvider:
+      options.dependencies?.connectorAdmin?.laneProvider ?? app.connectorHttpLaneRegistry,
+  });
   const providers = new OidcProviderAdminService(
     app.database,
     app.appConfig,

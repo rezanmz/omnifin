@@ -129,7 +129,10 @@ export const connectorAdminRoutes: FastifyPluginAsync<ConnectorAdminRoutesOption
   app,
   options,
 ) => {
-  const connectors = new ConnectorAdminService(app.database, app.appConfig, options.dependencies);
+  const connectors = new ConnectorAdminService(app.database, app.appConfig, {
+    ...(options.dependencies ?? {}),
+    laneProvider: options.dependencies?.laneProvider ?? app.connectorHttpLaneRegistry,
+  });
 
   app.get(
     "/v1/admin/connectors",

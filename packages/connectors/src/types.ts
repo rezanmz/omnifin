@@ -7,6 +7,7 @@ import type {
 
 import type { HostResolver } from "./security/destination.js";
 import type { ResolvedHostAddress } from "./security/destination.js";
+import type { ConnectorHttpLane } from "./http/connector-http-lane.js";
 
 export interface ConnectorTransportInit {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -44,6 +45,7 @@ export interface ConnectorTargetConfig {
   transport?: ConnectorTransport;
   resolveHost?: HostResolver;
   clock?: ConnectorClock;
+  lane?: ConnectorHttpLane;
 }
 
 export interface ApiKeyConnectorConfig extends ConnectorTargetConfig {

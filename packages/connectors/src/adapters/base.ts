@@ -70,6 +70,7 @@ export abstract class ProbeOnlyAdapter implements ConnectorAdapter {
         : { maxResponseBytes: this.config.maxResponseBytes }),
       ...(this.config.transport === undefined ? {} : { transport: this.config.transport }),
       ...(this.config.resolveHost === undefined ? {} : { resolveHost: this.config.resolveHost }),
+      ...(this.config.lane === undefined ? {} : { lane: this.config.lane }),
     });
     return this.clientInstance;
   }
