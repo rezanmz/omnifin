@@ -331,7 +331,7 @@ describe("SavedTargetService", () => {
     const row = database.sqlite
       .prepare("select encrypted_payload as encryptedPayload from saved_targets")
       .get() as { encryptedPayload: string };
-    expect(row.encryptedPayload).not.toMatch(/The Far Meridian|603/u);
+    expect(row.encryptedPayload).toMatch(/^v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u);
     expect(
       privacyHash("saved_catalog_identity", `tmdb\0movie\0${603}`, appConfig.encryptionKey),
     ).toMatch(/^[A-Za-z0-9_-]{22}$/u);
