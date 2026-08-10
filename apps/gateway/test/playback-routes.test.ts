@@ -1121,6 +1121,262 @@ describe("playback routes", () => {
     }
   });
 
+  it("isolates concurrent A/B playback recovery and revokes only stopped-session assets (#346)", async () => {
+    const {
+      app,
+      headers,
+      negotiate,
+      readPlaybackTarget,
+      referenceId,
+      reportPlaybackEvent,
+      streamPlaybackTarget,
+    } = await harness({ playbackSessionTokens: ["a".repeat(22), "b".repeat(22)] });
+    const playbackAResult = {
+      ...playbackResult(),
+      mediaSourceId: "media-source-a",
+      playSessionId: "upstream-play-session-a",
+      upstreamTarget: {
+        path: `videos/${privateItemId}/a/master.m3u8`,
+        query: "manifest=A",
+      },
+    } satisfies JellyfinPlaybackResult;
+    const playbackBResult = {
+      ...playbackResult(),
+      mediaSourceId: "media-source-b",
+      playSessionId: "upstream-play-session-b",
+      upstreamTarget: {
+        path: `videos/${privateItemId}/b/master.m3u8`,
+        query: "manifest=B",
+      },
+    } satisfies JellyfinPlaybackResult;
+    const segmentBytes = new Uint8Array([0, 0, 0, 24, 109, 111, 111, 102]);
+    const segmentResponse = () => ({
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(segmentBytes);
+          controller.close();
+        },
+      }),
+      headers: new Headers({ "content-type": "video/mp4" }),
+      status: 200 as const,
+    });
+    try {
+      negotiate.mockResolvedValueOnce(playbackAResult).mockResolvedValueOnce(playbackBResult);
+      const createdA = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const playbackA = playbackNegotiationResponseSchema.parse(createdA.json());
+      const manifestBodyA = "#EXTM3U\n#EXTINF:4.000,\n0.m4s?segment=A\n";
+      readPlaybackTarget.mockResolvedValueOnce({
+        body: new TextEncoder().encode(manifestBodyA),
+        headers: new Headers({ "content-type": "application/vnd.apple.mpegurl" }),
+        status: 200,
+      });
+      const manifestA = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: playbackA.streamPath,
+      });
+      expect(manifestA.statusCode, manifestA.body).toBe(200);
+      const assetA = manifestA.body.split("\n").find((line) => line.startsWith("hls/"));
+      expect(assetA).toBeDefined();
+
+      streamPlaybackTarget.mockResolvedValueOnce(segmentResponse());
+      const segmentA = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: `/v1/playback/${playbackA.sessionId}/${assetA}`,
+      });
+      expect(segmentA.statusCode, segmentA.body).toBe(200);
+      expect(segmentA.rawPayload).toEqual(Buffer.from(segmentBytes));
+
+      readPlaybackTarget.mockRejectedValueOnce(new Error("A manifest upstream failure"));
+      const failedManifestA = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: playbackA.streamPath,
+      });
+      expect(failedManifestA.statusCode).toBe(503);
+      expect(apiErrorSchema.parse(failedManifestA.json()).error.code).toBe("playback_unavailable");
+
+      streamPlaybackTarget.mockRejectedValueOnce(new Error("A segment upstream failure"));
+      const failedSegmentA = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: `/v1/playback/${playbackA.sessionId}/${assetA}`,
+      });
+      expect(failedSegmentA.statusCode).toBe(503);
+      expect(apiErrorSchema.parse(failedSegmentA.json()).error.code).toBe("playback_unavailable");
+
+      const createdB = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const playbackB = playbackNegotiationResponseSchema.parse(createdB.json());
+      expect(playbackB.sessionId).not.toBe(playbackA.sessionId);
+      expect(playbackA.sessionId).toBe(`playback_${"a".repeat(22)}`);
+      expect(playbackB.sessionId).toBe(`playback_${"b".repeat(22)}`);
+
+      readPlaybackTarget.mockResolvedValueOnce({
+        body: new TextEncoder().encode("#EXTM3U\n#EXTINF:4.000,\n0.m4s?segment=B\n"),
+        headers: new Headers({ "content-type": "application/vnd.apple.mpegurl" }),
+        status: 200,
+      });
+      const manifestB = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: playbackB.streamPath,
+      });
+      expect(manifestB.statusCode, manifestB.body).toBe(200);
+      const assetB = manifestB.body.split("\n").find((line) => line.startsWith("hls/"));
+      expect(assetB).toBeDefined();
+      expect(assetB).not.toBe(assetA);
+
+      streamPlaybackTarget.mockResolvedValueOnce(segmentResponse());
+      const segmentB = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: `/v1/playback/${playbackB.sessionId}/${assetB}`,
+      });
+      expect(segmentB.statusCode, segmentB.body).toBe(200);
+      expect(segmentB.rawPayload).toEqual(Buffer.from(segmentBytes));
+
+      const encryptedPayloads = app.database.sqlite
+        .prepare(
+          "select id, encrypted_payload as encryptedPayload from playback_sessions where id in (?, ?)",
+        )
+        .all(playbackA.sessionId, playbackB.sessionId) as Array<{
+        encryptedPayload: string;
+        id: string;
+      }>;
+      const payloads = new Map(
+        encryptedPayloads.map(({ encryptedPayload, id }) => [
+          id,
+          JSON.parse(
+            new EnvelopeCipher(testConfig().encryptionKey).decrypt(
+              encryptedPayload,
+              `playback_session:jellyfin:${id}`,
+            ),
+          ),
+        ]),
+      );
+      expect(payloads.get(playbackA.sessionId)).toMatchObject({
+        mediaSourceId: "media-source-a",
+        playSessionId: "upstream-play-session-a",
+        upstreamTarget: playbackAResult.upstreamTarget,
+      });
+      expect(payloads.get(playbackB.sessionId)).toMatchObject({
+        mediaSourceId: "media-source-b",
+        playSessionId: "upstream-play-session-b",
+        upstreamTarget: playbackBResult.upstreamTarget,
+      });
+      expect(readPlaybackTarget).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ target: playbackAResult.upstreamTarget }),
+      );
+      expect(readPlaybackTarget).toHaveBeenNthCalledWith(
+        3,
+        expect.objectContaining({ target: playbackBResult.upstreamTarget }),
+      );
+      expect(streamPlaybackTarget).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          target: { path: `videos/${privateItemId}/a/0.m4s`, query: "segment=A" },
+        }),
+      );
+      expect(streamPlaybackTarget).toHaveBeenNthCalledWith(
+        3,
+        expect.objectContaining({
+          target: { path: `videos/${privateItemId}/b/0.m4s`, query: "segment=B" },
+        }),
+      );
+
+      expect(
+        app.database.sqlite
+          .prepare(
+            "select count(*) as count from playback_asset_handles where playback_session_id = ?",
+          )
+          .get(playbackA.sessionId),
+      ).toEqual({ count: 1 });
+      expect(
+        app.database.sqlite
+          .prepare(
+            "select count(*) as count from playback_asset_handles where playback_session_id = ?",
+          )
+          .get(playbackB.sessionId),
+      ).toEqual({ count: 1 });
+
+      const stoppedA = await app.inject({
+        headers,
+        method: "POST",
+        payload: { event: "stopped", positionSeconds: 1_210 },
+        url: `/v1/playback/${playbackA.sessionId}/progress`,
+      });
+      expect(stoppedA.statusCode, stoppedA.body).toBe(200);
+      expect((reportPlaybackEvent.mock.calls[0] as unknown[] | undefined)?.[0]).toMatchObject({
+        event: "stopped",
+        session: {
+          mediaSourceId: "media-source-a",
+          playSessionId: "upstream-play-session-a",
+        },
+      });
+      expect(
+        app.database.sqlite
+          .prepare("select state from playback_sessions where id = ?")
+          .get(playbackA.sessionId),
+      ).toEqual({ state: "stopped" });
+      expect(
+        app.database.sqlite
+          .prepare("select state from playback_sessions where id = ?")
+          .get(playbackB.sessionId),
+      ).toEqual({ state: "negotiated" });
+      expect(
+        app.database.sqlite
+          .prepare(
+            "select count(*) as count from playback_asset_handles where playback_session_id = ?",
+          )
+          .get(playbackA.sessionId),
+      ).toEqual({ count: 0 });
+      expect(
+        app.database.sqlite
+          .prepare(
+            "select count(*) as count from playback_asset_handles where playback_session_id = ?",
+          )
+          .get(playbackB.sessionId),
+      ).toEqual({ count: 1 });
+
+      const revokedA = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: `/v1/playback/${playbackA.sessionId}/${assetA}`,
+      });
+      expect(revokedA.statusCode).toBe(404);
+      expect(apiErrorSchema.parse(revokedA.json()).error.code).toBe("playback_session_not_found");
+
+      streamPlaybackTarget.mockResolvedValueOnce(segmentResponse());
+      const stillUsableB = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: `/v1/playback/${playbackB.sessionId}/${assetB}`,
+      });
+      expect(stillUsableB.statusCode, stillUsableB.body).toBe(200);
+      expect(stillUsableB.rawPayload).toEqual(Buffer.from(segmentBytes));
+      expect(streamPlaybackTarget).toHaveBeenNthCalledWith(
+        4,
+        expect.objectContaining({
+          target: { path: `videos/${privateItemId}/b/0.m4s`, query: "segment=B" },
+        }),
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
   it("cascades HLS handle cleanup when the Jellyfin identity is unlinked", async () => {
     const { app, headers, readPlaybackTarget, referenceId } = await harness();
     try {

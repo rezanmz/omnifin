@@ -65,6 +65,7 @@ export interface PlayerHandle {
   dispose(): void;
   error(): { code?: number; message?: string } | null;
   levels(): HlsLevelSummary[];
+  on(event: "error", listener: (event: PlayerErrorEvent) => void): void;
   on(event: string, listener: (...args: unknown[]) => void): void;
   one(event: string, listener: () => void): void;
   play(): Promise<void>;
@@ -76,12 +77,81 @@ export interface PlayerHandle {
 
 type HlsFailureRecovery = "media_recovery" | "network_retry" | "stopped";
 type HlsFailureStage = "engine" | "fragment" | "manifest" | "media" | "playlist";
+export type HlsResourceLoadStage =
+  "audio_track" | "fragment" | "key" | "level" | "manifest" | "subtitle_track";
+
+/** A privacy-safe signal for a network failure that exhausted same-source retries. */
+export interface HlsSessionRecoverySignal {
+  kind: "hls_network_resource_load_exhausted";
+  sessionRecoveryEligible: true;
+  stage: HlsResourceLoadStage;
+  status: number | null;
+}
+
+export interface PlayerErrorEvent {
+  error: { code?: number; message?: string } | null;
+  recovery: HlsSessionRecoverySignal | null;
+}
 
 interface HlsFailureData {
   details?: unknown;
   fatal?: unknown;
   response?: { code?: unknown } | null;
   type?: unknown;
+}
+
+const HLS_RESOURCE_LOAD_STAGES = new Map<string, HlsResourceLoadStage>([
+  ["audiotrackloaderror", "audio_track"],
+  ["audiotrackloadtimeout", "audio_track"],
+  ["fragloaderror", "fragment"],
+  ["fragloadtimeout", "fragment"],
+  ["keyloaderror", "key"],
+  ["keyloadtimeout", "key"],
+  ["levelloaderror", "level"],
+  ["levelloadtimeout", "level"],
+  ["manifestloaderror", "manifest"],
+  ["manifestloadtimeout", "manifest"],
+  ["subtitletrackloaderror", "subtitle_track"],
+  ["subtitletrackloadtimeout", "subtitle_track"],
+]);
+
+function hlsResourceLoadStage(details: unknown): HlsResourceLoadStage | null {
+  if (typeof details !== "string") return null;
+  return HLS_RESOURCE_LOAD_STAGES.get(details.toLowerCase()) ?? null;
+}
+
+function hlsResponseStatus(data: HlsFailureData): number | null | "invalid" {
+  const code = data.response?.code;
+  if (code === undefined || code === null) return null;
+  return typeof code === "number" && Number.isInteger(code) && code >= 0 && code <= 599
+    ? code
+    : "invalid";
+}
+
+function transientHlsStatus(status: number | null | "invalid") {
+  return (
+    status !== "invalid" &&
+    (status === null ||
+      status === 0 ||
+      status === 404 ||
+      status === 408 ||
+      status === 410 ||
+      status >= 500)
+  );
+}
+
+function exhaustedHlsSessionRecoverySignal(data: HlsFailureData): HlsSessionRecoverySignal | null {
+  const stage = hlsResourceLoadStage(data.details);
+  if (stage === null || data.fatal !== true) return null;
+  const status = hlsResponseStatus(data);
+  return status !== "invalid" && transientHlsStatus(status)
+    ? {
+        kind: "hls_network_resource_load_exhausted",
+        sessionRecoveryEligible: true,
+        stage,
+        status,
+      }
+    : null;
 }
 
 const SAFE_HLS_DIAGNOSTIC_VALUE = /^[A-Za-z][A-Za-z0-9]{0,63}$/u;
@@ -173,7 +243,12 @@ export function createHlsPlayerHandle(video: HTMLVideoElement, Hls: typeof HlsTy
   let capturedAudioTracks: HlsAudioTrackSummary[] = [];
   hls.on(Hls.Events.ERROR, (_event, data) => {
     if (!data.fatal) return;
-    if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkRecoveries < 2) {
+    const resourceLoadStage = hlsResourceLoadStage(data.details);
+    const isEligibleNetworkFailure =
+      data.type === Hls.ErrorTypes.NETWORK_ERROR &&
+      resourceLoadStage !== null &&
+      transientHlsStatus(hlsResponseStatus(data));
+    if (isEligibleNetworkFailure && networkRecoveries < 2) {
       networkRecoveries += 1;
       recordHlsFailure(data, "network_retry");
       // Deviation from the reference player (which set buffering state here):
@@ -190,11 +265,15 @@ export function createHlsPlayerHandle(video: HTMLVideoElement, Hls: typeof HlsTy
       return;
     }
     recordHlsFailure(data, "stopped");
+    const sessionRecoverySignal =
+      data.type === Hls.ErrorTypes.NETWORK_ERROR && networkRecoveries >= 2
+        ? exhaustedHlsSessionRecoverySignal(data)
+        : null;
     lastError = {
       ...(typeof data.response?.code === "number" ? { code: data.response.code } : {}),
       ...(typeof data.details === "string" ? { message: data.details } : {}),
     };
-    emitter.emit("error");
+    emitter.emit("error", { error: lastError, recovery: sessionRecoverySignal });
   });
   hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
     capturedLevels = (data.levels ?? []).map((level, index) => ({
@@ -240,7 +319,9 @@ export function createHlsPlayerHandle(video: HTMLVideoElement, Hls: typeof HlsTy
     levels() {
       return capturedLevels;
     },
-    on: emitter.on,
+    on(event, listener) {
+      emitter.on(event, listener as EventListener);
+    },
     one: emitter.one,
     play() {
       return video.play();
@@ -282,7 +363,7 @@ export function createNativeHlsPlayerHandle(video: HTMLVideoElement): PlayerHand
     lastError = mediaError
       ? { code: mediaError.code, message: mediaError.message }
       : { code: 4, message: "The native HLS stream could not be played." };
-    emitter.emit("error");
+    emitter.emit("error", { error: lastError, recovery: null });
   };
   video.addEventListener("error", onVideoError);
   return {
@@ -311,7 +392,9 @@ export function createNativeHlsPlayerHandle(video: HTMLVideoElement): PlayerHand
     levels() {
       return [];
     },
-    on: emitter.on,
+    on(event, listener) {
+      emitter.on(event, listener as EventListener);
+    },
     one: emitter.one,
     play() {
       return video.play();

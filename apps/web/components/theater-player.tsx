@@ -34,6 +34,8 @@ import {
   matchEngineAudioTrack,
   type HlsAudioTrackSummary,
   type HlsLevelSummary,
+  type HlsResourceLoadStage,
+  type HlsSessionRecoverySignal,
   type PlayerHandle,
 } from "../lib/player-engine";
 import { resolvePlaybackPreferences } from "../lib/playback-preference-resolution";
@@ -111,6 +113,22 @@ interface PlaybackPreferences {
   subtitleStreamIndex: number | null;
 }
 
+interface ReplacementTransaction {
+  automaticRecovery: boolean;
+  candidate: PreparedPlayback | null;
+  candidateAttached: boolean;
+  candidatePlayer: PlayerHandle | null;
+  candidatePosition: number;
+  generation: number;
+  previous: PreparedPlayback;
+  previousEstablishedSessionId: string | null;
+  previousPosition: number;
+  previousPreferences: PlaybackPreferences;
+  previousSourceReferenceId: string | null;
+  previousRestorePosition: number | null;
+  resume: boolean;
+}
+
 const QUALITY_PRESETS = {
   auto: { bitrate: 80_000_000, label: "Auto", mode: "auto" },
   original: { bitrate: 200_000_000, label: "Original quality", mode: "auto" },
@@ -163,6 +181,40 @@ function recordMediaFailure(data: MediaFailureData, recovery: MediaFailureRecove
       recovery,
       source: safeMediaDiagnosticValue(data.source),
     }),
+  );
+}
+
+type RecoveryDecision = "coalesced" | "skipped" | "started";
+type RecoveryOutcome = "cancelled" | "committed" | "failed";
+interface RecoveryOperation {
+  operation: string;
+  stage: HlsResourceLoadStage;
+  status: number | null;
+  terminal: boolean;
+}
+
+function recordRecoveryDiagnostic(
+  decision?: RecoveryDecision,
+  outcome?: RecoveryOutcome,
+  operation?: RecoveryOperation,
+) {
+  console.warn(
+    JSON.stringify({
+      decision: decision ?? null,
+      event: "hls_session_recovery",
+      operation: operation?.operation ?? null,
+      outcome: outcome ?? null,
+      stage: operation?.stage ?? null,
+      status: operation?.status ?? null,
+    }),
+  );
+}
+
+function isHlsSessionRecoverySignal(value: unknown): value is HlsSessionRecoverySignal {
+  if (typeof value !== "object" || value === null) return false;
+  const signal = value as Partial<HlsSessionRecoverySignal>;
+  return (
+    signal.kind === "hls_network_resource_load_exhausted" && signal.sessionRecoveryEligible === true
   );
 }
 
@@ -244,6 +296,7 @@ export function TheaterPlayer({
   const reportPipelineTailsReference = useRef(new Map<string, Promise<void>>());
   const reportStatesReference = useRef(new Map<string, PlaybackReportState>());
   const mountedReference = useRef(true);
+  const closedReference = useRef(false);
   const preparedReference = useRef<PreparedPlayback | null>(null);
   const preferencesReference = useRef<PlaybackPreferences>({
     audioStreamIndex: null,
@@ -253,13 +306,32 @@ export function TheaterPlayer({
   const replacementControllerReference = useRef<AbortController | null>(null);
   const replacementGenerationReference = useRef(0);
   const replacementReference = useRef<{
+    automaticRecovery: boolean;
+    candidate: PreparedPlayback | null;
+    candidateAttached: boolean;
+    candidatePlayer: PlayerHandle | null;
+    candidatePosition: number;
     generation: number;
     previous: PreparedPlayback;
+    previousEstablishedSessionId: string | null;
     previousPosition: number;
     previousPreferences: PlaybackPreferences;
     previousSourceReferenceId: string | null;
+    previousRestorePosition: number | null;
     resume: boolean;
   } | null>(null);
+  const automaticRecoveryBudgetReference = useRef(true);
+  const establishedSessionReference = useRef<string | null>(null);
+  const recoveryCaptureReference = useRef<{
+    position: number;
+    preferences: PlaybackPreferences;
+    previous: PreparedPlayback;
+    resume: boolean;
+    sourceReferenceId: string | null;
+  } | null>(null);
+  const recoveryOperationReference = useRef<RecoveryOperation | null>(null);
+  const requestedSourceReferenceIdReference = useRef(media.sourceReferenceId ?? null);
+  const sourceReferenceIdReference = useRef(media.sourceReferenceId ?? null);
   const restorePositionReference = useRef<number | null>(null);
   const startWhenReadyReference = useRef(startWhenReady);
   const lastProgressReference = useRef(0);
@@ -267,6 +339,7 @@ export function TheaterPlayer({
   const controlsTimeoutReference = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clickTimerReference = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestedPositionReference = useRef(media.positionSeconds);
+  const playingReference = useRef(false);
   const restoreSubtitleFocusReference = useRef(false);
   const subtitleTriggerReference = useRef<HTMLButtonElement>(null);
   const subtitleTracksByIndexReference = useRef(new Map<number, TextTrack | null>());
@@ -275,6 +348,7 @@ export function TheaterPlayer({
   const titleId = useId();
   const descriptionId = useId();
   const [attempt, setAttempt] = useState(0);
+  const [attachmentRevision, setAttachmentRevision] = useState(0);
   const [preferences, setPreferences] = useState<PlaybackPreferences>({
     audioStreamIndex: null,
     quality: "original",
@@ -302,6 +376,7 @@ export function TheaterPlayer({
   const [issueMessage, setIssueMessage] = useState("");
   const [currentTime, setCurrentTime] = useState(media.positionSeconds);
   const [duration, setDuration] = useState(0);
+  const durationReference = useRef(0);
   const [muted, setMuted] = useState(false);
   const [volume, setVolume] = useState(1);
   const [syncInterrupted, setSyncInterrupted] = useState(false);
@@ -312,8 +387,17 @@ export function TheaterPlayer({
   const [engineAudioTracks, setEngineAudioTracks] = useState<HlsAudioTrackSummary[]>([]);
   const qualityMessageTimeoutReference = useRef<ReturnType<typeof setTimeout> | null>(null);
   const audioSwitchTimeoutReference = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const beginAutomaticRecoveryReference = useRef<(signal: HlsSessionRecoverySignal) => boolean>(
+    () => false,
+  );
 
   const close = useCallback(() => {
+    closedReference.current = true;
+    replacementControllerReference.current?.abort();
+    replacementGenerationReference.current += 1;
+    const player = playerReference.current;
+    playerReference.current = null;
+    if (player) player.dispose();
     const dialog = dialogReference.current;
     if (dialog?.open && typeof dialog.close === "function") dialog.close();
     else onClose();
@@ -326,6 +410,14 @@ export function TheaterPlayer({
   useEffect(() => {
     preferencesReference.current = preferences;
   }, [preferences]);
+
+  useEffect(() => {
+    sourceReferenceIdReference.current = sourceReferenceId;
+  }, [sourceReferenceId]);
+
+  useEffect(() => {
+    durationReference.current = duration;
+  }, [duration]);
 
   const queueSessionReport = useCallback(
     (
@@ -391,21 +483,52 @@ export function TheaterPlayer({
     [queueSessionReport],
   );
 
-  const rollbackReplacement = useCallback(
+  const recordRecoveryOutcome = useCallback((outcome: RecoveryOutcome) => {
+    const operation = recoveryOperationReference.current;
+    if (!operation || operation.terminal) return;
+    operation.terminal = true;
+    recordRecoveryDiagnostic(undefined, outcome, operation);
+    recoveryOperationReference.current = null;
+  }, []);
+
+  const failReplacement = useCallback(
     (reason: string) => {
       const replacement = replacementReference.current;
       if (!replacement) return false;
       const failed = preparedReference.current;
       replacementReference.current = null;
-      if (failed && failed.session.sessionId !== replacement.previous.session.sessionId) {
-        stopSession(failed, failed.session.positionSeconds);
+      const failedIsCandidate =
+        failed !== null && failed.session.sessionId !== replacement.previous.session.sessionId;
+      if (failedIsCandidate) stopSession(failed, replacement.candidatePosition);
+      const player = playerReference.current;
+      playerReference.current = null;
+      if (player) player.dispose();
+      if (replacement.automaticRecovery) {
+        stopSession(replacement.previous, replacement.previousPosition);
+        preparedReference.current = null;
+        setPrepared(null);
+        restorePositionReference.current = replacement.previousPosition;
+        requestedPositionReference.current = replacement.previousPosition;
+        startWhenReadyReference.current = replacement.resume;
+        setPlaying(false);
+        setSwitching(false);
+        setBuffering(false);
+        setStatus("error");
+        setMessage("The stream stopped responding. Your saved progress is safe.");
+        setTransitionMessage("");
+        recordRecoveryOutcome("failed");
+        return true;
       }
       preferencesReference.current = replacement.previousPreferences;
       preparedReference.current = replacement.previous;
-      restorePositionReference.current = replacement.previousPosition;
+      establishedSessionReference.current = replacement.previousEstablishedSessionId;
+      restorePositionReference.current =
+        replacement.previousRestorePosition ?? replacement.previousPosition;
       setPreferences(replacement.previousPreferences);
       setSourceReferenceId(replacement.previousSourceReferenceId);
+      requestedSourceReferenceIdReference.current = replacement.previousSourceReferenceId;
       setPrepared(replacement.previous);
+      setAttachmentRevision((value) => value + 1);
       startWhenReadyReference.current = replacement.resume;
       setSwitching(false);
       setBuffering(false);
@@ -414,7 +537,12 @@ export function TheaterPlayer({
       setTransitionMessage(reason);
       return true;
     },
-    [stopSession],
+    [recordRecoveryOutcome, stopSession],
+  );
+
+  const rollbackReplacement = useCallback(
+    (reason: string) => failReplacement(reason),
+    [failReplacement],
   );
 
   const queueReport = useCallback(
@@ -448,17 +576,77 @@ export function TheaterPlayer({
       nextPreferences: PlaybackPreferences,
       nextPosition: number,
       nextMessage: string,
-      nextSourceReferenceId = sourceReferenceId,
+      nextSourceReferenceId = sourceReferenceIdReference.current,
+      options: { automaticRecovery?: boolean; position?: number; resume?: boolean } = {},
     ) => {
       const active = preparedReference.current;
       if (!active) return;
-      const previousPosition = absolutePosition();
-      const safePosition = Math.min(duration, Math.max(0, Math.floor(nextPosition)));
+      const previousReplacement = replacementReference.current;
+      if (previousReplacement) {
+        if (previousReplacement.automaticRecovery) {
+          recordRecoveryOutcome("cancelled");
+          recoveryCaptureReference.current = null;
+        }
+        replacementReference.current = null;
+        if (
+          previousReplacement.automaticRecovery &&
+          previousReplacement.candidate &&
+          previousReplacement.candidate.session.sessionId === active.session.sessionId
+        ) {
+          stopSession(previousReplacement.previous, previousReplacement.previousPosition);
+          recoveryCaptureReference.current = null;
+        }
+        if (
+          previousReplacement.candidate &&
+          previousReplacement.candidate.session.sessionId !== active.session.sessionId
+        ) {
+          stopSession(
+            previousReplacement.candidate,
+            previousReplacement.candidate.session.positionSeconds,
+          );
+        }
+      }
+      const previousPosition = options.position ?? absolutePositionReference.current();
+      const previousEstablishedSessionId =
+        establishedSessionReference.current === active.session.sessionId
+          ? active.session.sessionId
+          : null;
+      const previousRestorePosition = restorePositionReference.current;
+      const safePosition = Math.min(
+        durationReference.current > 0 ? durationReference.current : Number.POSITIVE_INFINITY,
+        Math.max(0, Math.floor(nextPosition)),
+      );
       const generation = replacementGenerationReference.current + 1;
       replacementGenerationReference.current = generation;
       replacementControllerReference.current?.abort();
       const controller = new AbortController();
       replacementControllerReference.current = controller;
+      const automaticRecovery = options.automaticRecovery === true;
+      replacementReference.current = {
+        automaticRecovery,
+        candidate: null,
+        candidateAttached: false,
+        candidatePlayer: null,
+        candidatePosition: safePosition,
+        generation,
+        previous: active,
+        previousEstablishedSessionId,
+        previousPosition,
+        previousPreferences: preferencesReference.current,
+        previousSourceReferenceId: sourceReferenceIdReference.current,
+        previousRestorePosition,
+        resume: options.resume ?? playingReference.current,
+      } satisfies ReplacementTransaction;
+      establishedSessionReference.current = null;
+      restorePositionReference.current = safePosition;
+      if (automaticRecovery) {
+        const player = playerReference.current;
+        playerReference.current = null;
+        if (player) player.dispose();
+        setPlaying(false);
+        setStatus("preparing");
+        setMessage(nextMessage);
+      }
       setSwitching(true);
       setTransitionMessage(nextMessage);
       setSettingsOpen(false);
@@ -473,20 +661,20 @@ export function TheaterPlayer({
           stopSession(result, safePosition);
           return;
         }
-        replacementReference.current = {
-          generation,
-          previous: active,
-          previousPosition,
-          previousPreferences: preferencesReference.current,
-          previousSourceReferenceId: sourceReferenceId,
-          resume: playing,
-        };
+        const replacement = replacementReference.current;
+        if (!replacement || replacement.generation !== generation) {
+          stopSession(result, safePosition);
+          return;
+        }
+        replacement.candidate = result;
         preferencesReference.current = nextPreferences;
+        requestedSourceReferenceIdReference.current = nextSourceReferenceId;
         preparedReference.current = result;
-        startWhenReadyReference.current = playing;
+        startWhenReadyReference.current = options.resume ?? playingReference.current;
         setPreferences(nextPreferences);
         setSourceReferenceId(nextSourceReferenceId);
         setPrepared(result);
+        setAttachmentRevision((value) => value + 1);
         setPlaying(false);
         setBuffering(false);
         setCurrentTime(safePosition);
@@ -501,11 +689,131 @@ export function TheaterPlayer({
         ) {
           return;
         }
-        setSwitching(false);
-        setTransitionMessage("That change could not be applied. Your current stream is unchanged.");
+        failReplacement(
+          automaticRecovery
+            ? "The stream could not be recovered."
+            : "That change could not be applied. Your current stream is unchanged.",
+        );
       }
     },
-    [absolutePosition, client, duration, media.id, playing, sourceReferenceId, stopSession],
+    [client, failReplacement, media.id, recordRecoveryOutcome, stopSession],
+  );
+
+  const beginAutomaticRecovery = useCallback(
+    (signal: HlsSessionRecoverySignal) => {
+      if (!isHlsSessionRecoverySignal(signal)) {
+        recordRecoveryDiagnostic("skipped");
+        return false;
+      }
+      if (!mountedReference.current || closedReference.current) {
+        recordRecoveryDiagnostic("skipped", undefined, {
+          operation: "recovery_skipped",
+          stage: signal.stage,
+          status: signal.status,
+          terminal: true,
+        });
+        return false;
+      }
+      const active = preparedReference.current;
+      if (replacementReference.current !== null) {
+        recordRecoveryDiagnostic(
+          "coalesced",
+          undefined,
+          recoveryOperationReference.current ?? undefined,
+        );
+        return false;
+      }
+      if (
+        !active ||
+        establishedSessionReference.current !== active.session.sessionId ||
+        !automaticRecoveryBudgetReference.current
+      ) {
+        recordRecoveryDiagnostic("skipped", undefined, {
+          operation: "recovery_skipped",
+          stage: signal.stage,
+          status: signal.status,
+          terminal: true,
+        });
+        return false;
+      }
+      automaticRecoveryBudgetReference.current = false;
+      recoveryOperationReference.current = {
+        operation: `recovery_${replacementGenerationReference.current + 1}`,
+        stage: signal.stage,
+        status: signal.status,
+        terminal: false,
+      };
+      recordRecoveryDiagnostic("started", undefined, recoveryOperationReference.current);
+      const position = absolutePositionReference.current();
+      const capturedPreferences = preferencesReference.current;
+      const resume = playingReference.current;
+      const capturedSourceReferenceId = sourceReferenceIdReference.current;
+      recoveryCaptureReference.current = {
+        position,
+        preferences: capturedPreferences,
+        previous: active,
+        resume,
+        sourceReferenceId: capturedSourceReferenceId,
+      };
+      void replacePlayback(
+        capturedPreferences,
+        position,
+        "Recovering your stream…",
+        capturedSourceReferenceId,
+        { automaticRecovery: true, position, resume },
+      );
+      return true;
+    },
+    [replacePlayback],
+  );
+
+  useEffect(() => {
+    beginAutomaticRecoveryReference.current = beginAutomaticRecovery;
+  }, [beginAutomaticRecovery]);
+
+  const commitCanPlay = useCallback(
+    (video: HTMLVideoElement) => {
+      if (!mountedReference.current || closedReference.current) return;
+      const active = preparedReference.current;
+      if (!active) return;
+      const replacement = replacementReference.current;
+      if (
+        replacement &&
+        (replacement.candidate === null ||
+          replacement.candidate.session.sessionId !== active.session.sessionId ||
+          !replacement.candidateAttached ||
+          replacement.candidatePlayer !== playerReference.current)
+      ) {
+        return;
+      }
+      const restorePosition = restorePositionReference.current;
+      if (restorePosition !== null) {
+        video.currentTime =
+          active.session.delivery === "hls"
+            ? Math.max(0, restorePosition - active.session.positionSeconds)
+            : restorePosition;
+        setCurrentTime(restorePosition);
+        restorePositionReference.current = null;
+      }
+      if (replacement) {
+        replacementReference.current = null;
+        establishedSessionReference.current = active.session.sessionId;
+        recoveryCaptureReference.current = null;
+        stopSession(replacement.previous, replacement.previousPosition);
+        setSwitching(false);
+        setTransitionMessage("Playback changed without losing your place.");
+        if (replacement.automaticRecovery) recordRecoveryOutcome("committed");
+      } else {
+        establishedSessionReference.current = active.session.sessionId;
+      }
+      setStatus("ready");
+      if (!startWhenReadyReference.current) return;
+      startWhenReadyReference.current = false;
+      void video.play().catch(() => {
+        setTransitionMessage("Ready to play — your browser needs one more tap to start.");
+      });
+    },
+    [recordRecoveryOutcome, stopSession],
   );
 
   const revealControls = useCallback(() => {
@@ -615,7 +923,7 @@ export function TheaterPlayer({
         preparationOptions(
           preferencesReference.current,
           preparedReference.current?.session,
-          media.sourceReferenceId,
+          requestedSourceReferenceIdReference.current,
         ),
       )
       .then((result) => {
@@ -625,6 +933,7 @@ export function TheaterPlayer({
         }
         preparedReference.current = result;
         setPrepared(result);
+        setAttachmentRevision((value) => value + 1);
         setDuration(result.session.media.durationSeconds);
         setCurrentTime(result.session.positionSeconds);
         setSeekPreview(null);
@@ -709,12 +1018,43 @@ export function TheaterPlayer({
     }
   }, [accountPreferences, absolutePosition, playing, prepared, replacePlayback]);
 
+  const attachmentSessionId = prepared?.session.sessionId;
+  const attachmentStreamPath = prepared?.session.streamPath;
+
   useEffect(() => {
-    if (!prepared) return;
+    const preparedForAttachment = preparedReference.current;
+    if (!preparedForAttachment) return;
+    const prepared = preparedForAttachment;
     const video = videoReference.current;
     if (!video) return;
     let cancelled = false;
+    const preparedSessionId = prepared.session.sessionId;
     const replacementGeneration = replacementReference.current?.generation;
+    const isAutomaticCandidate = () => {
+      const replacement = replacementReference.current;
+      return (
+        replacement?.automaticRecovery === true &&
+        replacement.generation === replacementGeneration &&
+        replacement.candidate?.session.sessionId === preparedSessionId
+      );
+    };
+    const isCurrent = () =>
+      mountedReference.current &&
+      !closedReference.current &&
+      !cancelled &&
+      preparedReference.current?.session.sessionId === preparedSessionId &&
+      (replacementGeneration === undefined ||
+        replacementReference.current?.generation === replacementGeneration);
+    const markCandidateAttached = () => {
+      const replacement = replacementReference.current;
+      if (
+        replacement &&
+        replacement.generation === replacementGeneration &&
+        replacement.candidate?.session.sessionId === preparedSessionId
+      ) {
+        replacement.candidateAttached = true;
+      }
+    };
     const readinessTimeout =
       replacementGeneration === undefined
         ? null
@@ -761,7 +1101,13 @@ export function TheaterPlayer({
           null);
       selectSubtitleTrack(preferredIndex);
     };
+    const handleCanPlay = () => {
+      if (!isCurrent()) return;
+      commitCanPlay(video);
+    };
+    video.addEventListener("canplay", handleCanPlay);
     const attach = async () => {
+      if (!isCurrent()) return;
       if (prepared.session.delivery === "direct") {
         const activePlayer = playerReference.current;
         if (activePlayer) {
@@ -778,14 +1124,29 @@ export function TheaterPlayer({
         setEngineCurrentLevel(-1);
         setEngineAudioTracks([]);
         video.src = source;
-        setStatus("ready");
-        setMessage("Ready to resume");
+        markCandidateAttached();
+        if (!isAutomaticCandidate()) {
+          setStatus("ready");
+          setMessage("Ready to resume");
+        }
         return;
       }
       let player = playerReference.current;
+      const candidate = replacementReference.current;
+      if (
+        candidate !== null &&
+        candidate.generation === replacementGeneration &&
+        candidate.candidate?.session.sessionId === preparedSessionId
+      ) {
+        if (player) {
+          playerReference.current = null;
+          player.dispose();
+        }
+        player = null;
+      }
       if (!player) {
         const hlsModule = await import("hls.js");
-        if (cancelled) return;
+        if (!isCurrent()) return;
         const Hls = hlsModule.default;
         if (Hls.isSupported()) {
           player = createHlsPlayerHandle(video, Hls);
@@ -803,8 +1164,38 @@ export function TheaterPlayer({
           return;
         }
         playerReference.current = player;
-        player.on("error", () => {
-          const currentError = player!.error();
+        const currentReplacement = replacementReference.current;
+        if (
+          currentReplacement !== null &&
+          currentReplacement.generation === replacementGeneration &&
+          currentReplacement.candidate?.session.sessionId === preparedSessionId
+        ) {
+          currentReplacement.candidatePlayer = player;
+        }
+        const boundPlayer = player;
+        player.on("error", ({ error: currentError, recovery: recoverySignal }) => {
+          if (
+            closedReference.current ||
+            !mountedReference.current ||
+            playerReference.current !== boundPlayer
+          ) {
+            return;
+          }
+          if (isHlsSessionRecoverySignal(recoverySignal)) {
+            const established =
+              establishedSessionReference.current === preparedReference.current?.session.sessionId;
+            if (established) {
+              if (beginAutomaticRecoveryReference.current(recoverySignal)) return;
+              if (replacementReference.current !== null) return;
+            } else {
+              recordRecoveryDiagnostic("skipped", undefined, {
+                operation: "recovery_skipped",
+                stage: recoverySignal.stage,
+                status: recoverySignal.status,
+                terminal: true,
+              });
+            }
+          }
           recordMediaFailure(
             {
               code: currentError?.code,
@@ -823,7 +1214,8 @@ export function TheaterPlayer({
           }
         });
         player.on("ready", () => {
-          if (cancelled) return;
+          if (!isCurrent()) return;
+          if (isAutomaticCandidate()) return;
           clearTracks();
           attachSubtitles();
           setStatus("ready");
@@ -835,15 +1227,31 @@ export function TheaterPlayer({
           });
         });
         player.on("levelchanged", () => {
+          if (
+            closedReference.current ||
+            !mountedReference.current ||
+            playerReference.current !== boundPlayer
+          ) {
+            return;
+          }
           setEngineLevels(player!.levels());
           setEngineCurrentLevel(player!.currentLevel());
         });
         player.on("audiotrackchanged", () => {
+          if (
+            closedReference.current ||
+            !mountedReference.current ||
+            playerReference.current !== boundPlayer
+          ) {
+            return;
+          }
           setEngineAudioTracks(player!.audioTracks());
         });
       }
+      if (!isCurrent()) return;
       clearTracks();
       attachSubtitles();
+      markCandidateAttached();
       player.src({
         src: source,
         type: "application/x-mpegURL",
@@ -851,7 +1259,7 @@ export function TheaterPlayer({
     };
     void attach().catch(() => {
       if (
-        !cancelled &&
+        isCurrent() &&
         !rollbackReplacement(
           "The new stream could not be attached. The previous stream was restored.",
         )
@@ -862,6 +1270,7 @@ export function TheaterPlayer({
     });
     return () => {
       cancelled = true;
+      video.removeEventListener("canplay", handleCanPlay);
       if (readinessTimeout) clearTimeout(readinessTimeout);
       clearTracks();
       // While a replacement is in flight the video element keeps the previous
@@ -873,7 +1282,14 @@ export function TheaterPlayer({
         video.load();
       }
     };
-  }, [prepared, rollbackReplacement, selectSubtitleTrack]);
+  }, [
+    attachmentRevision,
+    commitCanPlay,
+    attachmentSessionId,
+    attachmentStreamPath,
+    rollbackReplacement,
+    selectSubtitleTrack,
+  ]);
 
   useEffect(() => {
     if (controlsTimeoutReference.current) clearTimeout(controlsTimeoutReference.current);
@@ -901,11 +1317,22 @@ export function TheaterPlayer({
       const active = preparedReference.current;
       if (active) stopSession(active, absolutePositionReference.current(), true);
       const replacement = replacementReference.current;
-      if (replacement && replacement.previous.session.sessionId !== active?.session.sessionId) {
-        stopSession(replacement.previous, absolutePositionReference.current(), true);
+      if (
+        replacement?.candidate &&
+        replacement.candidate.session.sessionId !== active?.session.sessionId
+      ) {
+        stopSession(replacement.candidate, replacement.candidatePosition, true);
       }
+      if (replacement && replacement.previous.session.sessionId !== active?.session.sessionId) {
+        stopSession(replacement.previous, replacement.previousPosition, true);
+      }
+      const recovery = recoveryCaptureReference.current;
+      if (recovery && recovery.previous.session.sessionId !== active?.session.sessionId) {
+        stopSession(recovery.previous, recovery.position, true);
+      }
+      if (replacement?.automaticRecovery || recovery) recordRecoveryOutcome("cancelled");
     };
-  }, [stopSession]);
+  }, [recordRecoveryOutcome, stopSession]);
 
   async function togglePlayback() {
     const video = videoReference.current;
@@ -1118,30 +1545,7 @@ export function TheaterPlayer({
             void toggleFullscreen();
             revealControls();
           }}
-          onCanPlay={(event) => {
-            const restorePosition = restorePositionReference.current;
-            if (restorePosition !== null && prepared) {
-              event.currentTarget.currentTime =
-                prepared.session.delivery === "hls"
-                  ? Math.max(0, restorePosition - prepared.session.positionSeconds)
-                  : restorePosition;
-              setCurrentTime(restorePosition);
-              restorePositionReference.current = null;
-            }
-            const replacement = replacementReference.current;
-            if (replacement) {
-              replacementReference.current = null;
-              stopSession(replacement.previous, absolutePositionReference.current());
-              setSwitching(false);
-              setTransitionMessage("Playback changed without losing your place.");
-            }
-            setStatus("ready");
-            if (!startWhenReadyReference.current) return;
-            startWhenReadyReference.current = false;
-            void event.currentTarget.play().catch(() => {
-              setTransitionMessage("Ready to play — your browser needs one more tap to start.");
-            });
-          }}
+          onCanPlay={(event) => commitCanPlay(event.currentTarget)}
           onDurationChange={(event) => {
             if (Number.isFinite(event.currentTarget.duration)) {
               setDuration(prepared?.session.media.durationSeconds ?? event.currentTarget.duration);
@@ -1154,10 +1558,12 @@ export function TheaterPlayer({
             }
           }}
           onPause={() => {
+            playingReference.current = false;
             setPlaying(false);
             queueReport("paused", absolutePosition());
           }}
           onPlay={() => {
+            playingReference.current = true;
             setPlaying(true);
             setBuffering(false);
             setTransitionMessage("");
@@ -1166,6 +1572,14 @@ export function TheaterPlayer({
           onPlaying={() => setBuffering(false)}
           onTimeUpdate={() => {
             const position = absolutePosition();
+            const replacement = replacementReference.current;
+            if (
+              replacement !== null &&
+              replacement.candidate?.session.sessionId ===
+                preparedReference.current?.session.sessionId
+            ) {
+              replacement.candidatePosition = position;
+            }
             setCurrentTime(position);
             if (Math.abs(position - lastProgressReference.current) >= 10) {
               lastProgressReference.current = position;
@@ -1234,14 +1648,50 @@ export function TheaterPlayer({
               <button
                 className={styles.retryButton}
                 onClick={() => {
+                  const recovery = recoveryCaptureReference.current;
                   const active = preparedReference.current;
-                  const position = absolutePositionReference.current();
+                  const transaction = replacementReference.current;
+                  const position = recovery?.position ?? absolutePositionReference.current();
+                  const resume = recovery?.resume ?? playingReference.current;
                   replacementControllerReference.current?.abort();
+                  replacementGenerationReference.current += 1;
+                  const player = playerReference.current;
+                  playerReference.current = null;
+                  if (player) player.dispose();
+                  if (
+                    transaction?.candidate &&
+                    transaction.candidate.session.sessionId !== active?.session.sessionId
+                  ) {
+                    stopSession(transaction.candidate, transaction.candidatePosition);
+                  }
+                  if (
+                    transaction &&
+                    transaction.previous.session.sessionId !== active?.session.sessionId
+                  ) {
+                    stopSession(transaction.previous, transaction.previousPosition);
+                  }
                   replacementReference.current = null;
                   if (active) stopSession(active, position);
+                  if (
+                    recovery &&
+                    recovery.previous.session.sessionId !== active?.session.sessionId
+                  ) {
+                    stopSession(recovery.previous, position);
+                  }
+                  automaticRecoveryBudgetReference.current = true;
+                  recoveryCaptureReference.current = null;
                   requestedPositionReference.current = position;
+                  requestedSourceReferenceIdReference.current =
+                    recovery?.sourceReferenceId ?? sourceReferenceIdReference.current;
+                  if (recovery) {
+                    preferencesReference.current = recovery.preferences;
+                    setPreferences(recovery.preferences);
+                    setSourceReferenceId(recovery.sourceReferenceId);
+                  }
                   preparedReference.current = null;
-                  startWhenReadyReference.current = playing;
+                  establishedSessionReference.current = null;
+                  playingReference.current = false;
+                  startWhenReadyReference.current = resume;
                   setPrepared(null);
                   setPlaying(false);
                   setSwitching(false);
