@@ -427,6 +427,16 @@ jobs:
         env:
           OMNIFIN_IMAGE: ghcr.io/rezanmz/omnifin@sha256:0000000000000000000000000000000000000000000000000000000000000000
         run: docker compose config --quiet
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - name: Install policy dependencies without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Validate the rendered Compose runtime policy
+        env:
+          OMNIFIN_IMAGE: ghcr.io/rezanmz/omnifin@sha256:0000000000000000000000000000000000000000000000000000000000000000
+        run: node scripts/ci/foundation-contract.mjs --compose-policy
       - name: Build immutable application image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:

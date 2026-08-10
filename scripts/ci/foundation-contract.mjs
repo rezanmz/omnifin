@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { execFileSync } from "node:child_process";
 import { lstat, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -79,6 +80,25 @@ export const REQUIRED_ROOT_SCRIPTS = Object.freeze([
 const requiredWorkspacePatterns = ["apps/*", "packages/*"];
 const requiredServiceNames = ["gateway", "maintenance", "web"];
 const requiredImage = "${OMNIFIN_IMAGE:?Set OMNIFIN_IMAGE from the release environment file}";
+const pinnedPnpmSetup = "pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271";
+const expectedComposePolicy = Object.freeze({
+  gateway: Object.freeze({ healthPath: "/readyz", memoryBytes: 768 * 1024 * 1024 }),
+  maintenance: Object.freeze({ memoryBytes: 768 * 1024 * 1024 }),
+  web: Object.freeze({ healthPath: "/healthz", memoryBytes: 1024 * 1024 * 1024 }),
+});
+const expectedLogging = Object.freeze({
+  driver: "json-file",
+  options: Object.freeze({ "max-file": "3", "max-size": "10m" }),
+});
+const expectedTmpfs = Object.freeze({
+  gateway: Object.freeze(["/tmp:size=64m,mode=1777"]),
+  maintenance: Object.freeze(["/tmp:size=64m,mode=1777"]),
+  web: Object.freeze([
+    "/tmp:size=64m,mode=1777",
+    "/opt/omnifin/web/.next/cache:size=256m,uid=65532,gid=65532,mode=0700",
+    "/opt/omnifin/web/apps/web/.next/cache:size=256m,uid=65532,gid=65532,mode=0700",
+  ]),
+});
 
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -222,6 +242,139 @@ function verifyHardenedService(serviceName, service, image, problems) {
   );
 }
 
+function memoryBytes(value) {
+  if (typeof value === "number") return Number.isInteger(value) ? value : undefined;
+  if (typeof value !== "string") return undefined;
+  if (/^\d+$/u.test(value.trim())) return Number(value);
+  const match = value.trim().match(/^(\d+(?:\.\d+)?)(b|k|kb|m|mb|g|gb)$/iu);
+  if (!match) return undefined;
+  const multipliers = {
+    b: 1,
+    g: 1024 ** 3,
+    gb: 1024 ** 3,
+    k: 1024,
+    kb: 1024,
+    m: 1024 ** 2,
+    mb: 1024 ** 2,
+  };
+  return Number(match[1]) * multipliers[match[2].toLowerCase()];
+}
+
+function hasDataMount(service) {
+  return (
+    Array.isArray(service?.volumes) &&
+    service.volumes.some((volume) =>
+      typeof volume === "string"
+        ? volume.split(":").at(-1) === "/data"
+        : volume?.target === "/data",
+    )
+  );
+}
+
+function healthcheckTarget(service) {
+  const test = service?.healthcheck?.test;
+  return Array.isArray(test) ? test.at(-1) : undefined;
+}
+
+function stableJson(value) {
+  return JSON.stringify(
+    isRecord(value)
+      ? Object.fromEntries(
+          Object.entries(value).sort(([left], [right]) => left.localeCompare(right)),
+        )
+      : value,
+  );
+}
+
+export function verifyComposePolicy(compose, problems) {
+  const services = compose?.services;
+  requireValue(isRecord(services), "Rendered Compose services must be an object.", problems);
+  if (!isRecord(services)) return;
+
+  for (const serviceName of Object.keys(expectedComposePolicy)) {
+    const service = services[serviceName];
+    const expected = expectedComposePolicy[serviceName];
+    requireValue(
+      memoryBytes(service?.mem_limit) === expected.memoryBytes,
+      `${serviceName} must set the exact standalone memory limit.`,
+      problems,
+    );
+    requireValue(
+      Number(service?.cpus) === 2,
+      `${serviceName} must set the exact standalone CPU limit of 2.0.`,
+      problems,
+    );
+    requireValue(
+      service?.pids_limit === 256,
+      `${serviceName} must set pids_limit to exactly 256.`,
+      problems,
+    );
+    requireValue(
+      service?.stop_grace_period === "30s",
+      `${serviceName} must set stop_grace_period to exactly 30s.`,
+      problems,
+    );
+    requireValue(
+      JSON.stringify(service?.tmpfs) === JSON.stringify(expectedTmpfs[serviceName]),
+      `${serviceName} must retain the exact bounded tmpfs policy.`,
+      problems,
+    );
+    requireValue(
+      service?.logging?.driver === expectedLogging.driver &&
+        stableJson(service.logging.options) === stableJson(expectedLogging.options),
+      `${serviceName} must use the exact json-file rotation policy.`,
+      problems,
+    );
+  }
+
+  for (const serviceName of ["gateway", "maintenance"]) {
+    requireValue(
+      hasDataMount(services[serviceName]),
+      `${serviceName} must mount the canonical /data volume.`,
+      problems,
+    );
+  }
+  for (const [serviceName, expected] of Object.entries(expectedComposePolicy)) {
+    if (expected.healthPath === undefined) continue;
+    requireValue(
+      healthcheckTarget(services[serviceName]) ===
+        `http://127.0.0.1:${serviceName === "web" ? 3000 : 4000}${expected.healthPath}`,
+      `${serviceName} must healthcheck ${expected.healthPath}.`,
+      problems,
+    );
+  }
+  requireValue(
+    services.web?.depends_on?.gateway?.condition === "service_healthy",
+    "web must depend on a healthy gateway service.",
+    problems,
+  );
+}
+
+export function checkComposePolicyModel(compose) {
+  const problems = [];
+  verifyComposePolicy(compose, problems);
+  if (problems.length > 0) {
+    throw new Error(
+      `The rendered Compose runtime policy is not satisfied:\n${problems.map((problem) => `- ${problem}`).join("\n")}`,
+    );
+  }
+  return { serviceCount: Object.keys(compose.services).length };
+}
+
+function renderedCompose(root) {
+  const output = execFileSync(
+    "docker",
+    ["compose", "--profile", "maintenance", "config", "--format", "json"],
+    {
+      cwd: root,
+      encoding: "utf8",
+      env: process.env,
+      maxBuffer: 4 * 1024 * 1024,
+    },
+  );
+  return JSON.parse(output);
+}
+
 async function verifyDeployment(root, problems) {
   const compose = await readYaml(root, "compose.yaml");
   const services = compose?.services;
@@ -242,6 +395,7 @@ async function verifyDeployment(root, problems) {
   for (const serviceName of requiredServiceNames) {
     verifyHardenedService(serviceName, services[serviceName], image, problems);
   }
+  verifyComposePolicy(compose, problems);
   requireValue(
     services.gateway?.ports === undefined,
     "The gateway must not publish a host port.",
@@ -258,7 +412,10 @@ async function verifyDeployment(root, problems) {
   for (const serviceName of ["gateway", "web"]) {
     const healthcheck = services[serviceName]?.healthcheck?.test;
     requireValue(
-      Array.isArray(healthcheck) && healthcheck.some((entry) => String(entry).endsWith("/healthz")),
+      Array.isArray(healthcheck) &&
+        healthcheck.some((entry) =>
+          String(entry).endsWith(expectedComposePolicy[serviceName].healthPath),
+        ),
       `${serviceName} must define a container health check.`,
       problems,
     );
@@ -381,6 +538,33 @@ async function verifyQualityWiring(root, problems) {
     "The foundation contract step must fail closed and run unconditionally.",
     problems,
   );
+
+  const containerSteps = ci?.jobs?.container?.steps;
+  requireValue(
+    Array.isArray(containerSteps),
+    "The container job must define ordered Compose policy steps.",
+    problems,
+  );
+  if (Array.isArray(containerSteps)) {
+    const pnpmSetupIndex = containerSteps.findIndex((step) => step?.uses === pinnedPnpmSetup);
+    const installIndex = containerSteps.findIndex(
+      (step) => step?.run === "pnpm install --frozen-lockfile --ignore-scripts",
+    );
+    const policyIndex = containerSteps.findIndex(
+      (step) => step?.run === "node scripts/ci/foundation-contract.mjs --compose-policy",
+    );
+    requireValue(
+      pnpmSetupIndex >= 0 &&
+        containerSteps[pnpmSetupIndex]?.with?.version === "${{ env.PNPM_VERSION }}",
+      "The container Compose policy lane must use the pinned pnpm setup action.",
+      problems,
+    );
+    requireValue(
+      pnpmSetupIndex >= 0 && installIndex > pnpmSetupIndex && policyIndex > installIndex,
+      "The container Compose policy lane must set up pnpm before installing and checking policy dependencies.",
+      problems,
+    );
+  }
 }
 
 export async function checkFoundationContract({ root = process.cwd() } = {}) {
@@ -408,7 +592,13 @@ export async function checkFoundationContract({ root = process.cwd() } = {}) {
 
 async function main() {
   if (process.argv.includes("--help")) {
-    process.stdout.write("Usage: node scripts/ci/foundation-contract.mjs\n");
+    process.stdout.write("Usage: node scripts/ci/foundation-contract.mjs [--compose-policy]\n");
+    return;
+  }
+  if (process.argv.includes("--compose-policy")) {
+    if (process.argv.length > 3) throw new Error(`Unknown argument: ${process.argv[3]}`);
+    const result = checkComposePolicyModel(renderedCompose(process.cwd()));
+    process.stdout.write(`Verified rendered Compose policy for ${result.serviceCount} services.\n`);
     return;
   }
   if (process.argv.length > 2) throw new Error(`Unknown argument: ${process.argv[2]}`);

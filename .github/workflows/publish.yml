@@ -816,6 +816,16 @@ jobs:
           images=$("${compose[@]}" config --images | sort --unique)
           test "$images" = "$(grep '^OMNIFIN_IMAGE=' "$bundle/omnifin.env.example" | cut -d= -f2-)"
           "${compose[@]}" up --detach --wait
+          gateway_container=$("${compose[@]}" ps --quiet gateway)
+          web_container=$("${compose[@]}" ps --quiet web)
+          test -n "$gateway_container"
+          test -n "$web_container"
+          docker inspect "$gateway_container" \
+            | jq --exit-status '.[0] | .HostConfig.Memory == 805306368 and .HostConfig.NanoCpus == 2000000000 and .HostConfig.LogConfig.Type == "json-file" and .HostConfig.LogConfig.Config["max-size"] == "10m" and .HostConfig.LogConfig.Config["max-file"] == "3" and .State.Health.Status == "healthy" and any(.Mounts[]; .Destination == "/data" and .Type == "volume")' \
+            >/dev/null
+          docker inspect "$web_container" \
+            | jq --exit-status '.[0] | .HostConfig.Memory == 1073741824 and .HostConfig.NanoCpus == 2000000000 and .HostConfig.LogConfig.Type == "json-file" and .HostConfig.LogConfig.Config["max-size"] == "10m" and .HostConfig.LogConfig.Config["max-file"] == "3" and .State.Health.Status == "healthy"' \
+            >/dev/null
           curl --fail --silent --show-error "http://127.0.0.1:${OMNIFIN_WEB_PORT}/healthz" \
             >/dev/null
           curl --fail --silent --show-error "http://127.0.0.1:${OMNIFIN_WEB_PORT}/recovery" \
