@@ -35,6 +35,7 @@ const items: DiscoveryFeedItem[] = titles.map(
   ([tmdbId, title, availability, voteAverage, year], index) => ({
     artwork: { backdropPath: artwork(index + 1), posterPath: artwork(index) },
     availability,
+    mediaRecordState: "present",
     id: `movie:${tmdbId}`,
     kind: "movie",
     originalTitle: null,

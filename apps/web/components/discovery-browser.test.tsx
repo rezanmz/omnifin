@@ -43,6 +43,29 @@ describe("DiscoveryBrowser", () => {
     expect(push).toHaveBeenCalledWith("/browse?kind=series&minimumRating=7", { scroll: false });
   });
 
+  it.each([
+    ["absent", true],
+    ["present", false],
+    ["unknown", false],
+  ] as const)("applies guarded request presentation for unknown+%s", async (state, visible) => {
+    const item = {
+      ...demoBrowseResponse.items[0]!,
+      availability: "unknown" as const,
+      mediaRecordState: state,
+    };
+    render(
+      <DiscoveryBrowser
+        initialCriteria={demoBrowseCriteria}
+        initialResponse={{ ...demoBrowseResponse, items: [item] }}
+        live={false}
+      />,
+    );
+
+    const request = screen.queryByRole("button", { name: `Request ${item.title}` });
+    if (visible) expect(request).toBeVisible();
+    else expect(request).not.toBeInTheDocument();
+  });
+
   it("replaces bootstrap movies with the requested media kind", async () => {
     const user = userEvent.setup();
     const load = vi.fn(async (criteria: typeof demoBrowseCriteria) => ({
@@ -118,6 +141,7 @@ describe("DiscoveryBrowser", () => {
               ...demoBrowseResponse.items[0]!,
               artwork: { backdropPath: null, posterPath: null },
               availability: "unknown",
+              mediaRecordState: "unknown",
               voteAverage: null,
               year: null,
             },

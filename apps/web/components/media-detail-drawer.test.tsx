@@ -19,6 +19,7 @@ import { MediaDetailDrawer } from "./media-detail-drawer";
 
 const movie: DiscoveryMovieResult = {
   availability: "unavailable",
+  mediaRecordState: "absent",
   id: "movie:603",
   kind: "movie",
   originalTitle: "The Matrix",
@@ -31,6 +32,7 @@ const movie: DiscoveryMovieResult = {
 };
 const series: DiscoverySeriesResult = {
   availability: "partial",
+  mediaRecordState: "present",
   id: "series:1396",
   kind: "series",
   originalTitle: "Breaking Bad",
@@ -46,6 +48,7 @@ const movieResponse: DiscoveryMediaDetailResponse = {
   item: {
     artwork: { backdropPath: null, posterPath: null },
     availability: "unavailable",
+    mediaRecordState: "absent",
     cast: [
       { character: "Neo", name: "Keanu Reeves", personId: 6384, profilePath: null },
       {
@@ -93,6 +96,7 @@ const movieResponse: DiscoveryMediaDetailResponse = {
       recommendations: [
         {
           availability: "requested",
+          mediaRecordState: "present",
           id: "movie:604",
           kind: "movie",
           originalTitle: "The Matrix Reloaded",
@@ -134,6 +138,7 @@ const recommendedResponse: DiscoveryMediaDetailResponse = {
   item: {
     ...movieResponse.item,
     availability: "requested",
+    mediaRecordState: "present",
     cast: [],
     crew: [],
     id: "movie:604",
@@ -161,6 +166,7 @@ const personResponse: DiscoveryPersonDetailResponse = {
     credits: [
       {
         availability: "available",
+        mediaRecordState: "present",
         kind: "movie",
         role: "Neo",
         title: "The Matrix",
@@ -185,6 +191,7 @@ const seriesResponse: DiscoveryMediaDetailResponse = {
   item: {
     artwork: { backdropPath: null, posterPath: null },
     availability: "partial",
+    mediaRecordState: "present",
     cast: [],
     crew: [{ name: "Vince Gilligan", personId: 66633, role: "Creator" }],
     episodeCount: 62,
@@ -392,6 +399,7 @@ describe("media detail drawer", () => {
     const user = userEvent.setup();
     const initialCredits = Array.from({ length: 24 }, (_, index) => ({
       availability: "available" as const,
+      mediaRecordState: "present" as const,
       kind: "movie" as const,
       role: `Role ${index + 1}`,
       title: `Movie ${index + 1}`,
@@ -403,6 +411,7 @@ describe("media detail drawer", () => {
       generatedAt: "2026-07-28T20:01:00.000Z",
       items: Array.from({ length: 6 }, (_, index) => ({
         availability: "unavailable" as const,
+        mediaRecordState: "present" as const,
         kind: "series" as const,
         role: `Series role ${index + 25}`,
         title: `Series ${index + 25}`,
@@ -452,6 +461,7 @@ describe("media detail drawer", () => {
         items: [
           {
             availability: "requested",
+            mediaRecordState: "present",
             kind: "movie",
             role: "John Wick",
             title: "John Wick",
@@ -477,6 +487,7 @@ describe("media detail drawer", () => {
             ...personResponse.item,
             credits: Array.from({ length: 24 }, (_, index) => ({
               availability: "available" as const,
+              mediaRecordState: "present" as const,
               kind: "movie" as const,
               role: `Role ${index + 1}`,
               title: index === 0 ? "The Matrix" : `Movie ${index + 1}`,
@@ -597,6 +608,59 @@ describe("media detail drawer", () => {
     const dialog = screen.getByRole("dialog", { hidden: true });
     fireEvent(dialog, new Event("cancel", { bubbles: false, cancelable: true }));
     expect(onOpenChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("exposes an unknown, unowned title with neutral request copy", async () => {
+    const user = userEvent.setup();
+    const onRequest = vi.fn();
+    const unknownMedia = {
+      ...movie,
+      availability: "unknown" as const,
+      mediaRecordState: "absent" as const,
+    };
+    render(
+      <MediaDetailDrawer
+        client={client(async () => ({
+          ...movieResponse,
+          item: { ...movieResponse.item, availability: "unknown", mediaRecordState: "absent" },
+        }))}
+        media={unknownMedia}
+        onOpenChange={vi.fn()}
+        onRequest={onRequest}
+        open
+      />,
+    );
+
+    expect(await screen.findByText("Request availability unconfirmed")).toBeVisible();
+    expect(
+      screen.getByText(
+        "This title is not currently in Seerr. Submit a request to check its acquisition path.",
+      ),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Request The Matrix" }));
+    expect(onRequest).toHaveBeenCalledWith(unknownMedia);
+  });
+
+  it.each([
+    ["unknown", "present"],
+    ["unknown", "unknown"],
+    ["available", "absent"],
+  ] as const)("hides the request action for %s+%s", async (availability, mediaRecordState) => {
+    render(
+      <MediaDetailDrawer
+        client={client(async () => ({
+          ...movieResponse,
+          item: { ...movieResponse.item, availability, mediaRecordState },
+        }))}
+        media={{ ...movie, availability, mediaRecordState }}
+        onOpenChange={vi.fn()}
+        onRequest={vi.fn()}
+        open
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { name: "The Matrix" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Request The Matrix" })).not.toBeInTheDocument();
   });
 
   it("does not load hidden details and aborts an in-flight request when closed", async () => {

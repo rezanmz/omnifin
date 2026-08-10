@@ -150,6 +150,7 @@ describe("Seerr media details", () => {
       item: {
         artwork: { backdropPath: null, posterPath: null },
         availability: "available",
+        mediaRecordState: "present",
         cast: [
           { character: "Neo", name: "Keanu Reeves", personId: 6384, profilePath: null },
           {
@@ -224,6 +225,7 @@ describe("Seerr media details", () => {
           recommendations: [
             {
               availability: "requested",
+              mediaRecordState: "present",
               id: "movie:604",
               kind: "movie",
               originalTitle: "The Matrix Reloaded",
@@ -485,6 +487,7 @@ describe("Seerr media details", () => {
 
     expect(result.response.item).toMatchObject({
       availability: "partial",
+      mediaRecordState: "present",
       episodeCount: 62,
       id: "series:1396",
       intelligence: {
@@ -587,6 +590,7 @@ describe("Seerr media details", () => {
           {
             availability: "available",
             kind: "movie",
+            mediaRecordState: "present",
             role: "Neo",
             title: "The Matrix",
             tmdbId: 603,

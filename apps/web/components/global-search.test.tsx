@@ -18,6 +18,7 @@ const searchResponse: DiscoverySearchResponse = {
   items: [
     {
       availability: "available",
+      mediaRecordState: "present",
       id: "movie:603",
       kind: "movie",
       originalTitle: "The Matrix",
@@ -30,6 +31,7 @@ const searchResponse: DiscoverySearchResponse = {
     },
     {
       availability: "requested",
+      mediaRecordState: "present",
       id: "series:1396",
       kind: "series",
       originalTitle: "Breaking Bad",
@@ -60,6 +62,7 @@ const detailResponse: DiscoveryMediaDetailResponse = {
   item: {
     artwork: { backdropPath: null, posterPath: null },
     availability: "available",
+    mediaRecordState: "present",
     cast: [{ character: "Neo", name: "Keanu Reeves", personId: 6384, profilePath: null }],
     crew: [{ name: "Lana Wachowski", personId: 9340, role: "Director" }],
     genres: ["Action", "Science Fiction"],
@@ -95,6 +98,7 @@ const personResponse: DiscoveryPersonDetailResponse = {
     credits: [
       {
         availability: "available",
+        mediaRecordState: "present",
         kind: "movie",
         role: "Tyler Durden",
         title: "Fight Club",
@@ -368,6 +372,37 @@ describe("global search", () => {
     expect(screen.getByRole("combobox")).toHaveAttribute("aria-expanded", "false");
     expect(load).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    ["absent", true],
+    ["present", false],
+    ["unknown", false],
+  ] as const)(
+    "applies guarded request presentation in global search for unknown+%s",
+    async (state, visible) => {
+      const movieResult = searchResponse.items[0] as Extract<
+        DiscoverySearchResponse["items"][number],
+        { kind: "movie" }
+      >;
+      const response: DiscoverySearchResponse = {
+        ...searchResponse,
+        items: [{ ...movieResult, availability: "unknown", mediaRecordState: state }],
+      };
+      render(
+        <GlobalSearch
+          client={client(async () => response)}
+          debounceMs={0}
+          initialOpen
+          initialQuery="matrix"
+        />,
+      );
+
+      await screen.findByRole("option", { name: /The Matrix/iu });
+      const request = screen.queryByRole("button", { name: /Request The Matrix/iu });
+      if (visible) expect(request).toBeVisible();
+      else expect(request).not.toBeInTheDocument();
+    },
+  );
 
   it("opens a normalized person profile directly from global search", async () => {
     const user = userEvent.setup();

@@ -33,6 +33,10 @@
       "types": "./dist/discovery.d.ts",
       "default": "./dist/discovery.js"
     },
+    "./discovery-requestability": {
+      "types": "./dist/discovery-requestability.d.ts",
+      "default": "./dist/discovery-requestability.js"
+    },
     "./deployment": {
       "types": "./dist/deployment.d.ts",
       "default": "./dist/deployment.js"

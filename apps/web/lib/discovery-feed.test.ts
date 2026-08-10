@@ -1,35 +1,39 @@
+import type { DiscoveryFeedResponse } from "@omnifin/contracts/discovery";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { discoveryFeedClient } from "./discovery-feed";
 
 const reference = `discovery_art_${"a".repeat(22)}`;
-const feed = {
+const feed: DiscoveryFeedResponse = {
   failures: [],
   generatedAt: "2026-07-29T18:00:00.000Z",
-  rails: ["trending", "popular_movies", "popular_series", "upcoming"].map((kind, index) => ({
-    failure: null,
-    items: [
-      {
-        artwork: {
-          backdropPath: `/v1/discovery/artwork/${reference}`,
-          posterPath: `/v1/discovery/artwork/${reference}`,
+  rails: (["trending", "popular_movies", "popular_series", "upcoming"] as const).map(
+    (kind, index) => ({
+      failure: null,
+      items: [
+        {
+          artwork: {
+            backdropPath: `/v1/discovery/artwork/${reference}`,
+            posterPath: `/v1/discovery/artwork/${reference}`,
+          },
+          availability: "available",
+          mediaRecordState: "present",
+          id: `movie:${index + 1}`,
+          kind: "movie",
+          originalTitle: null,
+          overview: "A normalized synopsis.",
+          source: "seerr",
+          title: `Title ${index + 1}`,
+          tmdbId: index + 1,
+          voteAverage: 8.2,
+          year: 2026,
         },
-        availability: "available",
-        id: `movie:${index + 1}`,
-        kind: "movie",
-        originalTitle: null,
-        overview: "A normalized synopsis.",
-        source: "seerr",
-        title: `Title ${index + 1}`,
-        tmdbId: index + 1,
-        voteAverage: 8.2,
-        year: 2026,
-      },
-    ],
-    kind,
-    totalResults: 1,
-    truncated: false,
-  })),
+      ],
+      kind,
+      totalResults: 1,
+      truncated: false,
+    }),
+  ),
   state: "complete",
 };
 

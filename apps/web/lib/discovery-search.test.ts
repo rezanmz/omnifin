@@ -1,12 +1,14 @@
+import type { DiscoverySearchResponse } from "@omnifin/contracts/discovery";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { discoverySearchClient } from "./discovery-search";
 
-const response = {
+const response: DiscoverySearchResponse = {
   generatedAt: "2026-07-27T07:00:00.000Z",
   items: [
     {
       availability: "available",
+      mediaRecordState: "present",
       id: "movie:603",
       kind: "movie",
       originalTitle: "The Matrix",
