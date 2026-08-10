@@ -137,6 +137,7 @@ describe("gateway logger", () => {
       retryable: false,
       service: "seerr",
       status: 400,
+      cancellationSource: "response_closed",
     });
     const playbackError = Object.assign(
       new Error("private item and path", { cause: connectorError }),
@@ -150,6 +151,7 @@ describe("gateway logger", () => {
       connectorErrorCode: "upstream_error",
       connectorOperation: "discovery.search",
       connectorService: "seerr",
+      cancellationSource: "response_closed",
       failureStage: "session_payload_validation",
       upstreamStatus: 400,
     });

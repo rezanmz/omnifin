@@ -52,6 +52,7 @@ const eligibility: MediaRequestEligibility = {
 };
 const movie: DiscoveryMovieResult = {
   availability: "unavailable",
+  mediaRecordState: "absent",
   id: "movie:603",
   kind: "movie",
   originalTitle: "The Matrix",
@@ -64,6 +65,7 @@ const movie: DiscoveryMovieResult = {
 };
 const series: DiscoverySeriesResult = {
   availability: "partial",
+  mediaRecordState: "present",
   id: "series:1396",
   kind: "series",
   originalTitle: "Breaking Bad",

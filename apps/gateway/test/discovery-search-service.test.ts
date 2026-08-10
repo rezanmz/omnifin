@@ -107,6 +107,7 @@ const normalizedResponse: DiscoverySearchResponse = {
       availability: "unavailable",
       id: "movie:603",
       kind: "movie",
+      mediaRecordState: "absent",
       originalTitle: "The Matrix",
       overview: "A hacker discovers the nature of reality.",
       source: "seerr",
@@ -133,6 +134,7 @@ const normalizedDetailResponse: DiscoveryMediaDetailResponse = {
     genres: ["Action", "Science Fiction"],
     id: "movie:603",
     kind: "movie",
+    mediaRecordState: "present",
     intelligence: {
       ratings: [],
       ratingsState: "empty",
@@ -178,6 +180,7 @@ const normalizedPersonCreditsResponse: DiscoveryPersonCreditsResponse = {
   items: Array.from({ length: 6 }, (_, index) => ({
     availability: "unknown",
     kind: "movie",
+    mediaRecordState: "present",
     role: `Role ${index + 25}`,
     title: `Movie ${index + 25}`,
     tmdbId: 1_000 + index,
@@ -268,6 +271,7 @@ function harness(
           availability: kind === "upcoming" ? "unavailable" : "available",
           id: `movie:${kind.length + 100}`,
           kind: "movie",
+          mediaRecordState: kind === "upcoming" ? "absent" : "present",
           originalTitle: null,
           overview: `${kind} overview`,
           source: "seerr",
@@ -295,6 +299,7 @@ function harness(
             availability: "unavailable",
             id: `${input.kind}:${input.kind === "movie" ? 603 : 1396}`,
             kind: input.kind,
+            mediaRecordState: "absent",
             originalTitle: null,
             overview: "A bounded browse result.",
             source: "seerr",
@@ -459,6 +464,7 @@ describe("discovery search service", () => {
             availability: "unavailable",
             id: "movie:603",
             kind: "movie",
+            mediaRecordState: "absent",
             originalTitle: null,
             overview: "A valid result from a very large catalogue.",
             source: "seerr",
@@ -543,6 +549,77 @@ describe("discovery search service", () => {
       );
       expect(response.items).toEqual([
         expect.objectContaining({ availability: "partial", id: "movie:604" }),
+      ]);
+    } finally {
+      test.database.close();
+    }
+  });
+
+  it("applies requestable filtering to record provenance without changing it", async () => {
+    const test = harness({
+      verifyOwnership: async (input) => ({
+        connectorRevision: now.getTime(),
+        linkId: "viewer-link",
+        linkRevision: 0,
+        state:
+          input.tmdbId === 603
+            ? ("owned" as const)
+            : input.tmdbId === 602
+              ? ("stale" as const)
+              : ("not_owned" as const),
+        userId: "viewer-user",
+        userRevision: now.getTime(),
+      }),
+    });
+    const media = (
+      tmdbId: number,
+      availability: DiscoveryMovieResult["availability"],
+      mediaRecordState: DiscoveryMovieResult["mediaRecordState"],
+    ) => ({
+      ...normalizedMovieResult,
+      availability,
+      id: `movie:${tmdbId}`,
+      mediaRecordState,
+      tmdbId,
+    });
+    test.browse.mockResolvedValueOnce({
+      items: [601, 602, 603, 604, 605, 606, 607].map((tmdbId) => ({
+        artwork: { backdropPath: null, posterPath: null },
+        media:
+          tmdbId === 601
+            ? media(tmdbId, "unavailable", "absent")
+            : tmdbId === 602
+              ? media(tmdbId, "unavailable", "absent")
+              : tmdbId === 603
+                ? media(tmdbId, "available", "absent")
+                : tmdbId === 604
+                  ? media(tmdbId, "unknown", "present")
+                  : tmdbId === 605
+                    ? media(tmdbId, "unknown", "unknown")
+                    : tmdbId === 606
+                      ? media(tmdbId, "partial", "present")
+                      : media(tmdbId, "unavailable", "present"),
+      })),
+      page: 1,
+      totalPages: 1,
+      totalResults: 7,
+    });
+    try {
+      const response = await test.service.browse(
+        { availability: "requestable", kind: "movie", locale: "en", page: 1, sort: "popularity" },
+        { principal: principal() },
+      );
+      expect(
+        response.items.map(({ id, availability, mediaRecordState }) => ({
+          id,
+          availability,
+          mediaRecordState,
+        })),
+      ).toEqual([
+        { id: "movie:601", availability: "unavailable", mediaRecordState: "absent" },
+        { id: "movie:602", availability: "unknown", mediaRecordState: "absent" },
+        { id: "movie:606", availability: "partial", mediaRecordState: "present" },
+        { id: "movie:607", availability: "unavailable", mediaRecordState: "present" },
       ]);
     } finally {
       test.database.close();
@@ -712,6 +789,7 @@ describe("discovery search service", () => {
             availability: "unknown",
             id: `series:${kind.length + 200}`,
             kind: "series",
+            mediaRecordState: "unknown",
             originalTitle: null,
             overview: null,
             source: "seerr",
@@ -873,6 +951,7 @@ describe("discovery search service", () => {
                 ...normalizedMovieResult,
                 availability: "available",
                 id: "movie:604",
+                mediaRecordState: "present",
                 tmdbId: 604,
               },
             ],
@@ -902,8 +981,11 @@ describe("discovery search service", () => {
         ),
       ]);
       expect(detail.item.availability).toBe("available");
+      expect(detail.item.mediaRecordState).toBe("present");
       expect(detail.item.intelligence.recommendations[0]?.availability).toBe("unknown");
+      expect(detail.item.intelligence.recommendations[0]?.mediaRecordState).toBe("present");
       expect(credits.items[0]?.availability).toBe("available");
+      expect(credits.items[0]?.mediaRecordState).toBe("present");
       expect(credits.items[1]?.availability).toBe("unknown");
     } finally {
       test.database.close();

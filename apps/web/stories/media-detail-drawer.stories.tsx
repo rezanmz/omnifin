@@ -18,6 +18,7 @@ import {
 
 const movie: DiscoveryMovieResult = {
   availability: "unavailable",
+  mediaRecordState: "absent",
   id: "movie:603",
   kind: "movie",
   originalTitle: "The Matrix",
@@ -30,6 +31,7 @@ const movie: DiscoveryMovieResult = {
 };
 const series: DiscoverySeriesResult = {
   availability: "partial",
+  mediaRecordState: "present",
   id: "series:1396",
   kind: "series",
   originalTitle: "Breaking Bad",
@@ -45,6 +47,7 @@ const movieResponse: DiscoveryMediaDetailResponse = {
   item: {
     artwork: { backdropPath: null, posterPath: null },
     availability: "unavailable",
+    mediaRecordState: "absent",
     cast: [
       { character: "Neo", name: "Keanu Reeves", personId: 6384, profilePath: null },
       {
@@ -125,6 +128,7 @@ const movieResponse: DiscoveryMediaDetailResponse = {
       recommendations: [
         {
           availability: "requested",
+          mediaRecordState: "present",
           id: "movie:604",
           kind: "movie",
           originalTitle: "The Matrix Reloaded",
@@ -137,6 +141,7 @@ const movieResponse: DiscoveryMediaDetailResponse = {
         },
         {
           availability: "available",
+          mediaRecordState: "present",
           id: "movie:157336",
           kind: "movie",
           originalTitle: "Interstellar",
@@ -191,6 +196,7 @@ const personResponse: DiscoveryPersonDetailResponse = {
     credits: [
       {
         availability: "available",
+        mediaRecordState: "present",
         kind: "movie",
         role: "Neo",
         title: "The Matrix",
@@ -200,6 +206,7 @@ const personResponse: DiscoveryPersonDetailResponse = {
       },
       {
         availability: "requested",
+        mediaRecordState: "present",
         kind: "movie",
         role: "John Wick",
         title: "John Wick",
@@ -225,6 +232,7 @@ const paginatedPersonResponse: DiscoveryPersonDetailResponse = {
     ...personResponse.item,
     credits: Array.from({ length: 24 }, (_, index) => ({
       availability: index < 8 ? ("available" as const) : ("unavailable" as const),
+      mediaRecordState: "present" as const,
       kind: index % 3 === 0 ? ("series" as const) : ("movie" as const),
       role: `Role ${index + 1}`,
       title: `Selected work ${index + 1}`,
@@ -239,6 +247,7 @@ const personCreditsResponse: DiscoveryPersonCreditsResponse = {
   generatedAt: "2026-07-28T20:01:00.000Z",
   items: Array.from({ length: 6 }, (_, index) => ({
     availability: "requested",
+    mediaRecordState: "present",
     kind: "movie",
     role: `Role ${index + 25}`,
     title: `Selected work ${index + 25}`,
@@ -256,6 +265,7 @@ const seriesResponse: DiscoveryMediaDetailResponse = {
   item: {
     artwork: { backdropPath: null, posterPath: null },
     availability: "partial",
+    mediaRecordState: "present",
     cast: [
       {
         character: "Walter White",

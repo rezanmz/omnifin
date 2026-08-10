@@ -4,6 +4,7 @@ import "./global-search.css";
 
 import type { Permission } from "@omnifin/contracts/auth";
 import type { DiscoverySearchResult } from "@omnifin/contracts/discovery";
+import { isDiscoveryMediaRequestable } from "@omnifin/contracts/discovery-requestability";
 import {
   CalendarDays,
   CircleAlert,
@@ -40,7 +41,6 @@ import {
   type DiscoverySearchClient,
   type DiscoverySearchClientErrorKind,
 } from "../lib/discovery-search";
-import { discoveryAvailabilityIsRequestable } from "../lib/discovery-presentation";
 import type { MediaRequestClient } from "../lib/media-requests";
 import type { DiscoveryMediaDetailClient, DiscoveryPersonDetailClient } from "../lib/media-details";
 import {
@@ -701,7 +701,10 @@ export function GlobalSearch({
     selectedResult !== null &&
     selectedResult.kind !== "person" &&
     !selectedLocallyRequested &&
-    discoveryAvailabilityIsRequestable(selectedResult.availability);
+    isDiscoveryMediaRequestable({
+      availability: selectedResult.availability,
+      mediaRecordState: selectedResult.mediaRecordState,
+    });
   const permissions = permissionState.kind === "ready" ? permissionState.permissions : [];
   const commandMatches = matchingCommands(permissions, normalizedQuery);
   const commandFallbackState: PaletteMediaState | null =

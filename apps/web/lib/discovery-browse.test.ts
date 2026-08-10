@@ -21,6 +21,7 @@ const response: DiscoveryBrowseResponse = {
         posterPath: "/v1/discovery/artwork/discovery_art_abcdefghijklmnopqrstuv",
       },
       availability: "unavailable",
+      mediaRecordState: "absent",
       id: "movie:603",
       kind: "movie",
       originalTitle: null,
