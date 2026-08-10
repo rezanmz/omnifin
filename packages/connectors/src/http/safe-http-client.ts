@@ -14,6 +14,7 @@ import {
   type HostResolver,
   type ResolvedDestination,
 } from "../security/destination.js";
+import type { ConnectorHttpLane } from "./connector-http-lane.js";
 import { pinnedNodeTransport } from "./pinned-transport.js";
 
 export interface SafeHttpClientOptions {
@@ -27,6 +28,7 @@ export interface SafeHttpClientOptions {
   headers?: Readonly<Record<string, string>>;
   transport?: ConnectorTransport;
   resolveHost?: HostResolver;
+  lane?: ConnectorHttpLane;
 }
 
 export interface SafeRequestOptions {
@@ -143,6 +145,29 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
       },
     );
   });
+}
+
+function combinedSignals(signals: readonly AbortSignal[]): {
+  signal: AbortSignal;
+  cleanup: () => void;
+} {
+  const controller = new AbortController();
+  const listeners: Array<{ signal: AbortSignal; listener: () => void }> = [];
+  for (const signal of signals) {
+    const listener = () => controller.abort(signal.reason);
+    if (signal.aborted) {
+      listener();
+      break;
+    }
+    signal.addEventListener("abort", listener, { once: true });
+    listeners.push({ signal, listener });
+  }
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      for (const { signal, listener } of listeners) signal.removeEventListener("abort", listener);
+    },
+  };
 }
 
 function encodeBody(body: SafeRequestOptions["body"]): Uint8Array | undefined {
@@ -272,8 +297,18 @@ export class SafeHttpClient {
   readonly #tlsCaCertificatePem: string | undefined;
   readonly #transport: ConnectorTransport;
   readonly #resolveHost: HostResolver | undefined;
+  readonly #lane: ConnectorHttpLane | undefined;
 
   constructor(options: SafeHttpClientOptions) {
+    if (options.lane && options.lane.service !== options.service) {
+      throw new SafeConnectorError({
+        service: options.service,
+        operation: "configuration",
+        code: "configuration_invalid",
+        message: "The connector HTTP lane is not configured for this service.",
+        retryable: false,
+      });
+    }
     const timeoutMs = options.timeoutMs ?? 8_000;
     const maxResponseBytes = options.maxResponseBytes ?? 1_048_576;
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) {
@@ -352,7 +387,8 @@ export class SafeHttpClient {
     this.#headers = options.headers ?? {};
     this.#tlsPolicy = tlsPolicy;
     this.#tlsCaCertificatePem = options.tlsCaCertificatePem;
-    this.#transport = options.transport ?? pinnedNodeTransport;
+    this.#lane = options.lane;
+    this.#transport = options.transport ?? options.lane?.transport ?? pinnedNodeTransport;
     this.#resolveHost = options.resolveHost;
   }
 
@@ -381,8 +417,18 @@ export class SafeHttpClient {
   async requestBytes(path: string, options: SafeRequestOptions): Promise<SafeBytesResponse> {
     const lifecycle = requestLifecycle(this.#timeoutMs, options.signal);
     lifecycle.armTimeout();
+    let lease: Awaited<ReturnType<ConnectorHttpLane["acquire"]>> | undefined;
+    let requestSignalCleanup: () => void = () => {};
     try {
-      const response = await this.#requestResponse(path, options, lifecycle.controller.signal);
+      lease = await this.#lane?.acquire({
+        operation: options.operation,
+        signal: lifecycle.controller.signal,
+      });
+      const requestSignal = lease
+        ? combinedSignals([lifecycle.controller.signal, lease.signal])
+        : { signal: lifecycle.controller.signal, cleanup: () => undefined };
+      requestSignalCleanup = requestSignal.cleanup;
+      const response = await this.#requestResponse(path, options, requestSignal.signal);
       const contentLength = Number(response.headers.get("content-length"));
       if (Number.isFinite(contentLength) && contentLength > this.#maxResponseBytes) {
         await response.body?.cancel();
@@ -394,6 +440,8 @@ export class SafeHttpClient {
     } catch (error) {
       throw this.#requestError(error, lifecycle.didTimeout(), options.operation);
     } finally {
+      requestSignalCleanup();
+      lease?.release();
       lifecycle.cleanup();
     }
   }
@@ -419,8 +467,18 @@ export class SafeHttpClient {
 
     const lifecycle = requestLifecycle(this.#timeoutMs, options.signal);
     lifecycle.armTimeout();
+    let lease: Awaited<ReturnType<ConnectorHttpLane["acquire"]>> | undefined;
+    let requestSignalCleanup: () => void = () => {};
     try {
-      const response = await this.#requestResponse(path, options, lifecycle.controller.signal);
+      lease = await this.#lane?.acquire({
+        operation: options.operation,
+        signal: lifecycle.controller.signal,
+      });
+      const requestSignal = lease
+        ? combinedSignals([lifecycle.controller.signal, lease.signal])
+        : { signal: lifecycle.controller.signal, cleanup: () => undefined };
+      requestSignalCleanup = requestSignal.cleanup;
+      const response = await this.#requestResponse(path, options, requestSignal.signal);
       const contentLength = Number(response.headers.get("content-length"));
       if (Number.isFinite(contentLength) && contentLength > maxResponseBytes) {
         await response.body?.cancel();
@@ -428,7 +486,10 @@ export class SafeHttpClient {
       }
       lifecycle.clearTimeout();
       if (!response.body) {
+        requestSignalCleanup();
+        lease?.release();
         lifecycle.cleanup();
+        lease = undefined;
         return {
           body: new ReadableStream<Uint8Array>({ start: (controller) => controller.close() }),
           headers: response.headers,
@@ -436,11 +497,24 @@ export class SafeHttpClient {
         };
       }
       return {
-        body: this.#boundedStream(response.body, options.operation, maxResponseBytes, lifecycle),
+        body: this.#boundedStream(
+          response.body,
+          options.operation,
+          maxResponseBytes,
+          lifecycle,
+          requestSignal.signal,
+          () => {
+            requestSignalCleanup();
+            lease?.release();
+            lease = undefined;
+          },
+        ),
         headers: response.headers,
         status: response.status,
       };
     } catch (error) {
+      requestSignalCleanup();
+      lease?.release();
       lifecycle.cleanup();
       throw this.#requestError(error, lifecycle.didTimeout(), options.operation);
     }
@@ -555,53 +629,86 @@ export class SafeHttpClient {
     operation: string,
     maxResponseBytes: number,
     lifecycle: RequestLifecycle,
+    requestSignal: AbortSignal,
+    releaseLane: () => void,
   ) {
     const reader = body.getReader();
     let totalBytes = 0;
-    let finished = false;
-    const finish = () => {
-      if (finished) return;
-      finished = true;
-      lifecycle.cleanup();
-      reader.releaseLock();
+    let finalizing = false;
+    let finalized = false;
+    let outputController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const abort = () => {
+      if (finalizing || finalized) return;
+      const error = this.#requestError(
+        new DOMException("Aborted", "AbortError"),
+        lifecycle.didTimeout(),
+        operation,
+      );
+      outputController?.error(error);
+      void finish(true, requestSignal.reason);
     };
+    const finish = (cancelUnderlying: boolean, reason?: unknown): Promise<void> => {
+      if (finalized) return Promise.resolve();
+      if (finalizing) return finalization;
+      finalizing = true;
+      requestSignal.removeEventListener("abort", abort);
+      finalization = (async () => {
+        if (cancelUnderlying) {
+          try {
+            await reader.cancel(reason);
+          } catch {
+            // The stable connector error is already exposed to the caller.
+          }
+        }
+        lifecycle.cleanup();
+        releaseLane();
+        reader.releaseLock();
+        finalized = true;
+      })();
+      return finalization;
+    };
+    let finalization = Promise.resolve();
     return new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        outputController = controller;
+        requestSignal.addEventListener("abort", abort, { once: true });
+        if (requestSignal.aborted) abort();
+      },
       pull: async (controller) => {
         lifecycle.armTimeout();
         try {
           const result = await reader.read();
           lifecycle.clearTimeout();
+          if (finalizing || finalized) return;
           if (result.done) {
-            finish();
+            await finish(false);
             controller.close();
             return;
           }
           totalBytes += result.value.byteLength;
           if (totalBytes > maxResponseBytes) {
+            requestSignal.removeEventListener("abort", abort);
             lifecycle.controller.abort();
             try {
               await reader.cancel();
             } catch {
               // The byte-limit failure below is the stable, redaction-safe error for callers.
             } finally {
-              finish();
+              await finish(false);
             }
             controller.error(this.invalidResponse(operation));
             return;
           }
           controller.enqueue(result.value);
         } catch (error) {
-          finish();
+          if (finalizing || finalized) return;
+          await finish(false);
           controller.error(this.#requestError(error, lifecycle.didTimeout(), operation));
         }
       },
       cancel: async (reason) => {
         lifecycle.controller.abort(reason);
-        try {
-          await reader.cancel(reason);
-        } finally {
-          finish();
-        }
+        await finish(true, reason);
       },
     });
   }
