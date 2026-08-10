@@ -34,6 +34,7 @@ const movie = {
   availability: "available",
   id: "movie:550",
   kind: "movie",
+  mediaRecordState: "present",
   originalTitle: "Fight Club",
   overview: "An insomniac and a soap maker form an underground club.",
   source: "seerr",
@@ -44,6 +45,41 @@ const movie = {
 } as const;
 
 describe("discovery contracts", () => {
+  it("requires the bounded media-record provenance on every media shape", () => {
+    for (const mediaRecordState of ["present", "absent", "unknown"] as const) {
+      expect(
+        discoverySearchResponseSchema.safeParse({
+          generatedAt: "2026-07-27T05:00:00.000Z",
+          items: [{ ...movie, mediaRecordState }],
+          page: 1,
+          query: "fight",
+          totalPages: 1,
+          totalResults: 1,
+        }).success,
+      ).toBe(true);
+    }
+    expect(
+      discoverySearchResponseSchema.safeParse({
+        generatedAt: "2026-07-27T05:00:00.000Z",
+        items: [{ ...movie, mediaRecordState: undefined }],
+        page: 1,
+        query: "fight",
+        totalPages: 1,
+        totalResults: 1,
+      }).success,
+    ).toBe(false);
+    expect(
+      discoverySearchResponseSchema.safeParse({
+        generatedAt: "2026-07-27T05:00:00.000Z",
+        items: [{ ...movie, mediaRecordState: "invalid" }],
+        page: 1,
+        query: "fight",
+        totalPages: 1,
+        totalResults: 1,
+      }).success,
+    ).toBe(false);
+  });
+
   it("normalizes a bounded browse query and rejects incompatible criteria", () => {
     expect(
       discoveryBrowseQuerySchema.parse({
@@ -270,6 +306,7 @@ describe("discovery contracts", () => {
       genres: ["Action", "Science Fiction"],
       id: "movie:603",
       kind: "movie",
+      mediaRecordState: "present",
       intelligence: {
         ratings: [
           {
@@ -424,6 +461,7 @@ describe("discovery contracts", () => {
         trailers: [],
       },
       kind: "movie",
+      mediaRecordState: "absent",
       originalTitle: null,
       overview: null,
       productionStatus: null,
@@ -505,6 +543,7 @@ describe("discovery contracts", () => {
             {
               availability: "available",
               kind: "movie",
+              mediaRecordState: "present",
               role: "Neo",
               title: "The Matrix",
               tmdbId: 603,
@@ -558,6 +597,7 @@ describe("discovery contracts", () => {
           {
             availability: "available",
             kind: "movie",
+            mediaRecordState: "present",
             role: "Neo",
             title: "The Matrix",
             tmdbId: 603,

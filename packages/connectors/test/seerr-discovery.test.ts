@@ -416,6 +416,7 @@ describe("Seerr discovery", () => {
           availability: "available",
           id: "movie:550",
           kind: "movie",
+          mediaRecordState: "present",
           originalTitle: "Fight Club",
           overview: "An insomniac and a soap maker form an underground club.",
           source: "seerr",
@@ -428,6 +429,7 @@ describe("Seerr discovery", () => {
           availability: "requested",
           id: "series:1399",
           kind: "series",
+          mediaRecordState: "present",
           originalTitle: "Game of Thrones",
           overview: "Nine families vie for control.",
           source: "seerr",
@@ -462,24 +464,47 @@ describe("Seerr discovery", () => {
   });
 
   it.each([
-    { expected: "unknown", mediaInfo: { status: 1 } },
-    { expected: "processing", mediaInfo: { status: 3 } },
-    { expected: "partial", mediaInfo: { status: 4 } },
-    { expected: "unavailable", mediaInfo: { status: 6 } },
-    { expected: "unavailable", mediaInfo: undefined },
-  ])("maps Seerr availability to $expected", async ({ expected, mediaInfo }) => {
+    { availability: "unknown", mediaRecordState: "present", mediaInfo: { status: 1 } },
+    { availability: "requested", mediaRecordState: "present", mediaInfo: { status: 2 } },
+    { availability: "processing", mediaRecordState: "present", mediaInfo: { status: 3 } },
+    { availability: "partial", mediaRecordState: "present", mediaInfo: { status: 4 } },
+    { availability: "available", mediaRecordState: "present", mediaInfo: { status: 5 } },
+    { availability: "unavailable", mediaRecordState: "present", mediaInfo: { status: 6 } },
+    { availability: "unavailable", mediaRecordState: "absent", mediaInfo: undefined },
+    { availability: "unavailable", mediaRecordState: "absent", mediaInfo: null },
+  ] as const)(
+    "maps Seerr media info safely",
+    async ({ availability, mediaRecordState, mediaInfo }) => {
+      const movie = Object.fromEntries(
+        Object.entries(searchResponse.results[0]!).filter(([key]) => key !== "mediaInfo"),
+      );
+      const response = {
+        ...searchResponse,
+        results: [mediaInfo === undefined ? movie : { ...movie, mediaInfo }],
+      };
+      const { adapter } = adapterWithResponses([jsonResponse(response)]);
+
+      const result = await adapter.search({ language: "en", page: 1, query: "fight" });
+
+      expect(result.items[0]).toMatchObject({ availability, mediaRecordState });
+    },
+  );
+
+  it("does not leak malformed media info when the title remains valid", async () => {
     const movie = Object.fromEntries(
       Object.entries(searchResponse.results[0]!).filter(([key]) => key !== "mediaInfo"),
     );
-    const response = {
-      ...searchResponse,
-      results: [mediaInfo === undefined ? movie : { ...movie, mediaInfo }],
-    };
-    const { adapter } = adapterWithResponses([jsonResponse(response)]);
+    const { adapter } = adapterWithResponses([
+      jsonResponse({
+        ...searchResponse,
+        results: [{ ...movie, mediaInfo: { status: 99, privatePayload: "secret" } }],
+      }),
+    ]);
 
     const result = await adapter.search({ language: "en", page: 1, query: "fight" });
 
-    expect(result.items[0]).toMatchObject({ availability: expected });
+    expect(result.items[0]).toMatchObject({ availability: "unknown", mediaRecordState: "unknown" });
+    expect(JSON.stringify(result)).not.toContain("secret");
   });
 
   it("requires an API key before performing discovery", async () => {

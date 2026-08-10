@@ -26,9 +26,9 @@ import {
   discoveryPersonCreditsResponseSchema,
   discoverySearchQuerySchema,
   discoverySearchResponseSchema,
-  type DiscoveryAvailability,
   type DiscoveryBrowseAvailability,
   type DiscoveryBrowseQuery,
+  isDiscoveryMediaRequestable,
   type DiscoveryMediaDetailParams,
   type DiscoveryMediaDetailQuery,
   type DiscoveryMediaDetailResponse,
@@ -80,7 +80,7 @@ const upstreamOptionalTitleSchema = z.string().trim().max(300).nullish();
 const upstreamOverviewSchema = z.string().trim().max(2_000).nullish();
 const upstreamDateSchema = z.string().trim().max(32).nullish();
 const upstreamVoteAverageSchema = z.number().finite().min(0).max(10).nullish();
-const upstreamMediaInfoSchema = z.object({ status: z.int().min(1).max(6) }).nullish();
+const upstreamMediaInfoSchema = z.unknown().nullish();
 const upstreamArtworkPathSchema = z
   .string()
   .trim()
@@ -556,22 +556,29 @@ function canCreateRequest(permissions: number, authorization: SeerrRequestAuthor
   return required.some((permission) => (permissions & permission) !== 0);
 }
 
-function availabilityFromMediaInfo(mediaInfo: UpstreamMediaInfo): DiscoveryAvailability {
-  switch (mediaInfo?.status) {
-    case 2:
-      return "requested";
-    case 3:
-      return "processing";
-    case 4:
-      return "partial";
-    case 5:
-      return "available";
-    case 6:
-      return "unavailable";
+function mediaStateFromMediaInfo(mediaInfo: UpstreamMediaInfo) {
+  if (mediaInfo === null || mediaInfo === undefined) {
+    return { availability: "unavailable" as const, mediaRecordState: "absent" as const };
+  }
+  const status =
+    typeof mediaInfo === "object" && mediaInfo !== null && !Array.isArray(mediaInfo)
+      ? (mediaInfo as { status?: unknown }).status
+      : undefined;
+  switch (status) {
     case 1:
-      return "unknown";
+      return { availability: "unknown" as const, mediaRecordState: "present" as const };
+    case 2:
+      return { availability: "requested" as const, mediaRecordState: "present" as const };
+    case 3:
+      return { availability: "processing" as const, mediaRecordState: "present" as const };
+    case 4:
+      return { availability: "partial" as const, mediaRecordState: "present" as const };
+    case 5:
+      return { availability: "available" as const, mediaRecordState: "present" as const };
+    case 6:
+      return { availability: "unavailable" as const, mediaRecordState: "present" as const };
     default:
-      return "unavailable";
+      return { availability: "unknown" as const, mediaRecordState: "unknown" as const };
   }
 }
 
@@ -801,7 +808,7 @@ function normalizedMovieRecommendation(
   result: z.infer<typeof upstreamMovieRecommendationSchema>,
 ): DiscoveryMediaRecommendation {
   return {
-    availability: availabilityFromMediaInfo(result.mediaInfo),
+    ...mediaStateFromMediaInfo(result.mediaInfo),
     id: `movie:${result.id}`,
     kind: "movie",
     originalTitle: optionalText(result.originalTitle),
@@ -818,7 +825,7 @@ function normalizedSeriesRecommendation(
   result: z.infer<typeof upstreamSeriesRecommendationSchema>,
 ): DiscoveryMediaRecommendation {
   return {
-    availability: availabilityFromMediaInfo(result.mediaInfo),
+    ...mediaStateFromMediaInfo(result.mediaInfo),
     id: `series:${result.id}`,
     kind: "series",
     originalTitle: optionalText(result.originalName),
@@ -957,14 +964,12 @@ const BROWSE_SORTS = Object.freeze({
 } as const);
 
 function matchesBrowseAvailability(
-  availability: DiscoveryAvailability,
+  media: Pick<DiscoveryMediaRecommendation, "availability" | "mediaRecordState">,
   filter: DiscoveryBrowseAvailability,
 ) {
   if (filter === "any") return true;
-  if (filter === "requestable") {
-    return availability === "partial" || availability === "unavailable";
-  }
-  return availability === filter;
+  if (filter === "requestable") return isDiscoveryMediaRequestable(media);
+  return media.availability === filter;
 }
 
 function browseYear(item: SeerrDiscoveryFeedItem) {
@@ -978,7 +983,7 @@ function locallyFilteredBrowseItems(
   const filtered = boundedFeedItems(items).filter(({ media }) => {
     const year = media.year;
     return (
-      matchesBrowseAvailability(media.availability, criteria.availability) &&
+      matchesBrowseAvailability(media, criteria.availability) &&
       (criteria.minimumRating === undefined ||
         (media.voteAverage ?? -1) >= criteria.minimumRating) &&
       (criteria.yearFrom === undefined || (year !== null && year >= criteria.yearFrom)) &&
@@ -1057,7 +1062,7 @@ function normalizedPersonCredits(response: z.infer<typeof upstreamPersonCreditsS
       seen.add(key);
       return [
         {
-          availability: availabilityFromMediaInfo(credit.mediaInfo),
+          ...mediaStateFromMediaInfo(credit.mediaInfo),
           kind,
           role,
           title,
@@ -1091,7 +1096,7 @@ function normalizedDetailBase(
 ) {
   return {
     artwork: { backdropPath: null, posterPath: null },
-    availability: availabilityFromMediaInfo(response.mediaInfo),
+    ...mediaStateFromMediaInfo(response.mediaInfo),
     cast: normalizedCast(response.credits),
     crew: normalizedCrew(response.credits),
     genres: normalizedGenres(response.genres),
@@ -1462,7 +1467,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
       switch (result.mediaType) {
         case "movie":
           items.push({
-            availability: availabilityFromMediaInfo(result.mediaInfo),
+            ...mediaStateFromMediaInfo(result.mediaInfo),
             id: `movie:${result.id}`,
             kind: "movie",
             originalTitle: optionalText(result.originalTitle),
@@ -1476,7 +1481,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
           break;
         case "tv":
           items.push({
-            availability: availabilityFromMediaInfo(result.mediaInfo),
+            ...mediaStateFromMediaInfo(result.mediaInfo),
             id: `series:${result.id}`,
             kind: "series",
             originalTitle: optionalText(result.originalName),

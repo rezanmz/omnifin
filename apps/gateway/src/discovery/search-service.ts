@@ -28,12 +28,14 @@ import {
   discoveryPersonCreditsResponseSchema,
   discoverySearchQuerySchema,
   discoverySearchResponseSchema,
+  isDiscoveryMediaRequestable,
   type DiscoveryBrowseQuery,
   type DiscoveryBrowseResponse,
   type DiscoveryFeedQuery,
   type DiscoveryFeedRailKind,
   type DiscoveryFeedResponse,
   type DiscoveryAvailability,
+  type DiscoveryMediaRecordState,
   type DiscoveryMediaDetailParams,
   type DiscoveryMediaDetailQuery,
   type DiscoveryPersonDetailParams,
@@ -163,6 +165,7 @@ const DISCOVERY_AVAILABILITY_CONCURRENCY = 6;
 interface AvailabilityMedia {
   availability: DiscoveryAvailability;
   kind: "movie" | "series";
+  mediaRecordState: DiscoveryMediaRecordState;
   tmdbId: number;
 }
 
@@ -171,14 +174,12 @@ function availabilityKey(input: Pick<AvailabilityMedia, "kind" | "tmdbId">) {
 }
 
 function matchesReconciledAvailability(
-  availability: DiscoveryAvailability,
+  media: Pick<AvailabilityMedia, "availability" | "mediaRecordState">,
   filter: DiscoveryBrowseQuery["availability"],
 ) {
   if (filter === "any") return true;
-  if (filter === "requestable") {
-    return availability === "partial" || availability === "unavailable";
-  }
-  return availability === filter;
+  if (filter === "requestable") return isDiscoveryMediaRequestable(media);
+  return media.availability === filter;
 }
 
 function feedFailure(
@@ -419,7 +420,7 @@ export class DiscoverySearchService {
     );
     const filteredItems = rawItems.flatMap((item, index) => {
       const media = reconciledMedia[index];
-      return media && matchesReconciledAvailability(media.availability, criteria.availability)
+      return media && matchesReconciledAvailability(media, criteria.availability)
         ? [{ ...item, media }]
         : [];
     });

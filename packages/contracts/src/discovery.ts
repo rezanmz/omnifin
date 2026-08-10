@@ -86,6 +86,21 @@ export const discoveryAvailabilitySchema = z.enum([
 ]);
 export type DiscoveryAvailability = z.infer<typeof discoveryAvailabilitySchema>;
 
+export const discoveryMediaRecordStateSchema = z.enum(["present", "absent", "unknown"]);
+export type DiscoveryMediaRecordState = z.infer<typeof discoveryMediaRecordStateSchema>;
+
+export function isDiscoveryMediaRequestable(input: {
+  availability: DiscoveryAvailability;
+  mediaRecordState: DiscoveryMediaRecordState;
+}) {
+  return (
+    input.mediaRecordState !== "unknown" &&
+    (input.availability === "partial" ||
+      input.availability === "unavailable" ||
+      (input.availability === "unknown" && input.mediaRecordState === "absent"))
+  );
+}
+
 const discoveryKnownForSchema = z.strictObject({
   kind: z.enum(["movie", "series"]),
   title: titleSchema,
@@ -106,6 +121,7 @@ const discoveryResultBase = {
 const discoveryMediaResultBase = {
   ...discoveryResultBase,
   availability: discoveryAvailabilitySchema,
+  mediaRecordState: discoveryMediaRecordStateSchema,
   originalTitle: titleSchema.nullable(),
   overview: overviewSchema,
   voteAverage: z.number().finite().min(0).max(10).nullable(),
@@ -546,6 +562,7 @@ const discoveryMediaIntelligenceSchema = z.strictObject({
 const discoveryMediaDetailBase = {
   artwork: discoveryFeedArtworkSchema,
   availability: discoveryAvailabilitySchema,
+  mediaRecordState: discoveryMediaRecordStateSchema,
   cast: z.array(discoveryCastCreditSchema).max(DISCOVERY_DETAIL_MAX_CAST),
   crew: z.array(discoveryCrewCreditSchema).max(DISCOVERY_DETAIL_MAX_CREW),
   genres: z.array(z.string().trim().min(1).max(100)).max(20),
@@ -639,6 +656,7 @@ export type DiscoveryPersonDetailQuery = z.infer<typeof discoveryPersonDetailQue
 export const discoveryPersonCreditSchema = z.strictObject({
   availability: discoveryAvailabilitySchema,
   kind: discoveryMediaKindSchema,
+  mediaRecordState: discoveryMediaRecordStateSchema,
   role: z.string().trim().min(1).max(200),
   title: titleSchema,
   tmdbId: tmdbIdentifierSchema,
