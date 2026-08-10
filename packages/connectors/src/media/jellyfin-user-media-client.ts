@@ -1799,6 +1799,7 @@ export class JellyfinUserMediaClient {
         : { tlsCaCertificatePem: target.tlsCaCertificatePem }),
       ...(target.tlsPolicy === undefined ? {} : { tlsPolicy: target.tlsPolicy }),
       ...(target.transport === undefined ? {} : { transport: target.transport }),
+      ...(target.lane === undefined ? {} : { lane: target.lane }),
     });
   }
 

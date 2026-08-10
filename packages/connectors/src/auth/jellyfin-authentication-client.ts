@@ -68,6 +68,7 @@ export class JellyfinAuthenticationClient {
       ...(config.tlsPolicy === undefined ? {} : { tlsPolicy: config.tlsPolicy }),
       ...(config.timeoutMs === undefined ? {} : { timeoutMs: config.timeoutMs }),
       ...(config.transport === undefined ? {} : { transport: config.transport }),
+      ...(config.lane === undefined ? {} : { lane: config.lane }),
     });
   }
 

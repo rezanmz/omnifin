@@ -74,6 +74,10 @@ import {
   type ConnectorAdminRoutesOptions,
 } from "./connectors/admin-routes.js";
 import {
+  ConnectorHttpLaneRegistry,
+  type ConnectorHttpLaneLifecycle,
+} from "./connectors/http-lane-registry.js";
+import {
   discoverySearchRoutes,
   type DiscoverySearchRoutesOptions,
 } from "./discovery/search-routes.js";
@@ -150,6 +154,7 @@ declare module "fastify" {
     database: DatabaseHandle;
     runtimeDrain: RuntimeDrainCoordinator;
     sessionService: SessionService;
+    connectorHttpLaneRegistry: ConnectorHttpLaneLifecycle;
   }
 
   interface FastifyRequest {
@@ -173,6 +178,7 @@ export interface CreateAppOptions {
   jellyfinQuickConnectDependencies?: JellyfinQuickConnectServiceDependencies;
   identityLinkDependencies?: IdentityLinkRoutesOptions["dependencies"];
   connectorAdminDependencies?: ConnectorAdminRoutesOptions["dependencies"];
+  connectorHttpLaneRegistry?: ConnectorHttpLaneLifecycle;
   discoverySearchDependencies?: DiscoverySearchRoutesOptions["dependencies"];
   downloadQueueDependencies?: DownloadQueueRoutesOptions["dependencies"];
   downloadQueueEventDependencies?: DownloadQueueRoutesOptions["eventDependencies"];
@@ -275,25 +281,43 @@ function oidcBackchannelRequest(request: FastifyRequest) {
 
 export async function createApp(options: CreateAppOptions = {}): Promise<FastifyInstance> {
   const runtimeDrain = options.runtimeDrain ?? createRuntimeDrainCoordinator();
-  const config = options.config ?? loadConfig();
-  const startupPrepared = options.database === undefined && options.migrate !== false;
-  const database =
-    options.database ??
-    (startupPrepared
-      ? await initializeDatabase({
-          backupDirectory: config.backupDirectory ?? "/backups",
-          backupRetentionCount: config.backupRetentionCount ?? 14,
-          databaseUrl: config.databaseUrl,
-          ...(config.imageReference ? { imageReference: config.imageReference } : {}),
-          rootKey: config.encryptionKey,
-        })
-      : openDatabase(config.databaseUrl));
+  const connectorHttpLaneRegistry =
+    options.connectorHttpLaneRegistry ?? new ConnectorHttpLaneRegistry();
+  let config!: AppConfig;
+  let startupPrepared!: boolean;
+  let database!: DatabaseHandle;
   let databaseClosed = false;
+  let connectorHttpLaneRegistryClosed = false;
+  const closeConnectorHttpLaneRegistry = () => {
+    if (connectorHttpLaneRegistryClosed) return;
+    connectorHttpLaneRegistryClosed = true;
+    connectorHttpLaneRegistry.close();
+  };
   const closeDatabase = () => {
     if (databaseClosed) return;
+    if (!database) return;
     databaseClosed = true;
     database.close();
   };
+  try {
+    config = options.config ?? loadConfig();
+    startupPrepared = options.database === undefined && options.migrate !== false;
+    database =
+      options.database ??
+      (startupPrepared
+        ? await initializeDatabase({
+            backupDirectory: config.backupDirectory ?? "/backups",
+            backupRetentionCount: config.backupRetentionCount ?? 14,
+            databaseUrl: config.databaseUrl,
+            ...(config.imageReference ? { imageReference: config.imageReference } : {}),
+            rootKey: config.encryptionKey,
+          })
+        : openDatabase(config.databaseUrl));
+  } catch (initializationError) {
+    closeConnectorHttpLaneRegistry();
+    closeDatabase();
+    throw initializationError;
+  }
   let app: FastifyInstance | undefined;
 
   try {
@@ -344,6 +368,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
     app.decorate("appConfig", config);
     app.decorate("database", database);
     app.decorate("runtimeDrain", runtimeDrain);
+    app.decorate("connectorHttpLaneRegistry", connectorHttpLaneRegistry);
     const sessionService = new SessionService(database, config, options.sessionDependencies);
     const backchannelDependencies = options.oidcDependencies?.backchannelLogout;
     const oidcBackchannelLogout = new OidcBackchannelLogoutService(database, config, {
@@ -516,6 +541,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
     app.addHook("onClose", async () => {
       clearInterval(savedMaintenance);
       runtimeDrain.beginDrain("app.onClose");
+      closeConnectorHttpLaneRegistry();
       closeDatabase();
     });
 
@@ -714,6 +740,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       } catch (cleanupError) {
         cleanupErrors.push(cleanupError);
       }
+    }
+    try {
+      closeConnectorHttpLaneRegistry();
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
     }
     try {
       closeDatabase();

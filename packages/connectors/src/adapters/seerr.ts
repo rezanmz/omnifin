@@ -1842,6 +1842,7 @@ export class SeerrAdapter extends ProbeOnlyAdapter {
         ? {}
         : { tlsCaCertificatePem: this.config.tlsCaCertificatePem }),
       ...(this.config.transport === undefined ? {} : { transport: this.config.transport }),
+      ...(this.config.lane === undefined ? {} : { lane: this.config.lane }),
     });
     return this.#artworkClientInstance;
   }

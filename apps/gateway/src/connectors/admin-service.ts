@@ -31,6 +31,7 @@ import type { DatabaseHandle } from "../db/client.js";
 import { requirePermission } from "../auth/authorization.js";
 import { revokeConnectorSessionsForReplacement } from "../auth/session-service.js";
 import { EnvelopeCipher, privacyHash } from "../security/crypto.js";
+import type { ConnectorHttpLaneLifecycle } from "./http-lane-registry.js";
 
 const MAX_CONNECTORS = 100;
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
@@ -107,12 +108,14 @@ export interface ConnectorAdapterFactoryInput {
   insecureHttpApproved: boolean;
   tlsPolicy: "strict" | "allow_self_signed";
   tlsCaCertificatePem?: string;
+  lane?: ConnectorTargetConfig["lane"];
 }
 
 export interface ConnectorAdminDependencies {
   clock?: () => Date;
   createAdapter?: (input: ConnectorAdapterFactoryInput) => ConnectorAdapter;
   createId?: () => string;
+  laneProvider?: ConnectorHttpLaneLifecycle;
 }
 
 function credentialContext(service: ManagedConnectorService, connectorId: string) {
@@ -320,6 +323,7 @@ function defaultAdapterFactory(input: ConnectorAdapterFactoryInput): ConnectorAd
     ...(input.tlsCaCertificatePem === undefined
       ? {}
       : { tlsCaCertificatePem: input.tlsCaCertificatePem }),
+    ...(input.lane === undefined ? {} : { lane: input.lane }),
   } satisfies ConnectorTargetConfig;
   switch (input.service) {
     case "jellyfin":
@@ -371,6 +375,7 @@ export class ConnectorAdminService {
   readonly #createAdapter: (input: ConnectorAdapterFactoryInput) => ConnectorAdapter;
   readonly #createId: () => string;
   readonly #database: DatabaseHandle;
+  readonly #laneProvider: ConnectorHttpLaneLifecycle | undefined;
 
   public constructor(
     database: DatabaseHandle,
@@ -383,6 +388,7 @@ export class ConnectorAdminService {
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createAdapter = dependencies.createAdapter ?? defaultAdapterFactory;
     this.#createId = dependencies.createId ?? randomUUID;
+    this.#laneProvider = dependencies.laneProvider;
   }
 
   public list(query: ConnectorListQuery, context: ConnectorAdminContext) {
@@ -731,6 +737,16 @@ export class ConnectorAdminService {
           );
         })
         .immediate();
+      if (
+        baseUrlChanged ||
+        credentialsChanged ||
+        tlsPolicyChanged ||
+        tlsCaCertificateChanged ||
+        insecureHttpApprovalChanged ||
+        (current.enabled === 1 && !requestedEnabled)
+      ) {
+        this.#laneProvider?.retire(service, current.id);
+      }
       return this.#present(this.#row(current.id));
     } catch (error) {
       if (error instanceof ConnectorAdminError) throw error;
@@ -749,6 +765,7 @@ export class ConnectorAdminService {
     }
     let adapter: ConnectorAdapter;
     try {
+      const lane = this.#laneProvider?.laneFor(service, current.id);
       adapter = this.#createAdapter({
         connectorId: current.id,
         service,
@@ -760,6 +777,7 @@ export class ConnectorAdminService {
         ...(secrets.tlsCaCertificatePem === undefined
           ? {}
           : { tlsCaCertificatePem: secrets.tlsCaCertificatePem }),
+        ...(lane === undefined ? {} : { lane }),
       });
     } catch (error) {
       if (error instanceof ConnectorAdminError) throw error;
@@ -889,6 +907,7 @@ export class ConnectorAdminService {
           );
         })
         .immediate();
+      if (instanceIdentityReplaced) this.#laneProvider?.retire(service, current.id);
       return this.#present(this.#row(current.id));
     } catch (error) {
       if (error instanceof ConnectorAdminError) throw error;
@@ -933,6 +952,7 @@ export class ConnectorAdminService {
           );
         })
         .immediate();
+      this.#laneProvider?.retire(this.#service(current.type), current.id);
       return { deletedConnectorId: current.id };
     } catch (error) {
       if (error instanceof ConnectorAdminError) throw error;

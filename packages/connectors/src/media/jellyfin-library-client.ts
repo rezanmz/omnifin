@@ -208,6 +208,7 @@ export class JellyfinLibraryClient {
         : { tlsCaCertificatePem: target.tlsCaCertificatePem }),
       ...(target.tlsPolicy === undefined ? {} : { tlsPolicy: target.tlsPolicy }),
       ...(target.transport === undefined ? {} : { transport: target.transport }),
+      ...(target.lane === undefined ? {} : { lane: target.lane }),
     });
   }
 
@@ -412,6 +413,7 @@ export class JellyfinLibraryClient {
       service: "jellyfin",
       ...(this.#target.timeoutMs === undefined ? {} : { timeoutMs: this.#target.timeoutMs }),
       ...(this.#target.transport === undefined ? {} : { transport: this.#target.transport }),
+      ...(this.#target.lane === undefined ? {} : { lane: this.#target.lane }),
     });
     const response = await remoteClient.requestBytes(url.pathname.slice(1), {
       headers: { accept: "image/avif,image/webp,image/jpeg,image/png" },

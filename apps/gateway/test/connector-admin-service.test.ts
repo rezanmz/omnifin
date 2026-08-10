@@ -15,6 +15,8 @@ import type {
   ConnectorAdapterFactoryInput,
   ConnectorAdminError,
 } from "../src/connectors/admin-service.js";
+import type { ConnectorHttpLaneLifecycle } from "../src/connectors/http-lane-registry.js";
+import { ConnectorHttpLane } from "@omnifin/connectors/http/connector-http-lane";
 import type { AppConfig } from "../src/config.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
 import { ExternalMutationJournal } from "../src/operations/external-mutation-journal.js";
@@ -107,6 +109,7 @@ function createHarness(
   options: {
     clock?: () => Date;
     createAdapter?: (input: ConnectorAdapterFactoryInput) => ConnectorAdapter;
+    laneProvider?: ConnectorHttpLaneLifecycle;
   } = {},
 ) {
   const config = testConfig();
@@ -120,6 +123,7 @@ function createHarness(
     ...(options.clock === undefined ? {} : { clock: options.clock }),
     createId: () => `connector-audit-${++identifier}`,
     ...(options.createAdapter === undefined ? {} : { createAdapter: options.createAdapter }),
+    ...(options.laneProvider === undefined ? {} : { laneProvider: options.laneProvider }),
   });
   return { config, database, service };
 }
@@ -983,6 +987,68 @@ describe("connector administration service", () => {
         ),
       ).toThrow(expect.objectContaining({ reason: "revision_conflict" }));
     } finally {
+      database.close();
+    }
+  });
+
+  it("uses the connector lane for probes and retires it only after committed material changes", async () => {
+    const lane = new ConnectorHttpLane({ service: "radarr" });
+    const laneProvider: ConnectorHttpLaneLifecycle = {
+      close: vi.fn(),
+      laneFor: vi.fn(() => lane),
+      retire: vi.fn(),
+    };
+    let adapterInput: ConnectorAdapterFactoryInput | undefined;
+    const { database, service } = createHarness({
+      laneProvider,
+      createAdapter: (input) => {
+        adapterInput = input;
+        return {
+          capabilities: ["connector.health", "connector.version"],
+          probe: async () => healthyRadarr(),
+          service: "radarr",
+        };
+      },
+    });
+    try {
+      const created = service.create(radarrRequest, context());
+      await service.probe(created.id, context());
+      expect(laneProvider.laneFor).toHaveBeenCalledWith("radarr", created.id);
+      expect(adapterInput?.lane).toBe(lane);
+
+      const displayOnly = service.update(
+        created.id,
+        { displayName: "Renamed", revision: created.revision },
+        context(),
+      );
+      expect(displayOnly.displayName).toBe("Renamed");
+      expect(laneProvider.retire).not.toHaveBeenCalled();
+
+      const material = service.update(
+        created.id,
+        { baseUrl: "https://radarr-new.example.test", revision: displayOnly.revision },
+        context(),
+      );
+      expect(material.baseUrl).toContain("radarr-new.example.test");
+      expect(laneProvider.retire).toHaveBeenCalledOnce();
+
+      expect(() =>
+        service.update(
+          created.id,
+          {
+            baseUrl: "https://radarr-failed.example.test",
+            enabled: true,
+            revision: material.revision,
+          },
+          context(),
+        ),
+      ).toThrow(expect.objectContaining({ reason: "connector_not_validated" }));
+      expect(laneProvider.retire).toHaveBeenCalledOnce();
+
+      service.delete(created.id, material.revision, context());
+      expect(laneProvider.retire).toHaveBeenCalledTimes(2);
+    } finally {
+      lane.close();
       database.close();
     }
   });
