@@ -29,6 +29,10 @@
       "types": "./dist/http/pinned-transport.d.ts",
       "default": "./dist/http/pinned-transport.js"
     },
+    "./http/connector-http-lane": {
+      "types": "./dist/http/connector-http-lane.d.ts",
+      "default": "./dist/http/connector-http-lane.js"
+    },
     "./auth/jellyfin-authentication-client": {
       "types": "./dist/auth/jellyfin-authentication-client.d.ts",
       "default": "./dist/auth/jellyfin-authentication-client.js"
