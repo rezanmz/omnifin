@@ -153,7 +153,7 @@ function discoverTests(directory, namePattern) {
   return files.sort();
 }
 
-function vitestArguments(packageName, files, reportPath, testNamePattern) {
+function vitestArguments(packageName, files, reportPath, testNamePattern, options = {}) {
   const arguments_ = [
     "--filter",
     packageName,
@@ -166,6 +166,7 @@ function vitestArguments(packageName, files, reportPath, testNamePattern) {
     reportPath,
   ];
   if (testNamePattern) arguments_.push("--testNamePattern", testNamePattern);
+  if (options.maxWorkers !== undefined) arguments_.push(`--maxWorkers=${options.maxWorkers}`);
   return arguments_;
 }
 
@@ -182,7 +183,7 @@ function spawnOptions() {
   };
 }
 
-function runVitest(packageName, files, testNamePattern) {
+function runVitest(packageName, files, testNamePattern, options = {}) {
   const reportDirectory = mkdtempSync(join(tmpdir(), "omnifin-fixture-"));
   const reportPath = join(reportDirectory, "vitest.json");
   try {
@@ -192,7 +193,7 @@ function runVitest(packageName, files, testNamePattern) {
     }
     const execution = spawnSync(
       "pnpm",
-      vitestArguments(packageName, files, reportPath, testNamePattern),
+      vitestArguments(packageName, files, reportPath, testNamePattern, options),
       spawnOptions(),
     );
     const report = existsSync(reportPath) ? readFileSync(reportPath, "utf8") : undefined;
@@ -305,7 +306,7 @@ function runFixture(service) {
       return { service, profile: "fixture-contract", status: "not_implemented" };
     }
     const files = absoluteFiles.map((file) => relative(join(root, "apps/gateway"), file));
-    const execution = runVitest("@omnifin/gateway", files);
+    const execution = runVitest("@omnifin/gateway", files, undefined, { maxWorkers: 1 });
     return {
       service,
       profile: "fixture-contract",

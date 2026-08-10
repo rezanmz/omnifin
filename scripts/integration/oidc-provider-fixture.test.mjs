@@ -29,6 +29,11 @@ const templateSource = readFileSync(
   "utf8",
 );
 const runnerSource = readFileSync(new URL("./oidc-provider/run.mjs", import.meta.url), "utf8");
+const integrationRunnerSource = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
+const originalDownloadRoutesSource = readFileSync(
+  new URL("../../apps/gateway/test/original-download-routes.test.ts", import.meta.url),
+  "utf8",
+);
 const browserSource = readFileSync(
   new URL("./oidc-provider/browser-check.mjs", import.meta.url),
   "utf8",
@@ -197,6 +202,19 @@ test("keeps the provider flow strict, bounded, and free of raw diagnostics", () 
   assert.doesNotMatch(proxySource, /upstreamResponse\.statusMessage/u);
   assert.equal((proxySource.match(/response\.writeHead\(/gu) ?? []).length, 1);
   assert.doesNotMatch(proxySource, /Object\.entries\(headers\)|forwarded\[name\]/u);
+});
+
+test("keeps OIDC fixture contention and download timeout bounds local", () => {
+  assert.match(
+    integrationRunnerSource,
+    /runVitest\("@omnifin\/gateway", files, undefined, \{ maxWorkers: 1 \}\)/u,
+  );
+  assert.match(integrationRunnerSource, /`--maxWorkers=\$\{options\.maxWorkers\}`/u);
+  assert.match(
+    originalDownloadRoutesSource,
+    /it\(\s*"maps denied, unavailable, changed, and expired sources to stable public errors",\s*async \(\) =>[\s\S]*?\}, 15_000\);/u,
+  );
+  assert.doesNotMatch(originalDownloadRoutesSource, /test\.setConfig\([^)]*timeout/iu);
 });
 
 test("waits for semantic session convergence before inspecting the replacement cookie", async () => {
