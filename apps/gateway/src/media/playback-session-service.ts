@@ -28,6 +28,7 @@ import { z } from "zod";
 
 import { requirePermission } from "../auth/authorization.js";
 import type { AppConfig } from "../config.js";
+import type { ConnectorHttpLaneLifecycle } from "../connectors/http-lane-registry.js";
 import type { DatabaseHandle } from "../db/client.js";
 import {
   constantTimeTextEqual,
@@ -250,6 +251,7 @@ export interface PlaybackClientFactoryInput extends ConnectorTargetConfig {
 }
 
 export interface PlaybackSessionDependencies {
+  laneProvider?: ConnectorHttpLaneLifecycle;
   beforeProgressCompletion?: (state: "succeeded" | "uncertain") => void;
   clock?: () => Date;
   createAssetToken?: () => string;
@@ -568,6 +570,7 @@ function leasedPlaybackStream(body: ReadableStream<Uint8Array>, release: () => v
 }
 
 export class PlaybackSessionService {
+  readonly #laneProvider: ConnectorHttpLaneLifecycle | undefined;
   readonly #beforeProgressCompletion:
     NonNullable<PlaybackSessionDependencies["beforeProgressCompletion"]> | undefined;
   readonly #cipher: EnvelopeCipher;
@@ -588,6 +591,7 @@ export class PlaybackSessionService {
     dependencies: PlaybackSessionDependencies = {},
   ) {
     this.#database = database;
+    this.#laneProvider = dependencies.laneProvider;
     this.#config = config;
     this.#beforeProgressCompletion = dependencies.beforeProgressCompletion;
     this.#cipher = new EnvelopeCipher(config.encryptionKey);
@@ -1025,6 +1029,9 @@ export class PlaybackSessionService {
         ...(maxResponseBytes === undefined ? {} : { maxResponseBytes }),
         tlsPolicy,
         ...connectorSecrets(source, this.#cipher),
+        ...(this.#laneProvider === undefined
+          ? {}
+          : { lane: this.#laneProvider.laneFor("jellyfin", source.connectorId) }),
       });
     } catch (error) {
       throw new PlaybackConfigurationError("invalid", { cause: error });

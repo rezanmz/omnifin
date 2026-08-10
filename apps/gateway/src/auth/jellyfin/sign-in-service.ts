@@ -11,6 +11,8 @@ import type {
 } from "@omnifin/contracts/auth";
 
 import type { AppConfig } from "../../config.js";
+import type { ConnectorHttpLane } from "@omnifin/connectors/http/connector-http-lane";
+import type { ConnectorHttpLaneLifecycle } from "../../connectors/http-lane-registry.js";
 import type { DatabaseHandle } from "../../db/client.js";
 import { EnvelopeCipher } from "../../security/crypto.js";
 import {
@@ -186,11 +188,12 @@ export type JellyfinBootstrapResult =
 export interface JellyfinSignInServiceDependencies {
   readonly clock?: () => Date;
   readonly createClient?: (
-    target: JellyfinConnectorTarget,
+    target: JellyfinConnectorTarget & { readonly lane?: ConnectorHttpLane },
   ) => Pick<JellyfinAuthenticationClient, "authenticateByName" | "getPublicSystemInfo">;
   readonly createDeviceId?: () => string;
   readonly createId?: () => string;
   readonly invitationService?: InvitationService;
+  readonly laneProvider?: ConnectorHttpLaneLifecycle;
 }
 
 export class JellyfinSignInServiceError extends Error {
@@ -287,18 +290,28 @@ export class JellyfinSignInService {
     );
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createClient =
-      dependencies.createClient ??
-      ((target) =>
-        new JellyfinAuthenticationClient({
-          baseUrl: target.baseUrl,
-          connectorId: target.connectorId,
-          displayName: target.displayName,
-          insecureHttpApproved: target.insecureHttpApproved,
-          tlsPolicy: target.tlsPolicy ?? "strict",
-          ...(target.tlsCaCertificatePem === undefined
-            ? {}
-            : { tlsCaCertificatePem: target.tlsCaCertificatePem }),
-        }));
+      dependencies.createClient === undefined
+        ? (target) =>
+            new JellyfinAuthenticationClient({
+              baseUrl: target.baseUrl,
+              connectorId: target.connectorId,
+              displayName: target.displayName,
+              insecureHttpApproved: target.insecureHttpApproved,
+              ...(dependencies.laneProvider === undefined
+                ? {}
+                : { lane: dependencies.laneProvider.laneFor("jellyfin", target.connectorId) }),
+              tlsPolicy: target.tlsPolicy ?? "strict",
+              ...(target.tlsCaCertificatePem === undefined
+                ? {}
+                : { tlsCaCertificatePem: target.tlsCaCertificatePem }),
+            })
+        : (target) =>
+            dependencies.createClient!({
+              ...target,
+              ...(dependencies.laneProvider === undefined
+                ? {}
+                : { lane: dependencies.laneProvider.laneFor("jellyfin", target.connectorId) }),
+            });
     this.#createDeviceId = dependencies.createDeviceId ?? randomUUID;
     this.#createId = dependencies.createId ?? randomUUID;
     this.#database = database;

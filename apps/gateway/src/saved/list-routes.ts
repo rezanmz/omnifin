@@ -37,6 +37,7 @@ import { z } from "zod";
 import { requirePermission } from "../auth/authorization.js";
 import { sessionCookieName, writeSessionCookie } from "../auth/session-cookie.js";
 import { SafeHttpError } from "../http-error.js";
+import type { ConnectorHttpLaneLifecycle } from "../connectors/http-lane-registry.js";
 import {
   ContinueWatchingError,
   ContinueWatchingService,
@@ -270,15 +271,15 @@ function handleError(error: unknown, reply: FastifyReply): never {
 export interface SavedListRoutesOptions {
   artworkDependencies?: ContinueWatchingDependencies;
   dependencies?: SavedListServiceDependencies;
+  laneProvider?: ConnectorHttpLaneLifecycle;
 }
 
 export const savedListRoutes: FastifyPluginAsync<SavedListRoutesOptions> = async (app, options) => {
   const saved = new SavedListService(app.database, app.appConfig, options.dependencies);
-  const media = new ContinueWatchingService(
-    app.database,
-    app.appConfig,
-    options.artworkDependencies,
-  );
+  const media = new ContinueWatchingService(app.database, app.appConfig, {
+    ...(options.artworkDependencies ?? {}),
+    laneProvider: options.laneProvider ?? app.connectorHttpLaneRegistry,
+  });
 
   app.get(
     "/v1/saved/lists",

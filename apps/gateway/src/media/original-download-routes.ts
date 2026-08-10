@@ -13,6 +13,7 @@ import { z } from "zod";
 import { requirePermission } from "../auth/authorization.js";
 import { sessionCookieName, writeSessionCookie } from "../auth/session-cookie.js";
 import { SafeHttpError } from "../http-error.js";
+import type { ConnectorHttpLaneLifecycle } from "../connectors/http-lane-registry.js";
 import {
   OriginalDownloadError,
   OriginalDownloadService,
@@ -236,13 +237,17 @@ function sendTransfer(
 
 export interface OriginalDownloadRoutesOptions {
   dependencies?: OriginalDownloadDependencies;
+  laneProvider?: ConnectorHttpLaneLifecycle;
 }
 
 export const originalDownloadRoutes: FastifyPluginAsync<OriginalDownloadRoutesOptions> = async (
   app,
   options,
 ) => {
-  const downloads = new OriginalDownloadService(app.database, app.appConfig, options.dependencies);
+  const downloads = new OriginalDownloadService(app.database, app.appConfig, {
+    ...(options.dependencies ?? {}),
+    laneProvider: options.laneProvider ?? app.connectorHttpLaneRegistry,
+  });
 
   app.post(
     "/v1/media/library/:referenceId/downloads",

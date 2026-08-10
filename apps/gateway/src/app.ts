@@ -568,16 +568,19 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
         : { eventDependencies: options.downloadQueueEventDependencies }),
     });
     await app.register(continueWatchingRoutes, {
+      laneProvider: connectorHttpLaneRegistry,
       ...(options.continueWatchingDependencies === undefined
         ? {}
         : { dependencies: options.continueWatchingDependencies }),
     });
     await app.register(originalDownloadRoutes, {
+      laneProvider: connectorHttpLaneRegistry,
       ...(options.originalDownloadDependencies === undefined
         ? {}
         : { dependencies: options.originalDownloadDependencies }),
     });
     await app.register(playbackRoutes, {
+      laneProvider: connectorHttpLaneRegistry,
       ...(options.playbackDependencies === undefined
         ? {}
         : { dependencies: options.playbackDependencies }),
@@ -608,6 +611,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
         : { dependencies: options.libraryOperationDependencies }),
     });
     await app.register(savedListRoutes, {
+      laneProvider: connectorHttpLaneRegistry,
       ...(options.continueWatchingDependencies === undefined
         ? {}
         : { artworkDependencies: options.continueWatchingDependencies }),
@@ -707,6 +711,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
         : { dependencies: options.auditTrailDependencies }),
     });
     await app.register(jellyfinRoutes, {
+      laneProvider: connectorHttpLaneRegistry,
       ...(options.jellyfinDependencies === undefined
         ? {}
         : { dependencies: options.jellyfinDependencies }),
