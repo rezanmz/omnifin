@@ -10,6 +10,7 @@ import type {
   DiscoveryPersonDetail,
   DiscoverySeriesResult,
 } from "@omnifin/contracts/discovery";
+import { isDiscoveryMediaRequestable } from "@omnifin/contracts/discovery-requestability";
 import {
   ArrowLeft,
   BadgeCheck,
@@ -40,7 +41,6 @@ import {
   type DiscoveryPersonDetailClient,
   type MediaDetailClientErrorKind,
 } from "../lib/media-details";
-import { discoveryAvailabilityIsRequestable } from "../lib/discovery-presentation";
 import { titleProviderHref } from "../lib/title-provider-reference";
 import { SavedTitleActions } from "./saved-title-actions";
 
@@ -197,6 +197,7 @@ function creditMedia(credit: DiscoveryPersonDetail["credits"][number]): DetailMe
     availability: credit.availability,
     id: `${credit.kind}:${credit.tmdbId}`,
     kind: credit.kind,
+    mediaRecordState: credit.mediaRecordState,
     originalTitle: null,
     overview: null,
     source: "seerr",
@@ -291,7 +292,21 @@ function DetailContent({
 }) {
   const runtime = formatRuntime(detail.runtimeMinutes);
   const ratings = formatRatings(detail.voteCount);
-  const requestable = discoveryAvailabilityIsRequestable(detail.availability);
+  const requestable = isDiscoveryMediaRequestable({
+    availability: detail.availability,
+    mediaRecordState: detail.mediaRecordState,
+  });
+  const requestCopy =
+    detail.availability === "unknown" && detail.mediaRecordState === "absent"
+      ? {
+          detail:
+            "This title is not currently in Seerr. Submit a request to check its acquisition path.",
+          eyebrow: "Request availability unconfirmed",
+        }
+      : {
+          detail: "Start the request without losing your place.",
+          eyebrow: "Available to request",
+        };
   const saveable = detail.availability !== "available" && detail.availability !== "unknown";
   return (
     <div className="media-detail__content">
@@ -353,8 +368,8 @@ function DetailContent({
       {requestable && onRequest ? (
         <aside aria-label="Request this title" className="media-detail__request-bar">
           <div>
-            <span>Available to request</span>
-            <strong>Start the request without losing your place.</strong>
+            <span>{requestCopy.eyebrow}</span>
+            <strong>{requestCopy.detail}</strong>
           </div>
           <button
             aria-label={`Request ${detail.title}`}

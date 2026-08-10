@@ -14,6 +14,7 @@ const readyResponse: DiscoverySearchResponse = {
   items: [
     {
       availability: "available",
+      mediaRecordState: "present",
       id: "movie:603",
       kind: "movie",
       originalTitle: "The Matrix",
@@ -26,6 +27,7 @@ const readyResponse: DiscoverySearchResponse = {
     },
     {
       availability: "requested",
+      mediaRecordState: "present",
       id: "series:1396",
       kind: "series",
       originalTitle: "Breaking Bad",
@@ -63,6 +65,7 @@ const personResponse: DiscoveryPersonDetailResponse = {
     credits: [
       {
         availability: "available",
+        mediaRecordState: "present",
         kind: "movie",
         role: "Tyler Durden",
         title: "Fight Club",

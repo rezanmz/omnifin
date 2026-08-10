@@ -17,6 +17,7 @@ const detailResponse = {
   item: {
     artwork: { backdropPath: null, posterPath: null },
     availability: "unavailable" as const,
+    mediaRecordState: "absent" as const,
     cast: [],
     crew: [],
     genres: ["Science Fiction"],

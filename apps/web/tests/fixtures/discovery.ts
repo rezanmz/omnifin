@@ -1,5 +1,8 @@
 import {
   discoveryBrowseQuerySchema,
+  type DiscoveryMediaDetailResponse,
+  type DiscoveryPersonDetailResponse,
+  type DiscoverySearchResponse,
   type DiscoveryFeedResponse,
 } from "@omnifin/contracts/discovery";
 import type { Page } from "@playwright/test";
@@ -46,11 +49,12 @@ export const longTitleDiscoveryFeedFixture: DiscoveryFeedResponse = {
   })),
 };
 
-export const discoverySearchFixture = {
+export const discoverySearchFixture: DiscoverySearchResponse = {
   generatedAt: "2026-07-27T08:30:00.000Z",
   items: [
     {
       availability: "unavailable",
+      mediaRecordState: "absent",
       id: "movie:603",
       kind: "movie",
       originalTitle: "The Matrix",
@@ -63,6 +67,7 @@ export const discoverySearchFixture = {
     },
     {
       availability: "requested",
+      mediaRecordState: "present",
       id: "series:1396",
       kind: "series",
       originalTitle: "Breaking Bad",
@@ -89,13 +94,14 @@ export const discoverySearchFixture = {
   query: "matrix",
   totalPages: 1,
   totalResults: 3,
-} as const;
+};
 
-export const discoveryMovieDetailFixture = {
+export const discoveryMovieDetailFixture: DiscoveryMediaDetailResponse = {
   generatedAt: "2026-07-28T20:00:00.000Z",
   item: {
     artwork: { backdropPath: artworkReference("a"), posterPath: artworkReference("b") },
     availability: "unavailable",
+    mediaRecordState: "absent",
     cast: [
       {
         character: "Neo",
@@ -135,6 +141,7 @@ export const discoveryMovieDetailFixture = {
         {
           audience: "community",
           label: "TMDB",
+          providerReference: null,
           scale: 10,
           sentiment: null,
           source: "tmdb",
@@ -144,6 +151,7 @@ export const discoveryMovieDetailFixture = {
         {
           audience: "community",
           label: "IMDb",
+          providerReference: null,
           scale: 10,
           sentiment: null,
           source: "imdb",
@@ -153,6 +161,7 @@ export const discoveryMovieDetailFixture = {
         {
           audience: "critics",
           label: "Tomatometer",
+          providerReference: null,
           scale: 100,
           sentiment: "Certified Fresh",
           source: "rotten_tomatoes",
@@ -162,6 +171,7 @@ export const discoveryMovieDetailFixture = {
         {
           audience: "audience",
           label: "RT audience",
+          providerReference: null,
           scale: 100,
           sentiment: "Upright",
           source: "rotten_tomatoes",
@@ -173,6 +183,7 @@ export const discoveryMovieDetailFixture = {
       recommendations: [
         {
           availability: "requested",
+          mediaRecordState: "present",
           id: "movie:604",
           kind: "movie",
           originalTitle: "The Matrix Reloaded",
@@ -209,9 +220,9 @@ export const discoveryMovieDetailFixture = {
     voteCount: 27_000,
     year: 1999,
   },
-} as const;
+};
 
-export const discoveryPersonDetailFixture = {
+export const discoveryPersonDetailFixture: DiscoveryPersonDetailResponse = {
   generatedAt: "2026-07-28T20:00:00.000Z",
   item: {
     biography:
@@ -221,6 +232,7 @@ export const discoveryPersonDetailFixture = {
     credits: [
       {
         availability: "available",
+        mediaRecordState: "present",
         kind: "movie",
         role: "Neo",
         title: "The Matrix",
@@ -239,7 +251,7 @@ export const discoveryPersonDetailFixture = {
     source: "seerr",
     tmdbId: 6384,
   },
-} as const;
+};
 
 export async function mockDiscoverySearch(page: Page) {
   await page.route("**/api/discovery/search?**", async (route) => {

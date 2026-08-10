@@ -31,6 +31,7 @@ const discoveryDetail = {
     trailers: [],
   },
   kind: "movie",
+  mediaRecordState: "absent",
   originalTitle: null,
   overview: "A requestable title saved without creating a request.",
   productionStatus: "Released",

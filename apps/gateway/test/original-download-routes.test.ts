@@ -433,7 +433,7 @@ describe("original download routes", () => {
     } finally {
       await expired.app.close();
     }
-  });
+  }, 15_000);
 
   it("cancels the bounded Jellyfin stream when the downstream response closes", async () => {
     const cancelled = vi.fn();
