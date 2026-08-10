@@ -896,6 +896,35 @@
   margin: 9px 0 0;
 }
 
+.approvalRecovery {
+  align-items: center;
+  background: rgb(255 182 92 / 8%);
+  border: 1px solid rgb(255 182 92 / 24%);
+  border-radius: var(--radius-md);
+  color: var(--warning);
+  display: grid;
+  gap: 14px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  margin-top: 18px;
+  padding: clamp(18px, 3vw, 26px);
+}
+
+.approvalRecovery h3 {
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+  font-weight: 500;
+  letter-spacing: -0.025em;
+  margin: 4px 0 6px;
+}
+
+.approvalRecovery p:not(:global(.section-kicker)) {
+  color: var(--paper-2);
+  font-size: 0.75rem;
+  line-height: 1.55;
+  margin: 0;
+  max-width: 62ch;
+}
+
 .capabilities {
   background: rgb(216 255 112 / 5%);
   border: 1px solid rgb(216 255 112 / 12%);
@@ -1382,6 +1411,15 @@
 
   .bootstrapCallout > .primaryButton,
   .bootstrapCallout > small {
+    grid-column: 1 / -1;
+  }
+
+  .approvalRecovery {
+    align-items: stretch;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .approvalRecovery > .secondaryButton {
     grid-column: 1 / -1;
   }
 

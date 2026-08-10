@@ -13,10 +13,14 @@ const REPOSITORY_ROOT = resolve(import.meta.dirname, "../..");
 const PUBLIC_ORIGIN = "https://omnifin.example";
 const REQUEST_TIMEOUT_MS = 15_000;
 const RESPONSE_MAX_BYTES = 1_048_576;
+const ROLLBACK_PROBE_MAX_BYTES = 512;
 const IMAGE_PATTERN = /^ghcr\.io\/rezanmz\/omnifin@(sha256:[a-f0-9]{64})$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const SESSION_VALUE_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 const PRIVATE_IPV4_PATTERN = /^(?:10\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.)/u;
+export const V0131_ROLLBACK_DIGEST =
+  "sha256:deae382a5c09560322eb5146764393bd0155c314087768426b757ca0c6fbff11";
+export const ROLLBACK_V0131_EXCEPTION_CHECK = "rollback_v0131_quarantine_exception_verified";
 const REQUIRED_CHECKS = Object.freeze([
   "previous_runtime_verified",
   "previous_state_seeded",
@@ -27,7 +31,12 @@ const REQUIRED_CHECKS = Object.freeze([
   "rollback_backup_verified",
   "rollback_state_verified",
 ]);
-const ALLOWED_CHECKS = new Set(REQUIRED_CHECKS);
+const LEGACY_REQUIRED_CHECKS = Object.freeze([
+  ...REQUIRED_CHECKS.slice(0, -1),
+  ROLLBACK_V0131_EXCEPTION_CHECK,
+  REQUIRED_CHECKS.at(-1),
+]);
+const ALLOWED_CHECKS = new Set([...REQUIRED_CHECKS, ROLLBACK_V0131_EXCEPTION_CHECK]);
 
 class RehearsalFailure extends Error {
   constructor(operation, options) {
@@ -60,11 +69,20 @@ function closedState(value, name) {
   };
 }
 
-function closedChecks(checks) {
+export function usesV0131RollbackCompatibility(digest) {
+  return digest === V0131_ROLLBACK_DIGEST;
+}
+
+function requiredChecksForDigest(digest) {
+  return usesV0131RollbackCompatibility(digest) ? LEGACY_REQUIRED_CHECKS : REQUIRED_CHECKS;
+}
+
+function closedChecks(checks, previousDigest) {
+  const requiredChecks = requiredChecksForDigest(previousDigest);
   if (
     !Array.isArray(checks) ||
-    checks.length !== REQUIRED_CHECKS.length ||
-    checks.some((check, index) => check !== REQUIRED_CHECKS[index])
+    checks.length !== requiredChecks.length ||
+    checks.some((check, index) => check !== requiredChecks[index])
   ) {
     throw new RehearsalFailure("rehearsal_checks_invalid");
   }
@@ -89,7 +107,7 @@ export function upgradeRehearsalReport(input) {
   }
   return {
     candidate: { digest: candidateImage.digest, ...candidate },
-    checks: closedChecks(input.checks),
+    checks: closedChecks(input.checks, previousImage.digest),
     previous: { digest: previousImage.digest, ...previous },
     rollback,
     schemaVersion: 1,
@@ -114,7 +132,12 @@ export function failedUpgradeRehearsalReport(error, images, checks) {
       : "release_rehearsal_failed";
   return {
     candidateDigest: images.candidate.digest,
-    checks: checks.filter((check) => ALLOWED_CHECKS.has(check)),
+    checks: checks.filter(
+      (check) =>
+        ALLOWED_CHECKS.has(check) &&
+        (usesV0131RollbackCompatibility(images.previous?.digest) ||
+          check !== ROLLBACK_V0131_EXCEPTION_CHECK),
+    ),
     errorCategory,
     ...(images.previous ? { previousDigest: images.previous.digest } : {}),
     schemaVersion: 1,
@@ -200,12 +223,22 @@ function inspectImage(image, label) {
     ["image", "inspect", "--format", "{{json .Config.Entrypoint}}", image.reference],
     `${label}_entrypoint`,
   );
+  let entrypointParts;
+  try {
+    entrypointParts = JSON.parse(entrypoint);
+  } catch (error) {
+    throw new RehearsalFailure(`${label}_runtime_contract_invalid`, { cause: error });
+  }
   if (
     runtimeUser !== "65532:65532" ||
-    entrypoint !== '["/nodejs/bin/node","/opt/omnifin/bin/entrypoint.mjs"]'
+    !Array.isArray(entrypointParts) ||
+    entrypointParts.length !== 2 ||
+    entrypointParts[0] !== "/nodejs/bin/node" ||
+    entrypointParts[1] !== "/opt/omnifin/bin/entrypoint.mjs"
   ) {
     throw new RehearsalFailure(`${label}_runtime_contract_invalid`);
   }
+  return { nodeEntrypoint: entrypointParts[0] };
 }
 
 async function waitForHealthy(container, operation) {
@@ -365,7 +398,7 @@ async function requestJson(baseUrl, path, operation, options = {}) {
   } catch (error) {
     throw new RehearsalFailure(operation, { cause: error });
   }
-  return { body, headers: response.headers };
+  return { body, headers: response.headers, status: response.status };
 }
 
 async function recoverySession(gatewayUrl, recoverySecret, label) {
@@ -387,6 +420,23 @@ async function recoverySession(gatewayUrl, recoverySecret, label) {
     throw new RehearsalFailure(`${label}_recovery_invalid`);
   }
   return { cookie, csrfToken };
+}
+
+export function validateV0131RollbackAdminError(response) {
+  if (
+    !response ||
+    response.status !== 503 ||
+    !response.body ||
+    typeof response.body !== "object" ||
+    Array.isArray(response.body) ||
+    !response.body.error ||
+    typeof response.body.error !== "object" ||
+    Array.isArray(response.body.error) ||
+    response.body.error.code !== "oidc_provider_configuration_unavailable"
+  ) {
+    throw new RehearsalFailure("rollback_v0131_admin_error_invalid");
+  }
+  return true;
 }
 
 async function seedProvider(gatewayUrl, recoverySecret) {
@@ -440,6 +490,91 @@ async function verifyProvider(gatewayUrl, recoverySecret, label) {
   ) {
     throw new RehearsalFailure(`${label}_provider_state_invalid`);
   }
+}
+
+async function verifyRollbackProvider(gatewayUrl, recoverySecret) {
+  const session = await recoverySession(gatewayUrl, recoverySecret, "rollback");
+  const response = await requestJson(
+    gatewayUrl,
+    "v1/admin/auth/oidc/providers",
+    "rollback_provider_read",
+    { cookie: session.cookie },
+  );
+  const providers = response.body?.providers;
+  const provider = providers?.[0];
+  if (
+    !Array.isArray(providers) ||
+    providers.length !== 1 ||
+    provider?.id !== "oidc-upgrade-rehearsal" ||
+    provider?.slug !== "upgrade-rehearsal" ||
+    provider?.clientId !== "omnifin-upgrade-rehearsal" ||
+    !Array.isArray(provider?.approvedEndpointOrigins) ||
+    provider.approvedEndpointOrigins.length !== 0 ||
+    provider?.discoveryState !== "unchecked" ||
+    provider?.clientSecretConfigured !== true
+  ) {
+    throw new RehearsalFailure("rollback_provider_state_invalid");
+  }
+}
+
+async function verifyV0131RollbackAdminError(gatewayUrl, recoverySecret) {
+  const session = await recoverySession(gatewayUrl, recoverySecret, "rollback_v0131");
+  const response = await requestJson(
+    gatewayUrl,
+    "v1/admin/auth/oidc/providers",
+    "rollback_v0131_admin",
+    { cookie: session.cookie, expectedStatus: 503 },
+  );
+  validateV0131RollbackAdminError(response);
+}
+
+async function verifyRollbackPublicQuarantine(gatewayUrl) {
+  const response = await requestJson(gatewayUrl, "v1/auth/providers", "rollback_public_providers");
+  const providers = response.body?.providers;
+  if (
+    !Array.isArray(providers) ||
+    providers.length !== 1 ||
+    providers[0]?.id !== "oidc-upgrade-rehearsal" ||
+    providers[0]?.kind !== "oidc" ||
+    providers[0]?.state !== "unavailable"
+  ) {
+    throw new RehearsalFailure("rollback_public_provider_invalid");
+  }
+}
+
+async function requestRedirect(baseUrl, path, operation, options = {}) {
+  let response;
+  try {
+    response = await fetch(new URL(path, baseUrl), {
+      headers: {
+        accept: "text/plain",
+        origin: PUBLIC_ORIGIN,
+        ...(options.cookie ? { cookie: options.cookie } : {}),
+      },
+      method: "GET",
+      redirect: "manual",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    throw new RehearsalFailure(operation, { cause: error });
+  }
+  if (response.status !== 303) throw new RehearsalFailure(operation);
+  const declaredBytes = Number(response.headers.get("content-length") ?? 0);
+  if (declaredBytes > RESPONSE_MAX_BYTES) throw new RehearsalFailure(operation);
+  const text = await response.text();
+  if (Buffer.byteLength(text) > RESPONSE_MAX_BYTES) throw new RehearsalFailure(operation);
+  if (response.headers.get("location") !== "/login?authError=provider_unavailable") {
+    throw new RehearsalFailure(operation);
+  }
+}
+
+async function verifyRollbackOidcStart(gatewayUrl) {
+  await requestRedirect(
+    gatewayUrl,
+    "v1/auth/oidc/oidc-upgrade-rehearsal/start",
+    "rollback_oidc_start",
+    { cookie: `__Host-omnifin_oidc_binding=${"A".repeat(43)}` },
+  );
 }
 
 function maintenanceArguments(resources, image, name) {
@@ -538,6 +673,158 @@ function maintenanceSnapshot(resources, image, fileName, label) {
   return { ...closed, databaseSha256: verified.databaseSha256 };
 }
 
+const ROLLBACK_PROBE_SUCCESS_OUTPUT = `${JSON.stringify({
+  operation: "rollback_quarantine_raw_verify",
+  status: "ok",
+})}\n`;
+const ROLLBACK_PROBE_CATEGORIES = new Set([
+  "probe_database",
+  "probe_identity",
+  "probe_discovery",
+  "probe_timestamp",
+  "probe_transaction",
+]);
+
+function rollbackProbeFailureOperation(category) {
+  return `rollback_v0131_${category}`;
+}
+
+export function classifyV0131RollbackProbeResult(status, stdout) {
+  if (status === 125) return "rollback_v0131_probe_container";
+  if (typeof stdout !== "string" || Buffer.byteLength(stdout) > ROLLBACK_PROBE_MAX_BYTES) {
+    return "rollback_v0131_probe_invalid";
+  }
+  if (status === 0) {
+    return stdout === ROLLBACK_PROBE_SUCCESS_OUTPUT ? null : "rollback_v0131_probe_invalid";
+  }
+  if (status !== 1) return "rollback_v0131_probe_invalid";
+
+  let result;
+  try {
+    result = JSON.parse(stdout);
+  } catch {
+    return "rollback_v0131_probe_invalid";
+  }
+  if (
+    !result ||
+    typeof result !== "object" ||
+    Array.isArray(result) ||
+    Object.getPrototypeOf(result) !== Object.prototype ||
+    Object.keys(result).join(",") !== "operation,status,category" ||
+    result.operation !== "rollback_quarantine_raw_verify" ||
+    result.status !== "failed" ||
+    !ROLLBACK_PROBE_CATEGORIES.has(result.category) ||
+    stdout !== `${JSON.stringify(result)}\n`
+  ) {
+    return "rollback_v0131_probe_invalid";
+  }
+  return rollbackProbeFailureOperation(result.category);
+}
+
+function runV0131RollbackProbe(resources, image, nodeEntrypoint) {
+  const name = `${resources.prefix}-rollback-v0131-probe`;
+  const probePath = join(REPOSITORY_ROOT, "scripts/release/verify-v0131-quarantined-rollback.mjs");
+  resources.containers.add(name);
+  try {
+    let result;
+    try {
+      result = {
+        status: 0,
+        stdout: execFileSync(
+          "docker",
+          [
+            "run",
+            "--rm",
+            "--name",
+            name,
+            "--network",
+            "none",
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--pids-limit",
+            "64",
+            "--memory",
+            "256m",
+            "--cpus",
+            "1",
+            "--volume",
+            `${resources.backupVolume}:/backups:ro`,
+            "--volume",
+            `${probePath}:/opt/omnifin/bin/verify-v0131-quarantined-rollback.mjs:ro`,
+            "--entrypoint",
+            nodeEntrypoint,
+            image.reference,
+            "/opt/omnifin/bin/verify-v0131-quarantined-rollback.mjs",
+          ],
+          {
+            cwd: REPOSITORY_ROOT,
+            encoding: "utf8",
+            maxBuffer: ROLLBACK_PROBE_MAX_BYTES,
+            stdio: ["ignore", "pipe", "pipe"],
+            timeout: 180_000,
+          },
+        ),
+      };
+    } catch (error) {
+      result = {
+        status: error?.status,
+        stdout:
+          typeof error?.stdout === "string"
+            ? error.stdout
+            : Buffer.isBuffer(error?.stdout)
+              ? error.stdout.toString("utf8")
+              : "",
+      };
+    }
+    const operation = classifyV0131RollbackProbeResult(result.status, result.stdout);
+    if (operation) throw new RehearsalFailure(operation);
+  } catch (error) {
+    try {
+      docker(["container", "rm", "--force", name], "rollback_v0131_probe_cleanup");
+    } catch {
+      // The --rm run normally already removed the container.
+    }
+    resources.containers.delete(name);
+    if (error instanceof RehearsalFailure) {
+      const failure = error;
+      throw failure;
+    }
+    throw new RehearsalFailure("rollback_v0131_probe_invalid");
+  } finally {
+    resources.containers.delete(name);
+  }
+}
+
+export function validatePreviousRestoreEvidence(restored, previous, rollback) {
+  const digestFields = [
+    previous?.databaseSha256,
+    restored?.databaseSha256,
+    restored?.sanitizedDatabaseSha256,
+    restored?.sourceDatabaseSha256,
+    restored?.rollback?.databaseSha256,
+    restored?.rollback?.schemaSha256,
+    rollback?.databaseSha256,
+    rollback?.schemaSha256,
+  ];
+  const migrationCounts = [restored?.rollback?.migrationCount, rollback?.migrationCount];
+  if (
+    digestFields.some((digest) => typeof digest !== "string" || !SHA256_PATTERN.test(digest)) ||
+    migrationCounts.some((count) => !Number.isSafeInteger(count) || count < 0) ||
+    restored.sourceDatabaseSha256 !== previous.databaseSha256 ||
+    restored.databaseSha256 !== restored.sanitizedDatabaseSha256 ||
+    restored.sanitizedDatabaseSha256 === previous.databaseSha256 ||
+    restored.rollback.databaseSha256 !== rollback.databaseSha256 ||
+    restored.rollback.schemaSha256 !== rollback.schemaSha256 ||
+    restored.rollback.migrationCount !== rollback.migrationCount
+  ) {
+    throw new RehearsalFailure("previous_restore_invalid");
+  }
+  return true;
+}
+
 function restorePreviousState(resources, priorImage, previous) {
   const restored = maintenanceResult(
     runMaintenance(
@@ -568,14 +855,7 @@ function restorePreviousState(resources, priorImage, previous) {
     "verify",
     "candidate_rollback_backup_verify_result",
   );
-  if (
-    restored.databaseSha256 !== previous.databaseSha256 ||
-    restored.rollback?.databaseSha256 !== rollback.databaseSha256 ||
-    restored.rollback?.schemaSha256 !== rollback.schemaSha256 ||
-    restored.rollback?.migrationCount !== rollback.migrationCount
-  ) {
-    throw new RehearsalFailure("previous_restore_invalid");
-  }
+  validatePreviousRestoreEvidence(restored, previous, rollback);
   return closedState(rollback, "candidate_rollback_backup");
 }
 
@@ -675,7 +955,7 @@ async function createResources() {
 }
 
 async function exercise(options, checks) {
-  inspectImage(options.previous, "previous");
+  const previousRuntime = inspectImage(options.previous, "previous");
   inspectImage(options.candidate, "candidate");
   const resources = await createResources();
   let result;
@@ -720,13 +1000,23 @@ async function exercise(options, checks) {
     checks.push("rollback_backup_verified");
     const rollbackGateway = startGateway(resources, options.previous, "rollback");
     await waitForHealthy(rollbackGateway.name, "rollback_gateway_health");
-    await verifyProvider(rollbackGateway.url, resources.recoverySecret, "rollback");
+    if (usesV0131RollbackCompatibility(options.previous.digest)) {
+      await verifyV0131RollbackAdminError(rollbackGateway.url, resources.recoverySecret);
+    } else {
+      await verifyRollbackProvider(rollbackGateway.url, resources.recoverySecret);
+    }
+    await verifyRollbackPublicQuarantine(rollbackGateway.url);
+    await verifyRollbackOidcStart(rollbackGateway.url);
     const rollback = maintenanceSnapshot(
       resources,
       options.previous,
       "rollback.sqlite",
       "rollback",
     );
+    if (usesV0131RollbackCompatibility(options.previous.digest)) {
+      runV0131RollbackProbe(resources, options.previous, previousRuntime.nodeEntrypoint);
+      checks.push(ROLLBACK_V0131_EXCEPTION_CHECK);
+    }
     checks.push("rollback_state_verified");
     stopGateway(resources, rollbackGateway, "rollback");
 

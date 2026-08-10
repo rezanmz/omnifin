@@ -293,7 +293,7 @@ export type OidcProviderUpdateRequest = z.infer<typeof oidcProviderUpdateRequest
 
 export const oidcProviderAdminSchema = z.strictObject({
   allowJitProvisioning: z.boolean(),
-  approvedEndpointOrigins: z.array(oidcEndpointOriginSchema).min(1).max(16),
+  approvedEndpointOrigins: z.array(oidcEndpointOriginSchema).max(16),
   clientId: oidcClientIdSchema,
   clientSecretConfigured: z.boolean(),
   createdAt: z.iso.datetime({ offset: true }),

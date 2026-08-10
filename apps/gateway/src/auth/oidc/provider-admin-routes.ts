@@ -51,7 +51,6 @@ const providerResponseJsonSchema = {
     allowJitProvisioning: { type: "boolean" },
     approvedEndpointOrigins: {
       type: "array",
-      minItems: 1,
       maxItems: 16,
       items: { type: "string" },
     },
