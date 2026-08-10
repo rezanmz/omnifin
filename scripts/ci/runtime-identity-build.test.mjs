@@ -38,7 +38,7 @@ test("edge candidates bind their API identity to the verified protected-main sou
   const edge = workflow(".github/workflows/edge.yml");
   const buildJob = edge.jobs["build-candidate"];
   const identity = stepByName(buildJob, "Derive runtime identity");
-  const build = stepByName(buildJob, "Build and push candidate without edge aliases");
+  const build = stepByName(buildJob, "Build candidate archive without edge aliases");
 
   assert.equal(identity.id, "runtime");
   assert.equal(identity.env.VERIFIED_SHA, "${{ github.event.workflow_run.head_sha }}");
