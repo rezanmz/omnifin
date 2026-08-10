@@ -58,7 +58,11 @@ export class ConnectorHttpLaneRegistry implements ConnectorHttpLaneLifecycle {
     const lane = this.#lanes.get(key);
     if (!lane) return;
     this.#lanes.delete(key);
-    lane.close();
+    try {
+      lane.close();
+    } catch {
+      // Retirement is best effort after the owning transaction has committed.
+    }
   }
 
   public close() {

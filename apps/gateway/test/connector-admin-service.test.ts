@@ -803,6 +803,14 @@ describe("connector administration service", () => {
 
   it("hashes Jellyfin stable identity and atomically revokes old authority on replacement", async () => {
     let serverId = "server-before";
+    const lane = new ConnectorHttpLane({ service: "jellyfin" });
+    const laneProvider: ConnectorHttpLaneLifecycle = {
+      close: vi.fn(),
+      laneFor: vi.fn(() => lane),
+      retire: vi.fn(() => {
+        throw new Error("fixture lane retirement failure");
+      }),
+    };
     const jellyfinHealth = (): ConnectorHealth => ({
       capabilities: ["connector.health", "connector.version"],
       checkedAt: new Date(baseTime).toISOString(),
@@ -816,6 +824,7 @@ describe("connector administration service", () => {
     });
     const { config, database, service } = createHarness({
       clock: () => new Date(baseTime),
+      laneProvider,
       createAdapter: () => ({
         capabilities: ["connector.health", "connector.version"],
         probe: async () => jellyfinHealth(),
@@ -935,6 +944,7 @@ describe("connector administration service", () => {
       ).toEqual({ count: 0 });
       expect(JSON.stringify(replaced)).not.toMatch(/server-before|server-after/u);
     } finally {
+      lane.close();
       database.close();
     }
   });
@@ -996,7 +1006,9 @@ describe("connector administration service", () => {
     const laneProvider: ConnectorHttpLaneLifecycle = {
       close: vi.fn(),
       laneFor: vi.fn(() => lane),
-      retire: vi.fn(),
+      retire: vi.fn(() => {
+        throw new Error("fixture lane retirement failure");
+      }),
     };
     let adapterInput: ConnectorAdapterFactoryInput | undefined;
     const { database, service } = createHarness({

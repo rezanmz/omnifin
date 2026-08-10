@@ -100,7 +100,7 @@ describe("gateway application", () => {
     expect(() => database.sqlite.prepare("select 1").get()).toThrow(/not open/i);
   });
 
-  it("closes connector lanes after drain begins and before the database", async () => {
+  it("closes connector lanes in preClose after drain begins and before the database", async () => {
     const database = openDatabase(":memory:");
     const runtimeDrain = createRuntimeDrainCoordinator();
     const events: string[] = [];
@@ -110,13 +110,19 @@ describe("gateway application", () => {
     const lane = registry.laneFor("jellyfin", "home");
     const active = await lane.acquire({ operation: "active" });
     const queued = lane.acquire({ operation: "queued" });
+    let queuedRejected = false;
+    void queued.catch(() => {
+      queuedRejected = true;
+    });
     const closeRegistry = vi.spyOn(registry, "close");
     closeRegistry.mockImplementation(() => {
       events.push(`lanes:${runtimeDrain.state}`);
       ConnectorHttpLaneRegistry.prototype.close.call(registry);
+      expect(active.signal.aborted).toBe(true);
     });
     const closeDatabase = vi.spyOn(database, "close").mockImplementation(() => {
       events.push("database");
+      expect(queuedRejected).toBe(true);
     });
     const app = await createApp({
       config: testConfig(),

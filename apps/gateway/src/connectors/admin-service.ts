@@ -745,7 +745,7 @@ export class ConnectorAdminService {
         insecureHttpApprovalChanged ||
         (current.enabled === 1 && !requestedEnabled)
       ) {
-        this.#laneProvider?.retire(service, current.id);
+        this.#retireLane(service, current.id);
       }
       return this.#present(this.#row(current.id));
     } catch (error) {
@@ -907,7 +907,7 @@ export class ConnectorAdminService {
           );
         })
         .immediate();
-      if (instanceIdentityReplaced) this.#laneProvider?.retire(service, current.id);
+      if (instanceIdentityReplaced) this.#retireLane(service, current.id);
       return this.#present(this.#row(current.id));
     } catch (error) {
       if (error instanceof ConnectorAdminError) throw error;
@@ -952,11 +952,19 @@ export class ConnectorAdminService {
           );
         })
         .immediate();
-      this.#laneProvider?.retire(this.#service(current.type), current.id);
+      this.#retireLane(this.#service(current.type), current.id);
       return { deletedConnectorId: current.id };
     } catch (error) {
       if (error instanceof ConnectorAdminError) throw error;
       throw new ConnectorAdminError("storage_failure", { cause: error });
+    }
+  }
+
+  #retireLane(service: ManagedConnectorService, connectorId: string) {
+    try {
+      this.#laneProvider?.retire(service, connectorId);
+    } catch {
+      // Lane cleanup is best effort and must not turn a committed operation into a retryable failure.
     }
   }
 

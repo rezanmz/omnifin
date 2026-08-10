@@ -537,6 +537,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
     savedMaintenance.unref();
     app.addHook("preClose", async () => {
       runtimeDrain.beginDrain("app.close");
+      closeConnectorHttpLaneRegistry();
     });
     app.addHook("onClose", async () => {
       clearInterval(savedMaintenance);
