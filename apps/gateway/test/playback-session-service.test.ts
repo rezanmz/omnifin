@@ -149,6 +149,45 @@ function insertIdentity(database: DatabaseHandle, config: AppConfig) {
     .run();
 }
 
+function insertSecondIdentity(database: DatabaseHandle, config: AppConfig) {
+  database.db
+    .insert(users)
+    .values({
+      createdAt: now,
+      displayName: "Second media viewer",
+      id: "second-user",
+      role: "viewer",
+      roleSource: "manual",
+      status: "active",
+      updatedAt: now,
+    })
+    .run();
+  database.db
+    .insert(serviceIdentityLinks)
+    .values({
+      connectorId: "jellyfin-main",
+      createdAt: now,
+      deviceId: "second-device",
+      encryptedAccessToken: new EnvelopeCipher(config.encryptionKey).encrypt(
+        "second-private-jellyfin-access-token",
+        "service_identity_access_token:jellyfin:second-link",
+      ),
+      externalDisplayName: "Second media viewer",
+      externalServerId: "server-1",
+      externalUserId: "second-external",
+      externalUsername: "second-viewer",
+      healthState: "linked",
+      id: "second-link",
+      lastVerifiedAt: now,
+      revision: 3,
+      service: "jellyfin",
+      tokenCreatedAt: now,
+      updatedAt: now,
+      userId: "second-user",
+    })
+    .run();
+}
+
 function negotiatedResult(): JellyfinPlaybackResult {
   return {
     audioTracks: [
@@ -197,10 +236,33 @@ function negotiatedResult(): JellyfinPlaybackResult {
   };
 }
 
+function hlsNegotiatedResult(): JellyfinPlaybackResult {
+  return {
+    ...negotiatedResult(),
+    delivery: "hls",
+    playMethod: "Transcode",
+    upstreamTarget: {
+      path: `videos/${privateItemId}/master.m3u8`,
+      query: "",
+    },
+  };
+}
+
+function legacyAssetToken(config: AppConfig, sessionId: string) {
+  const target = { path: `videos/${privateItemId}/segment.m4s`, query: "" };
+  return `asset_${new EnvelopeCipher(config.encryptionKey).encrypt(
+    JSON.stringify({ schemaVersion: 1, target }),
+    `playback_asset:jellyfin:${sessionId}`,
+  )}`;
+}
+
 function harness(
   createClientOverride?: NonNullable<PlaybackSessionDependencies["createClient"]>,
   referenceKind: "extra" | "movie" = "movie",
-  dependencyOverrides: Pick<PlaybackSessionDependencies, "beforeProgressCompletion" | "clock"> = {},
+  dependencyOverrides: Pick<
+    PlaybackSessionDependencies,
+    "beforeProgressCompletion" | "clock" | "createToken" | "playbackTransferLimits"
+  > = {},
 ) {
   const config = testConfig();
   const database = openDatabase(":memory:");
@@ -221,13 +283,13 @@ function harness(
     },
   ])[0]!;
   const negotiate = vi.fn(async () => negotiatedResult());
-  const readPlaybackTarget = vi.fn(async () => {
+  const readPlaybackTarget = vi.fn<JellyfinPlaybackClient["readPlaybackTarget"]>(async () => {
     throw new Error("Playback bytes were not expected in this service test.");
   });
-  const readSubtitleStream = vi.fn(async (): Promise<JellyfinPlaybackBytesResult> => {
+  const readSubtitleStream = vi.fn<JellyfinPlaybackClient["readSubtitleStream"]>(async () => {
     throw new Error("Subtitle bytes were not expected in this service test.");
   });
-  const streamPlaybackTarget = vi.fn(async () => {
+  const streamPlaybackTarget = vi.fn<JellyfinPlaybackClient["streamPlaybackTarget"]>(async () => {
     throw new Error("Playback streams were not expected in this service test.");
   });
   const reportPlaybackEvent = vi.fn<JellyfinPlaybackClient["reportPlaybackEvent"]>(
@@ -247,7 +309,10 @@ function harness(
     ...dependencyOverrides,
     clock: dependencyOverrides.clock ?? (() => now),
     createClient,
-    createToken: () => "p".repeat(22),
+    createToken: dependencyOverrides.createToken ?? (() => "p".repeat(22)),
+    ...(dependencyOverrides.playbackTransferLimits === undefined
+      ? {}
+      : { playbackTransferLimits: dependencyOverrides.playbackTransferLimits }),
   });
   return {
     config,
@@ -259,6 +324,7 @@ function harness(
     reference,
     reportPlaybackEvent,
     service,
+    streamPlaybackTarget,
   };
 }
 
@@ -1286,6 +1352,454 @@ describe("PlaybackSessionService", () => {
         service.readSubtitle({ principal: principal() }, playback.sessionId, 2),
       ).rejects.toMatchObject({ reason: "not_found" });
     } finally {
+      database.close();
+    }
+  });
+
+  it("enforces the default eight-transfer owner limit before upstream work", async () => {
+    const upstreamGate = deferred<void>();
+    const { database, readPlaybackTarget, reference, service } = harness();
+    readPlaybackTarget.mockImplementation(async (): Promise<JellyfinPlaybackBytesResult> => {
+      await upstreamGate.promise;
+      return { body: new Uint8Array([1]), headers: new Headers(), status: 200 };
+    });
+    let settled: Promise<unknown> | undefined;
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      const transfers = Array.from({ length: 9 }, () =>
+        service.readDirect({ principal: principal() }, playback.sessionId, undefined),
+      );
+      settled = Promise.allSettled(transfers).then(() => undefined);
+
+      await vi.waitFor(() => expect(readPlaybackTarget).toHaveBeenCalledTimes(8));
+      await expect(transfers[8]).rejects.toMatchObject({ reason: "unavailable" });
+    } finally {
+      upstreamGate.resolve(undefined);
+      await settled;
+      database.close();
+    }
+  });
+
+  it("rejects a per-owner exhausted lease without waiting or contacting upstream", async () => {
+    const upstreamGate = deferred<void>();
+    const { database, readPlaybackTarget, reference, service } = harness(undefined, "movie", {
+      playbackTransferLimits: { global: 8, perUser: 1 },
+    });
+    readPlaybackTarget.mockImplementation(async (): Promise<JellyfinPlaybackBytesResult> => {
+      await upstreamGate.promise;
+      return { body: new Uint8Array([1]), headers: new Headers(), status: 200 };
+    });
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      const first = service.readDirect({ principal: principal() }, playback.sessionId, undefined);
+      await vi.waitFor(() => expect(readPlaybackTarget).toHaveBeenCalledOnce());
+      await expect(
+        service.readDirect({ principal: principal() }, playback.sessionId, undefined),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+      expect(readPlaybackTarget).toHaveBeenCalledOnce();
+      upstreamGate.resolve(undefined);
+      await expect(first).resolves.toMatchObject({ status: 200 });
+    } finally {
+      upstreamGate.resolve(undefined);
+      database.close();
+    }
+  });
+
+  it("rejects a globally exhausted lease independently of the owner limit", async () => {
+    const upstreamGate = deferred<void>();
+    const { database, readPlaybackTarget, reference, service } = harness(undefined, "movie", {
+      playbackTransferLimits: { global: 1, perUser: 8 },
+    });
+    readPlaybackTarget.mockImplementation(async (): Promise<JellyfinPlaybackBytesResult> => {
+      await upstreamGate.promise;
+      return { body: new Uint8Array([1]), headers: new Headers(), status: 200 };
+    });
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      const first = service.readDirect({ principal: principal() }, playback.sessionId, undefined);
+      await vi.waitFor(() => expect(readPlaybackTarget).toHaveBeenCalledOnce());
+      await expect(
+        service.readDirect({ principal: principal() }, playback.sessionId, undefined),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+      expect(readPlaybackTarget).toHaveBeenCalledOnce();
+      upstreamGate.resolve(undefined);
+      await expect(first).resolves.toMatchObject({ status: 200 });
+    } finally {
+      upstreamGate.resolve(undefined);
+      database.close();
+    }
+  });
+
+  it("releases direct and manifest leases after upstream completion", async () => {
+    const { database, negotiate, readPlaybackTarget, reference, service } = harness(
+      undefined,
+      "movie",
+      {
+        playbackTransferLimits: { global: 1, perUser: 1 },
+      },
+    );
+    negotiate.mockResolvedValueOnce(hlsNegotiatedResult());
+    readPlaybackTarget.mockResolvedValue({
+      body: new TextEncoder().encode("#EXTM3U\n"),
+      headers: new Headers({ "content-type": "application/vnd.apple.mpegurl" }),
+      status: 200,
+    });
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      await expect(
+        service.readManifest({ principal: principal() }, playback.sessionId),
+      ).resolves.toMatchObject({ status: 200 });
+      await expect(
+        service.readManifest({ principal: principal() }, playback.sessionId),
+      ).resolves.toMatchObject({ status: 200 });
+      expect(readPlaybackTarget).toHaveBeenCalledTimes(2);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("releases a lease after an upstream failure", async () => {
+    const { database, readPlaybackTarget, reference, service } = harness(undefined, "movie", {
+      playbackTransferLimits: { global: 1, perUser: 1 },
+    });
+    readPlaybackTarget.mockRejectedValueOnce(new Error("private upstream failure"));
+    readPlaybackTarget.mockResolvedValueOnce({
+      body: new Uint8Array([1]),
+      headers: new Headers(),
+      status: 200,
+    });
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      await expect(
+        service.readDirect({ principal: principal() }, playback.sessionId, undefined),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+      await expect(
+        service.readDirect({ principal: principal() }, playback.sessionId, undefined),
+      ).resolves.toMatchObject({ status: 200 });
+      expect(readPlaybackTarget).toHaveBeenCalledTimes(2);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("holds an HLS asset lease until cancellation and releases it once", async () => {
+    const { config, database, negotiate, reference, service, streamPlaybackTarget } = harness(
+      undefined,
+      "movie",
+      { playbackTransferLimits: { global: 1, perUser: 1 } },
+    );
+    negotiate.mockResolvedValueOnce(hlsNegotiatedResult());
+    let sourceCancelled = false;
+    streamPlaybackTarget.mockResolvedValueOnce({
+      body: new ReadableStream<Uint8Array>({
+        cancel() {
+          sourceCancelled = true;
+        },
+      }),
+      headers: new Headers({ "content-type": "video/mp4" }),
+      status: 200,
+    });
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      const token = legacyAssetToken(config, playback.sessionId);
+      const asset = await service.readAsset({ principal: principal() }, playback.sessionId, token);
+      if (asset.kind !== "asset") throw new Error("Expected an HLS asset stream.");
+      await expect(
+        service.readAsset({ principal: principal() }, playback.sessionId, token),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+
+      await asset.body.cancel("client abort");
+      expect(sourceCancelled).toBe(true);
+      await asset.body.cancel("duplicate client abort");
+
+      streamPlaybackTarget.mockResolvedValueOnce({
+        body: new ReadableStream<Uint8Array>({ start: (controller) => controller.close() }),
+        headers: new Headers({ "content-type": "video/mp4" }),
+        status: 200,
+      });
+      await expect(
+        service.readAsset({ principal: principal() }, playback.sessionId, token),
+      ).resolves.toMatchObject({ kind: "asset" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("releases an HLS asset lease when the upstream body errors", async () => {
+    const { config, database, negotiate, reference, service, streamPlaybackTarget } = harness(
+      undefined,
+      "movie",
+      { playbackTransferLimits: { global: 1, perUser: 1 } },
+    );
+    negotiate.mockResolvedValueOnce(hlsNegotiatedResult());
+    streamPlaybackTarget
+      .mockResolvedValueOnce({
+        body: new ReadableStream<Uint8Array>({
+          start: (controller) => controller.error(new Error("private body failure")),
+        }),
+        headers: new Headers(),
+        status: 200,
+      })
+      .mockResolvedValueOnce({
+        body: new ReadableStream<Uint8Array>({ start: (controller) => controller.close() }),
+        headers: new Headers(),
+        status: 200,
+      });
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      const token = legacyAssetToken(config, playback.sessionId);
+      const asset = await service.readAsset({ principal: principal() }, playback.sessionId, token);
+      if (asset.kind !== "asset") throw new Error("Expected an HLS asset stream.");
+      await expect(asset.body.getReader().read()).rejects.toThrow();
+      await expect(
+        service.readAsset({ principal: principal() }, playback.sessionId, token),
+      ).resolves.toMatchObject({ kind: "asset" });
+      expect(streamPlaybackTarget).toHaveBeenCalledTimes(2);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("releases a direct lease when the client aborts upstream work", async () => {
+    const { database, readPlaybackTarget, reference, service } = harness(undefined, "movie", {
+      playbackTransferLimits: { global: 1, perUser: 1 },
+    });
+    readPlaybackTarget.mockImplementationOnce(async ({ signal }) => {
+      await new Promise<never>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+      throw new Error("unreachable");
+    });
+    readPlaybackTarget.mockResolvedValueOnce({
+      body: new Uint8Array([1]),
+      headers: new Headers(),
+      status: 200,
+    });
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      const controller = new AbortController();
+      const pending = service.readDirect(
+        { principal: principal() },
+        playback.sessionId,
+        undefined,
+        controller.signal,
+      );
+      await vi.waitFor(() => expect(readPlaybackTarget).toHaveBeenCalledOnce());
+      controller.abort(new Error("client abort"));
+      await expect(pending).rejects.toMatchObject({ reason: "unavailable" });
+      await expect(
+        service.readDirect({ principal: principal() }, playback.sessionId, undefined),
+      ).resolves.toMatchObject({ status: 200 });
+      expect(readPlaybackTarget).toHaveBeenCalledTimes(2);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("admits only one active subtitle transfer for an owner", async () => {
+    const upstreamGate = deferred<void>();
+    const { database, readSubtitleStream, reference, service } = harness(undefined, "movie", {
+      playbackTransferLimits: { global: 2, perUser: 1 },
+    });
+    readSubtitleStream.mockImplementation(async (): Promise<JellyfinPlaybackBytesResult> => {
+      await upstreamGate.promise;
+      return {
+        body: new TextEncoder().encode("WEBVTT\n"),
+        headers: new Headers({ "content-type": "text/vtt" }),
+        status: 200,
+      };
+    });
+    let settled: Promise<unknown> | undefined;
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      const first = service.readSubtitle({ principal: principal() }, playback.sessionId, 2);
+      await vi.waitFor(() => expect(readSubtitleStream).toHaveBeenCalledOnce());
+      const second = service.readSubtitle({ principal: principal() }, playback.sessionId, 2);
+      settled = Promise.allSettled([first, second]).then(() => undefined);
+      await Promise.resolve();
+      expect(readSubtitleStream).toHaveBeenCalledOnce();
+    } finally {
+      upstreamGate.resolve(undefined);
+      await settled;
+      database.close();
+    }
+  });
+
+  it("aggregates transfers across sessions per owner while isolating another owner", async () => {
+    const upstreamGate = deferred<void>();
+    const { config, database, readPlaybackTarget, reference, service } = harness(
+      undefined,
+      "movie",
+      {
+        createToken: (() => {
+          let count = 0;
+          return () => (++count === 1 ? "p" : count === 2 ? "q" : "r").repeat(22);
+        })(),
+        playbackTransferLimits: { global: 2, perUser: 1 },
+      },
+    );
+    insertSecondIdentity(database, config);
+    const secondReference = new MediaReferenceService(database, config, {
+      clock: () => now,
+      createToken: () => "n".repeat(22),
+    }).createOrRefresh({ linkId: "second-link", linkRevision: 3, userId: "second-user" }, [
+      {
+        artwork: { backdropItemId: null, posterItemId: null },
+        episodeNumber: null,
+        itemId: privateItemId,
+        kind: "movie",
+        seasonNumber: null,
+        title: "The Far Meridian",
+        year: 2026,
+      },
+    ])[0]!;
+    readPlaybackTarget.mockImplementation(async (): Promise<JellyfinPlaybackBytesResult> => {
+      await upstreamGate.promise;
+      return { body: new Uint8Array([1]), headers: new Headers(), status: 200 };
+    });
+    try {
+      const firstPlayback = await service.negotiate(
+        { principal: principal() },
+        reference,
+        negotiation,
+      );
+      const secondPlayback = await service.negotiate(
+        { principal: principal() },
+        reference,
+        negotiation,
+      );
+      const otherPlayback = await service.negotiate(
+        { principal: principal("second-user", "second-link") },
+        secondReference,
+        negotiation,
+      );
+
+      const first = service.readDirect(
+        { principal: principal() },
+        firstPlayback.sessionId,
+        undefined,
+      );
+      await vi.waitFor(() => expect(readPlaybackTarget).toHaveBeenCalledOnce());
+      await expect(
+        service.readDirect({ principal: principal() }, secondPlayback.sessionId, undefined),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+
+      const other = service.readDirect(
+        { principal: principal("second-user", "second-link") },
+        otherPlayback.sessionId,
+        undefined,
+      );
+      await vi.waitFor(() => expect(readPlaybackTarget).toHaveBeenCalledTimes(2));
+      upstreamGate.resolve(undefined);
+      await expect(first).resolves.toMatchObject({ status: 200 });
+      await expect(other).resolves.toMatchObject({ status: 200 });
+    } finally {
+      upstreamGate.resolve(undefined);
+      database.close();
+    }
+  });
+
+  it("releases subtitle leases after success, upstream error, and client abort", async () => {
+    const { database, readSubtitleStream, reference, service } = harness(undefined, "movie", {
+      playbackTransferLimits: { global: 1, perUser: 1 },
+    });
+    const subtitle = {
+      body: new TextEncoder().encode("WEBVTT\n"),
+      headers: new Headers({ "content-type": "text/vtt" }),
+      status: 200 as const,
+    };
+    readSubtitleStream
+      .mockResolvedValueOnce(subtitle)
+      .mockResolvedValueOnce(subtitle)
+      .mockRejectedValueOnce(new Error("private subtitle failure"))
+      .mockResolvedValueOnce(subtitle)
+      .mockImplementationOnce(async ({ signal }) => {
+        await new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+        throw new Error("unreachable");
+      })
+      .mockResolvedValueOnce(subtitle);
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      await expect(
+        service.readSubtitle({ principal: principal() }, playback.sessionId, 2),
+      ).resolves.toMatchObject({ status: 200 });
+      await expect(
+        service.readSubtitle({ principal: principal() }, playback.sessionId, 2),
+      ).resolves.toMatchObject({ status: 200 });
+
+      await expect(
+        service.readSubtitle({ principal: principal() }, playback.sessionId, 2),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+      await expect(
+        service.readSubtitle({ principal: principal() }, playback.sessionId, 2),
+      ).resolves.toMatchObject({ status: 200 });
+
+      const controller = new AbortController();
+      const pending = service.readSubtitle(
+        { principal: principal() },
+        playback.sessionId,
+        2,
+        controller.signal,
+      );
+      await vi.waitFor(() => expect(readSubtitleStream).toHaveBeenCalledTimes(5));
+      controller.abort(new Error("client abort"));
+      await expect(pending).rejects.toMatchObject({ reason: "unavailable" });
+      await expect(
+        service.readSubtitle({ principal: principal() }, playback.sessionId, 2),
+      ).resolves.toMatchObject({ status: 200 });
+      expect(readSubtitleStream).toHaveBeenCalledTimes(6);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("releases active playback leases when the session stops", async () => {
+    const upstreamGate = deferred<void>();
+    const { database, readPlaybackTarget, reference, service } = harness(undefined, "movie", {
+      createToken: (() => {
+        let count = 0;
+        return () => (++count === 1 ? "p" : "q").repeat(22);
+      })(),
+      playbackTransferLimits: { global: 1, perUser: 1 },
+    });
+    readPlaybackTarget.mockImplementation(async (): Promise<JellyfinPlaybackBytesResult> => {
+      await upstreamGate.promise;
+      return { body: new Uint8Array([1]), headers: new Headers(), status: 200 };
+    });
+    try {
+      const playback = await service.negotiate({ principal: principal() }, reference, negotiation);
+      const first = service.readDirect({ principal: principal() }, playback.sessionId, undefined);
+      await vi.waitFor(() => expect(readPlaybackTarget).toHaveBeenCalledOnce());
+      await expect(
+        service.report({ principal: principal() }, playback.sessionId, {
+          event: "stopped",
+          positionSeconds: 901,
+        }),
+      ).resolves.toMatchObject({ state: "stopped" });
+
+      const secondPlayback = await service.negotiate(
+        { principal: principal() },
+        reference,
+        negotiation,
+      );
+      await expect(
+        service.readDirect({ principal: principal() }, secondPlayback.sessionId, undefined),
+      ).rejects.toMatchObject({ reason: "unavailable" });
+      expect(readPlaybackTarget).toHaveBeenCalledOnce();
+      upstreamGate.resolve(undefined);
+      await expect(first).resolves.toMatchObject({ status: 200 });
+
+      const second = service.readDirect(
+        { principal: principal() },
+        secondPlayback.sessionId,
+        undefined,
+      );
+      await vi.waitFor(() => expect(readPlaybackTarget).toHaveBeenCalledTimes(2));
+      await expect(second).resolves.toMatchObject({ status: 200 });
+    } finally {
+      upstreamGate.resolve(undefined);
       database.close();
     }
   });
