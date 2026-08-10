@@ -48,9 +48,12 @@ import {
 import { matchesPlaybackSourceReference } from "./playback-source-reference.js";
 import {
   MAX_PLAYBACK_ASSET_TOKEN_LENGTH,
+  MAX_PLAYBACK_ASSET_HANDLES_GLOBAL,
+  MAX_PLAYBACK_ASSET_HANDLES_PER_SESSION,
   MAX_PLAYBACK_MANIFEST_BYTES,
   MAX_PLAYBACK_MANIFEST_REFERENCES,
   PlaybackTransferLeaseManager,
+  PLAYBACK_ASSET_HANDLE_BATCH_SIZE,
   type PlaybackTransferLimitOverrides,
 } from "./playback-limits.js";
 
@@ -63,8 +66,6 @@ const DIRECT_RANGE_BYTES = 8 * 1_024 * 1_024;
 const HLS_ASSET_MAX_BYTES = 512 * 1_024 * 1_024;
 const SUBTITLE_MAX_BYTES = 8 * 1_024 * 1_024;
 const MAX_MANIFEST_LINES = 20_000;
-const MAX_PLAYBACK_ASSET_HANDLES_PER_SESSION = 20_000;
-const MAX_PLAYBACK_ASSET_HANDLES_GLOBAL = 250_000;
 const PLAYBACK_PROGRESS_LEASE_MS = 30_000;
 const PLAYBACK_LIFECYCLE_BATCH_SIZE = 100;
 const MAX_PLAYBACK_REVISION = 2_147_483_647;
@@ -180,11 +181,20 @@ interface PlaybackAssetHandleRow {
   targetDigest: string;
 }
 
-interface PlaybackAssetHandleAllocation {
-  globalCount: number;
-  handlesByDigest: Map<string, string>;
-  now: number;
-  sessionCount: number;
+interface ManifestTargetPlan {
+  encoded: string;
+  target: StoredPlaybackAsset;
+}
+
+interface ManifestRewriteSlot {
+  lineIndex: number;
+  targetDigest: string;
+}
+
+interface ManifestRewritePlan {
+  lines: readonly string[];
+  slots: readonly ManifestRewriteSlot[];
+  targets: Map<string, ManifestTargetPlan>;
 }
 
 type PlaybackProgressOperationState =
@@ -1540,20 +1550,22 @@ export class PlaybackSessionService {
     if (response.status !== 200) throw new PlaybackSessionError("unavailable");
     const lines = decodeManifest(response.body);
     enforceManifestReferenceLimit(lines);
-    let rewritten: string[];
+    let plan: ManifestRewritePlan;
     try {
-      rewritten = this.#database.sqlite
-        .transaction(() => {
-          const allocation = this.#assetHandleAllocation(session);
-          return lines.map((line) =>
-            this.#rewriteManifestLine(client, session, target, assetPathPrefix, line, allocation),
-          );
-        })
-        .immediate();
+      plan = this.#planManifest(client, session, target, lines);
     } catch (error) {
       if (error instanceof PlaybackSessionError) throw error;
       throw new PlaybackSessionError("unavailable", { cause: error });
     }
+
+    let handlesByDigest: Map<string, string>;
+    try {
+      handlesByDigest = this.#allocateManifestHandles(session, plan);
+    } catch (error) {
+      if (error instanceof PlaybackSessionError) throw error;
+      throw new PlaybackSessionError("unavailable", { cause: error });
+    }
+    const rewritten = this.#renderManifest(plan, handlesByDigest, assetPathPrefix);
     return {
       body: `${rewritten.join("\n").replace(/\n+$/u, "")}\n`,
       contentType: "application/vnd.apple.mpegurl" as const,
@@ -1562,157 +1574,292 @@ export class PlaybackSessionService {
     };
   }
 
-  #rewriteManifestLine(
+  #planManifest(
     client: Pick<JellyfinPlaybackClient, "resolvePlaybackTarget">,
     session: PlaybackSessionRow,
     parent: JellyfinPlaybackTarget,
-    assetPathPrefix: PlaybackAssetPathPrefix,
-    line: string,
-    allocation: PlaybackAssetHandleAllocation,
-  ) {
-    const compacted = line.trim();
-    if (!compacted || compacted === "#EXTM3U") return line;
-    if (!compacted.startsWith("#")) {
-      return this.#assetPath(client, session, parent, assetPathPrefix, compacted, allocation);
-    }
-
-    let replacements = 0;
-    const rewritten = line.replace(/URI="([^"\r\n]{1,16384})"/gu, (_match, uri: string) => {
-      replacements += 1;
-      return `URI="${this.#assetPath(client, session, parent, assetPathPrefix, uri, allocation)}"`;
-    });
-    if (/\bURI\s*=/iu.test(line) && replacements === 0) {
-      throw new PlaybackSessionError("unavailable");
-    }
-    return rewritten;
-  }
-
-  #assetPath(
-    client: Pick<JellyfinPlaybackClient, "resolvePlaybackTarget">,
-    session: PlaybackSessionRow,
-    parent: JellyfinPlaybackTarget,
-    assetPathPrefix: PlaybackAssetPathPrefix,
-    uri: string,
-    allocation: PlaybackAssetHandleAllocation,
-  ) {
-    let target: JellyfinPlaybackTarget;
-    try {
-      target = client.resolvePlaybackTarget(parent, uri);
-    } catch (error) {
-      throw new PlaybackSessionError("unavailable", { cause: error });
-    }
-    return `${assetPathPrefix}${this.#assetHandle(session, target, allocation)}`;
-  }
-
-  #assetHandleAllocation(session: PlaybackSessionRow): PlaybackAssetHandleAllocation {
-    const now = validTime(this.#clock());
-    if (session.expiresAt <= now || session.state === "stopped") {
-      throw new PlaybackSessionError("not_found");
-    }
-    this.#cleanupPlaybackLifecycle(now);
-    const sessionCount = this.#database.sqlite
-      .prepare("select count(*) as count from playback_asset_handles where playback_session_id = ?")
-      .get(session.id) as { count: number };
-    const globalCount = this.#database.sqlite
-      .prepare("select count(*) as count from playback_asset_handles")
-      .get() as { count: number };
-    return {
-      globalCount: globalCount.count,
-      handlesByDigest: new Map(),
-      now,
-      sessionCount: sessionCount.count,
+    lines: readonly string[],
+  ): ManifestRewritePlan {
+    const slots: ManifestRewriteSlot[] = [];
+    const targets = new Map<string, ManifestTargetPlan>();
+    const addReference = (lineIndex: number, uri: string) => {
+      let target: JellyfinPlaybackTarget;
+      try {
+        target = client.resolvePlaybackTarget(parent, uri);
+      } catch (error) {
+        throw new PlaybackSessionError("unavailable", { cause: error });
+      }
+      const stored = storedPlaybackAssetSchema.parse({ schemaVersion: 1, target });
+      const encoded = JSON.stringify(stored);
+      const targetDigest = privacyHash(
+        "playback_asset",
+        `${session.id}\u0000${encoded}`,
+        this.#config.encryptionKey,
+      );
+      const existing = targets.get(targetDigest);
+      if (existing && existing.encoded !== encoded) {
+        throw new PlaybackSessionError("unavailable");
+      }
+      if (!existing) targets.set(targetDigest, { encoded, target: stored });
+      slots.push({ lineIndex, targetDigest });
     };
+
+    for (const [lineIndex, line] of lines.entries()) {
+      const compacted = line.trim();
+      if (!compacted || compacted === "#EXTM3U") continue;
+      if (!compacted.startsWith("#")) {
+        addReference(lineIndex, compacted);
+        continue;
+      }
+
+      let replacements = 0;
+      for (const match of line.matchAll(/URI="([^"\r\n]{1,16384})"/gu)) {
+        const uri = match[1];
+        if (uri === undefined) throw new PlaybackSessionError("unavailable");
+        replacements += 1;
+        addReference(lineIndex, uri);
+      }
+      if (/\bURI\s*=/iu.test(line) && replacements === 0) {
+        throw new PlaybackSessionError("unavailable");
+      }
+    }
+    return { lines, slots, targets };
   }
 
-  #assetHandle(
-    session: PlaybackSessionRow,
-    target: JellyfinPlaybackTarget,
-    allocation: PlaybackAssetHandleAllocation,
+  #renderManifest(
+    plan: ManifestRewritePlan,
+    handlesByDigest: Map<string, string>,
+    assetPathPrefix: PlaybackAssetPathPrefix,
   ) {
-    const stored = storedPlaybackAssetSchema.parse({ schemaVersion: 1, target });
-    const encoded = JSON.stringify(stored);
-    const targetDigest = privacyHash(
-      "playback_asset",
-      `${session.id}\u0000${encoded}`,
-      this.#config.encryptionKey,
-    );
-    const allocated = allocation.handlesByDigest.get(targetDigest);
-    if (allocated) return allocated;
+    const slotsByLine = new Map<number, ManifestRewriteSlot[]>();
+    for (const slot of plan.slots) {
+      const lineSlots = slotsByLine.get(slot.lineIndex) ?? [];
+      lineSlots.push(slot);
+      slotsByLine.set(slot.lineIndex, lineSlots);
+    }
+    return plan.lines.map((line, lineIndex) => {
+      const lineSlots = slotsByLine.get(lineIndex);
+      if (!lineSlots || lineSlots.length === 0) return line;
+      let slotIndex = 0;
+      const handle = () => {
+        const slot = lineSlots[slotIndex++];
+        const handleId = slot === undefined ? undefined : handlesByDigest.get(slot.targetDigest);
+        if (!handleId) throw new PlaybackSessionError("unavailable");
+        return `${assetPathPrefix}${handleId}`;
+      };
+      if (!line.trim().startsWith("#")) return handle();
+      return line.replace(/URI="([^"\r\n]{1,16384})"/gu, () => `URI="${handle()}"`);
+    });
+  }
 
-    try {
-      const existing = this.#database.sqlite
-        .prepare(
-          `select id, target_digest as targetDigest, encrypted_target as encryptedTarget
-           from playback_asset_handles
-           where playback_session_id = ? and target_digest = ? and expires_at > ?`,
-        )
-        .get(session.id, targetDigest, allocation.now) as PlaybackAssetHandleRow | undefined;
-      if (existing) {
-        this.#assertAssetHandleTarget(session.id, existing, stored);
-        this.#touchAssetHandle(existing.id, allocation.now);
-        allocation.handlesByDigest.set(targetDigest, existing.id);
-        return existing.id;
-      }
+  #allocateManifestHandles(
+    session: PlaybackSessionRow,
+    plan: ManifestRewritePlan,
+  ): Map<string, string> {
+    return this.#database.sqlite
+      .transaction(() => {
+        const now = validTime(this.#clock());
+        this.#cleanupPlaybackLifecycle(now);
+        const activeSession = this.#activeAssetSession(session, now);
+        const targets = [...plan.targets.entries()];
+        const counts = this.#database.sqlite
+          .prepare(
+            `select
+               (select count(*) from playback_asset_handles where playback_session_id = ?) as sessionCount,
+               (select count(*) from playback_asset_handles) as globalCount`,
+          )
+          .get(activeSession.id) as { globalCount: number; sessionCount: number };
+        const existingByDigest = new Map<string, PlaybackAssetHandleRow>();
 
-      if (allocation.sessionCount >= MAX_PLAYBACK_ASSET_HANDLES_PER_SESSION) {
-        throw new PlaybackSessionError("unavailable");
-      }
-      if (allocation.globalCount >= MAX_PLAYBACK_ASSET_HANDLES_GLOBAL) {
-        throw new PlaybackSessionError("unavailable");
-      }
-
-      for (let attempt = 0; attempt < MAX_CREATION_ATTEMPTS; attempt += 1) {
-        const handleId = `asset_h1.${this.#createAssetToken()}`;
-        if (!PLAYBACK_ASSET_HANDLE_PATTERN.test(handleId)) {
-          throw new PlaybackSessionError("unavailable");
-        }
-        try {
-          this.#database.sqlite
-            .prepare(
-              `insert into playback_asset_handles (
-                id, playback_session_id, target_digest, encrypted_target,
-                expires_at, last_used_at, created_at, updated_at
-              ) values (?, ?, ?, ?, ?, ?, ?, ?)`,
-            )
-            .run(
-              handleId,
-              session.id,
-              targetDigest,
-              this.#cipher.encrypt(encoded, playbackAssetHandleContext(session.id, handleId)),
-              session.expiresAt,
-              allocation.now,
-              allocation.now,
-              allocation.now,
-            );
-          allocation.globalCount += 1;
-          allocation.sessionCount += 1;
-          allocation.handlesByDigest.set(targetDigest, handleId);
-          return handleId;
-        } catch (error) {
-          const concurrent = this.#database.sqlite
+        for (let offset = 0; offset < targets.length; offset += PLAYBACK_ASSET_HANDLE_BATCH_SIZE) {
+          const chunk = targets.slice(offset, offset + PLAYBACK_ASSET_HANDLE_BATCH_SIZE);
+          const placeholders = chunk.map(() => "?").join(", ");
+          const rows = this.#database.sqlite
             .prepare(
               `select id, target_digest as targetDigest, encrypted_target as encryptedTarget
                from playback_asset_handles
-               where playback_session_id = ? and target_digest = ? and expires_at > ?`,
+               where playback_session_id = ? and expires_at > ?
+                 and target_digest in (${placeholders})`,
             )
-            .get(session.id, targetDigest, allocation.now) as PlaybackAssetHandleRow | undefined;
-          if (concurrent) {
-            this.#assertAssetHandleTarget(session.id, concurrent, stored);
-            this.#touchAssetHandle(concurrent.id, allocation.now);
-            allocation.handlesByDigest.set(targetDigest, concurrent.id);
-            return concurrent.id;
+            .all(
+              activeSession.id,
+              now,
+              ...chunk.map(([targetDigest]) => targetDigest),
+            ) as PlaybackAssetHandleRow[];
+          for (const row of rows) {
+            const expected = plan.targets.get(row.targetDigest);
+            if (!expected) throw new PlaybackSessionError("unavailable");
+            this.#assertAssetHandleTarget(activeSession.id, row, expected.target, row.targetDigest);
+            existingByDigest.set(row.targetDigest, row);
           }
-          const collision = this.#database.sqlite
-            .prepare("select 1 from playback_asset_handles where id = ?")
-            .get(handleId);
-          if (!collision) throw error;
         }
-      }
-      throw new PlaybackSessionError("unavailable");
-    } catch (error) {
-      if (error instanceof PlaybackSessionError) throw error;
-      throw new PlaybackSessionError("unavailable", { cause: error });
+
+        const missing = targets.filter(([targetDigest]) => !existingByDigest.has(targetDigest));
+        if (
+          counts.sessionCount + missing.length > MAX_PLAYBACK_ASSET_HANDLES_PER_SESSION ||
+          counts.globalCount + missing.length > MAX_PLAYBACK_ASSET_HANDLES_GLOBAL
+        ) {
+          throw new PlaybackSessionError("unavailable");
+        }
+
+        const existingRows = [...existingByDigest.values()];
+        for (
+          let offset = 0;
+          offset < existingRows.length;
+          offset += PLAYBACK_ASSET_HANDLE_BATCH_SIZE
+        ) {
+          const chunk = existingRows.slice(offset, offset + PLAYBACK_ASSET_HANDLE_BATCH_SIZE);
+          const placeholders = chunk.map(() => "?").join(", ");
+          const touched = this.#database.sqlite
+            .prepare(
+              `update playback_asset_handles
+               set last_used_at = ?, updated_at = ?
+               where playback_session_id = ? and expires_at > ? and id in (${placeholders})`,
+            )
+            .run(now, now, activeSession.id, now, ...chunk.map(({ id }) => id));
+          if (touched.changes !== chunk.length) throw new PlaybackSessionError("not_found");
+        }
+
+        const allocated = new Map<string, string>(
+          [...existingByDigest].map(([targetDigest, row]) => [targetDigest, row.id]),
+        );
+        const candidatesByDigest = new Map<string, string>();
+        const reservedCandidateIds = new Set<string>();
+        const knownCollidingCandidateIds = new Set<string>();
+        const attemptsByDigest = new Map<string, number>();
+        const nextCandidate = (targetDigest: string) => {
+          let attempts = attemptsByDigest.get(targetDigest) ?? 0;
+          while (attempts < MAX_CREATION_ATTEMPTS) {
+            const candidate = `asset_h1.${this.#createAssetToken()}`;
+            attempts += 1;
+            attemptsByDigest.set(targetDigest, attempts);
+            if (!PLAYBACK_ASSET_HANDLE_PATTERN.test(candidate)) {
+              throw new PlaybackSessionError("unavailable");
+            }
+            if (reservedCandidateIds.has(candidate) || knownCollidingCandidateIds.has(candidate)) {
+              continue;
+            }
+            reservedCandidateIds.add(candidate);
+            return candidate;
+          }
+          throw new PlaybackSessionError("unavailable");
+        };
+        for (const [targetDigest] of missing) {
+          candidatesByDigest.set(targetDigest, nextCandidate(targetDigest));
+        }
+
+        let pendingCollisionDigests = missing.map(([targetDigest]) => targetDigest);
+        while (pendingCollisionDigests.length > 0) {
+          const candidateIds = pendingCollisionDigests.map((targetDigest) =>
+            candidatesByDigest.get(targetDigest)!,
+          );
+          const collisions = this.#existingAssetHandleIds(candidateIds);
+          if (collisions.size === 0) break;
+          pendingCollisionDigests = [];
+          for (const [targetDigest] of missing) {
+            const candidate = candidatesByDigest.get(targetDigest);
+            if (!candidate || !collisions.has(candidate)) continue;
+            reservedCandidateIds.delete(candidate);
+            knownCollidingCandidateIds.add(candidate);
+            candidatesByDigest.set(targetDigest, nextCandidate(targetDigest));
+            pendingCollisionDigests.push(targetDigest);
+          }
+        }
+
+        const inserts: Array<{
+          encryptedTarget: string;
+          handleId: string;
+          targetDigest: string;
+        }> = [];
+        for (const [targetDigest, target] of missing) {
+          const handleId = candidatesByDigest.get(targetDigest);
+          if (!handleId) throw new PlaybackSessionError("unavailable");
+          inserts.push({
+            encryptedTarget: this.#cipher.encrypt(
+              target.encoded,
+              playbackAssetHandleContext(activeSession.id, handleId),
+            ),
+            handleId,
+            targetDigest,
+          });
+          allocated.set(targetDigest, handleId);
+        }
+
+        for (let offset = 0; offset < inserts.length; offset += PLAYBACK_ASSET_HANDLE_BATCH_SIZE) {
+          const chunk = inserts.slice(offset, offset + PLAYBACK_ASSET_HANDLE_BATCH_SIZE);
+          const placeholders = chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+          this.#database.sqlite
+            .prepare(
+              `insert into playback_asset_handles (
+                 id, playback_session_id, target_digest, encrypted_target,
+                 expires_at, last_used_at, created_at, updated_at
+               ) values ${placeholders}`,
+            )
+            .run(
+              ...chunk.flatMap(({ encryptedTarget, handleId, targetDigest }) => [
+                handleId,
+                activeSession.id,
+                targetDigest,
+                encryptedTarget,
+                activeSession.expiresAt,
+                now,
+                now,
+                now,
+              ]),
+            );
+        }
+        return allocated;
+      })
+      .immediate();
+  }
+
+  #existingAssetHandleIds(candidateIds: readonly string[]) {
+    const collisions = new Set<string>();
+    for (let offset = 0; offset < candidateIds.length; offset += PLAYBACK_ASSET_HANDLE_BATCH_SIZE) {
+      const chunk = candidateIds.slice(offset, offset + PLAYBACK_ASSET_HANDLE_BATCH_SIZE);
+      if (chunk.length === 0) continue;
+      const placeholders = chunk.map(() => "?").join(", ");
+      const rows = this.#database.sqlite
+        .prepare(`select id from playback_asset_handles where id in (${placeholders})`)
+        .all(...chunk) as Array<{ id: string }>;
+      for (const row of rows) collisions.add(row.id);
     }
+    return collisions;
+  }
+
+  #activeAssetSession(session: PlaybackSessionRow, now: number) {
+    const row = this.#database.sqlite
+      .prepare(
+        `select
+           s.id,
+           s.user_id as userId,
+           s.service_identity_link_id as serviceIdentityLinkId,
+           s.link_revision as linkRevision,
+           s.media_reference_id as mediaReferenceId,
+           s.encrypted_payload as encryptedPayload,
+           s.state,
+           s.position_seconds as positionSeconds,
+           s.revision,
+           s.last_reported_at as lastReportedAt,
+           s.expires_at as expiresAt,
+           s.updated_at as updatedAt
+         from playback_sessions s
+         join service_identity_links l
+           on l.id = s.service_identity_link_id and l.user_id = s.user_id
+         where s.id = ? and s.user_id = ? and s.service_identity_link_id = ?
+           and s.link_revision = ? and l.revision = ?
+           and s.state <> 'stopped' and s.expires_at > ?`,
+      )
+      .get(
+        session.id,
+        session.userId,
+        session.serviceIdentityLinkId,
+        session.linkRevision,
+        session.linkRevision,
+        now,
+      ) as PlaybackSessionRow | undefined;
+    if (!row) throw new PlaybackSessionError("not_found");
+    return row;
   }
 
   #assetHandleTarget(session: PlaybackSessionRow, handleId: string, now: number) {
@@ -1746,9 +1893,20 @@ export class PlaybackSessionService {
     sessionId: string,
     row: PlaybackAssetHandleRow,
     expected: StoredPlaybackAsset,
+    expectedDigest: string,
   ) {
     const stored = this.#storedAssetHandleTarget(sessionId, row);
-    if (JSON.stringify(stored) !== JSON.stringify(expected)) {
+    const encoded = JSON.stringify(stored);
+    const actualDigest = privacyHash(
+      "playback_asset",
+      `${sessionId}\u0000${encoded}`,
+      this.#config.encryptionKey,
+    );
+    if (
+      JSON.stringify(stored) !== JSON.stringify(expected) ||
+      !constantTimeTextEqual(actualDigest, expectedDigest) ||
+      !constantTimeTextEqual(actualDigest, row.targetDigest)
+    ) {
       throw new PlaybackSessionError("unavailable");
     }
   }
@@ -1759,17 +1917,6 @@ export class PlaybackSessionService {
         this.#cipher.decrypt(row.encryptedTarget, playbackAssetHandleContext(sessionId, row.id)),
       ),
     );
-  }
-
-  #touchAssetHandle(handleId: string, now: number) {
-    const updated = this.#database.sqlite
-      .prepare(
-        `update playback_asset_handles
-         set last_used_at = ?, updated_at = ?
-         where id = ? and expires_at > ?`,
-      )
-      .run(now, now, handleId, now);
-    if (updated.changes !== 1) throw new PlaybackSessionError("not_found");
   }
 
   #createSession(
