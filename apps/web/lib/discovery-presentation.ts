@@ -1,10 +1,5 @@
-import type {
-  DiscoveryAvailability,
-  DiscoveryFeedItem,
-  DiscoveryFeedResponse,
-  DiscoveryMediaRecordState,
-} from "@omnifin/contracts/discovery";
-import { isDiscoveryMediaRequestable } from "@omnifin/contracts/discovery";
+import type { DiscoveryFeedItem, DiscoveryFeedResponse } from "@omnifin/contracts/discovery";
+import { isDiscoveryMediaRequestable } from "@omnifin/contracts/discovery-requestability";
 
 import type { DashboardModel } from "./dashboard-data";
 
@@ -53,14 +48,10 @@ export function discoveryItemMedia(item: DiscoveryFeedItem) {
 }
 
 export function discoveryItemIsRequestable(item: DiscoveryFeedItem) {
-  return discoveryMediaIsRequestable(item.availability, item.mediaRecordState);
-}
-
-export function discoveryMediaIsRequestable(
-  availability: DiscoveryAvailability,
-  mediaRecordState: DiscoveryMediaRecordState,
-) {
-  return isDiscoveryMediaRequestable({ availability, mediaRecordState });
+  return isDiscoveryMediaRequestable({
+    availability: item.availability,
+    mediaRecordState: item.mediaRecordState,
+  });
 }
 
 export function discoverySpotlightItem(feed: DiscoveryFeedResponse) {

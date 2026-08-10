@@ -89,17 +89,7 @@ export type DiscoveryAvailability = z.infer<typeof discoveryAvailabilitySchema>;
 export const discoveryMediaRecordStateSchema = z.enum(["present", "absent", "unknown"]);
 export type DiscoveryMediaRecordState = z.infer<typeof discoveryMediaRecordStateSchema>;
 
-export function isDiscoveryMediaRequestable(input: {
-  availability: DiscoveryAvailability;
-  mediaRecordState: DiscoveryMediaRecordState;
-}) {
-  return (
-    input.mediaRecordState !== "unknown" &&
-    (input.availability === "partial" ||
-      input.availability === "unavailable" ||
-      (input.availability === "unknown" && input.mediaRecordState === "absent"))
-  );
-}
+export { isDiscoveryMediaRequestable } from "./discovery-requestability.js";
 
 const discoveryKnownForSchema = z.strictObject({
   kind: z.enum(["movie", "series"]),

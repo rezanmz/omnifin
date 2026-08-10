@@ -7,6 +7,7 @@ import type {
   DiscoveryFeedItem,
 } from "@omnifin/contracts/discovery";
 import { DISCOVERY_MOVIE_GENRES, DISCOVERY_SERIES_GENRES } from "@omnifin/contracts/discovery";
+import { isDiscoveryMediaRequestable } from "@omnifin/contracts/discovery-requestability";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import {
   ChevronLeft,
@@ -39,7 +40,6 @@ import {
   discoveryBrowseClient,
   type DiscoveryBrowseClient,
 } from "../lib/discovery-browse";
-import { discoveryMediaIsRequestable } from "../lib/discovery-presentation";
 import type { DiscoveryMediaDetailClient } from "../lib/media-details";
 import type { MediaRequestClient } from "../lib/media-requests";
 import { ApplicationShellContent } from "./application-shell";
@@ -673,8 +673,10 @@ function BrowserContent({
                           <small>{requested ? "Requested" : availabilityLabel(item)}</small>
                         </span>
                       </button>
-                      {discoveryMediaIsRequestable(item.availability, item.mediaRecordState) &&
-                      !requested ? (
+                      {isDiscoveryMediaRequestable({
+                        availability: item.availability,
+                        mediaRecordState: item.mediaRecordState,
+                      }) && !requested ? (
                         <button
                           aria-label={`Request ${item.title}`}
                           className={styles.requestButton}

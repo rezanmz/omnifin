@@ -1,29 +1,28 @@
-import type {
-  DiscoveryAvailability,
-  DiscoveryMediaRecordState,
-} from "@omnifin/contracts/discovery";
+import type { DiscoveryFeedItem } from "@omnifin/contracts/discovery";
 import { describe, expect, it } from "vitest";
 
-import { discoveryMediaIsRequestable } from "./discovery-presentation";
+import { discoveryItemIsRequestable } from "./discovery-presentation";
+
+const requestableItem = {
+  artwork: { backdropPath: null, posterPath: null },
+  availability: "unknown",
+  id: "movie:603",
+  kind: "movie",
+  mediaRecordState: "absent",
+  originalTitle: "The Matrix",
+  overview: null,
+  source: "seerr",
+  title: "The Matrix",
+  tmdbId: 603,
+  voteAverage: 8.2,
+  year: 1999,
+} as const satisfies DiscoveryFeedItem;
 
 describe("discovery presentation", () => {
-  it.each([
-    ["partial", "present", true],
-    ["partial", "absent", true],
-    ["partial", "unknown", false],
-    ["unavailable", "present", true],
-    ["unavailable", "absent", true],
-    ["unavailable", "unknown", false],
-    ["unknown", "absent", true],
-    ["unknown", "present", false],
-    ["unknown", "unknown", false],
-    ["available", "absent", false],
-    ["requested", "absent", false],
-    ["processing", "absent", false],
-  ] satisfies ReadonlyArray<readonly [DiscoveryAvailability, DiscoveryMediaRecordState, boolean]>)(
-    "treats %s+%s requestability as %s",
-    (availability, state, expected) => {
-      expect(discoveryMediaIsRequestable(availability, state)).toBe(expected);
-    },
-  );
+  it("uses the shared requestability policy for a discovery item", () => {
+    expect(discoveryItemIsRequestable(requestableItem)).toBe(true);
+    expect(discoveryItemIsRequestable({ ...requestableItem, mediaRecordState: "unknown" })).toBe(
+      false,
+    );
+  });
 });

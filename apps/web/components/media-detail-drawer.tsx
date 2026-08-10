@@ -10,6 +10,7 @@ import type {
   DiscoveryPersonDetail,
   DiscoverySeriesResult,
 } from "@omnifin/contracts/discovery";
+import { isDiscoveryMediaRequestable } from "@omnifin/contracts/discovery-requestability";
 import {
   ArrowLeft,
   BadgeCheck,
@@ -40,7 +41,6 @@ import {
   type DiscoveryPersonDetailClient,
   type MediaDetailClientErrorKind,
 } from "../lib/media-details";
-import { discoveryMediaIsRequestable } from "../lib/discovery-presentation";
 import { titleProviderHref } from "../lib/title-provider-reference";
 import { SavedTitleActions } from "./saved-title-actions";
 
@@ -292,7 +292,10 @@ function DetailContent({
 }) {
   const runtime = formatRuntime(detail.runtimeMinutes);
   const ratings = formatRatings(detail.voteCount);
-  const requestable = discoveryMediaIsRequestable(detail.availability, detail.mediaRecordState);
+  const requestable = isDiscoveryMediaRequestable({
+    availability: detail.availability,
+    mediaRecordState: detail.mediaRecordState,
+  });
   const requestCopy =
     detail.availability === "unknown" && detail.mediaRecordState === "absent"
       ? {
