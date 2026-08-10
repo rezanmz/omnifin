@@ -472,6 +472,8 @@ describe("Seerr discovery", () => {
     { availability: "unavailable", mediaRecordState: "present", mediaInfo: { status: 6 } },
     { availability: "unavailable", mediaRecordState: "absent", mediaInfo: undefined },
     { availability: "unavailable", mediaRecordState: "absent", mediaInfo: null },
+    { availability: "unknown", mediaRecordState: "unknown", mediaInfo: "malformed" },
+    { availability: "unknown", mediaRecordState: "unknown", mediaInfo: [] },
   ] as const)(
     "maps Seerr media info safely",
     async ({ availability, mediaRecordState, mediaInfo }) => {

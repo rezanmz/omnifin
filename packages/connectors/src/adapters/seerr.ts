@@ -561,8 +561,8 @@ function mediaStateFromMediaInfo(mediaInfo: UpstreamMediaInfo) {
     return { availability: "unavailable" as const, mediaRecordState: "absent" as const };
   }
   const status =
-    typeof mediaInfo === "object" && mediaInfo !== null && !Array.isArray(mediaInfo)
-      ? (mediaInfo as { status?: unknown }).status
+    typeof mediaInfo === "object" && !Array.isArray(mediaInfo) && "status" in mediaInfo
+      ? mediaInfo.status
       : undefined;
   switch (status) {
     case 1:
