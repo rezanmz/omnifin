@@ -30,6 +30,14 @@ const now = new Date("2026-07-28T06:30:00.000Z");
 const privateItemId = "route-private-playback-item";
 const privateToken = "route-private-playback-token";
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 function testConfig(): AppConfig {
   return {
     baseUrl: new URL("https://omnifin.example"),
@@ -93,6 +101,7 @@ async function harness(
   options: {
     playbackIssueTokens?: readonly string[];
     playbackSessionTokens?: readonly string[];
+    playbackTransferLimits?: { global?: number; perUser?: number };
   } = {},
 ) {
   const config = testConfig();
@@ -162,6 +171,9 @@ async function harness(
       },
       createClient: createPlaybackClient,
       createToken: () => options.playbackSessionTokens?.[playbackSessionToken++] ?? "p".repeat(22),
+      ...(options.playbackTransferLimits === undefined
+        ? {}
+        : { playbackTransferLimits: options.playbackTransferLimits }),
     },
     playbackIssueDependencies: {
       clock: () => now,
@@ -1011,7 +1023,9 @@ describe("playback routes", () => {
   });
 
   it("serves concurrent segment retries through one persisted handle", async () => {
-    const { app, headers, readPlaybackTarget, referenceId, streamPlaybackTarget } = await harness();
+    const { app, headers, readPlaybackTarget, referenceId, streamPlaybackTarget } = await harness({
+      playbackTransferLimits: { global: 32, perUser: 24 },
+    });
     try {
       const created = await app.inject({
         headers,
@@ -1067,6 +1081,51 @@ describe("playback routes", () => {
           .get(playback.sessionId),
       ).toEqual({ count: 1 });
     } finally {
+      await app.close();
+    }
+  });
+
+  it("maps exhausted playback transfers to the privacy-safe unavailable surface", async () => {
+    const upstreamGate = deferred<void>();
+    const { app, headers, readPlaybackTarget, referenceId } = await harness({
+      playbackTransferLimits: { global: 1, perUser: 1 },
+    });
+    try {
+      const created = await app.inject({
+        headers,
+        method: "POST",
+        payload: negotiation,
+        url: `/v1/media/${referenceId}/playback`,
+      });
+      const playback = playbackNegotiationResponseSchema.parse(created.json());
+      readPlaybackTarget.mockImplementation(async () => {
+        await upstreamGate.promise;
+        return {
+          body: new TextEncoder().encode("#EXTM3U\n"),
+          headers: new Headers({ "content-type": "application/vnd.apple.mpegurl" }),
+          status: 200,
+        };
+      });
+
+      const first = app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: playback.streamPath,
+      });
+      await vi.waitFor(() => expect(readPlaybackTarget).toHaveBeenCalledOnce());
+      const busy = await app.inject({
+        headers: { cookie: headers.cookie },
+        method: "GET",
+        url: playback.streamPath,
+      });
+      expect(busy.statusCode).toBe(503);
+      expect(apiErrorSchema.parse(busy.json()).error.code).toBe("playback_unavailable");
+      expect(busy.body).not.toMatch(/(?:private|token|counter|active|global|per.user)/iu);
+
+      upstreamGate.resolve(undefined);
+      await expect(first).resolves.toMatchObject({ statusCode: 200 });
+    } finally {
+      upstreamGate.resolve(undefined);
       await app.close();
     }
   });
