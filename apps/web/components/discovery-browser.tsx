@@ -39,7 +39,7 @@ import {
   discoveryBrowseClient,
   type DiscoveryBrowseClient,
 } from "../lib/discovery-browse";
-import { discoveryAvailabilityIsRequestable } from "../lib/discovery-presentation";
+import { discoveryMediaIsRequestable } from "../lib/discovery-presentation";
 import type { DiscoveryMediaDetailClient } from "../lib/media-details";
 import type { MediaRequestClient } from "../lib/media-requests";
 import { ApplicationShellContent } from "./application-shell";
@@ -132,6 +132,7 @@ function itemMedia(item: DiscoveryFeedItem): DetailMedia {
     availability: item.availability,
     id: item.id,
     kind: item.kind,
+    mediaRecordState: item.mediaRecordState,
     originalTitle: item.originalTitle,
     overview: item.overview,
     source: item.source,
@@ -672,7 +673,8 @@ function BrowserContent({
                           <small>{requested ? "Requested" : availabilityLabel(item)}</small>
                         </span>
                       </button>
-                      {discoveryAvailabilityIsRequestable(item.availability) && !requested ? (
+                      {discoveryMediaIsRequestable(item.availability, item.mediaRecordState) &&
+                      !requested ? (
                         <button
                           aria-label={`Request ${item.title}`}
                           className={styles.requestButton}

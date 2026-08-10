@@ -16,6 +16,7 @@ const response: DiscoveryMediaDetailResponse = {
   item: {
     artwork: { backdropPath: null, posterPath: null },
     availability: "available",
+    mediaRecordState: "present",
     cast: [{ character: "Neo", name: "Keanu Reeves", personId: 6384, profilePath: null }],
     crew: [{ name: "Lana Wachowski", personId: 9340, role: "Director" }],
     genres: ["Action", "Science Fiction"],
@@ -65,6 +66,7 @@ const personCreditsResponse: DiscoveryPersonCreditsResponse = {
   generatedAt: "2026-07-28T20:00:00.000Z",
   items: Array.from({ length: 6 }, (_, index) => ({
     availability: "available",
+    mediaRecordState: "present",
     kind: "movie",
     role: `Role ${index + 25}`,
     title: `Movie ${index + 25}`,
