@@ -1,10 +1,21 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 import { parse } from "yaml";
 
@@ -22,6 +33,7 @@ import {
 } from "../release/upgrade-rehearsal.mjs";
 import {
   classifyQuarantinedRollback,
+  immutableDatabaseUrl,
   verifyQuarantinedRollback,
 } from "../release/verify-v0131-quarantined-rollback.mjs";
 
@@ -130,6 +142,89 @@ function createRollbackProbeFixture({ providers = [ROLLBACK_PROVIDER], transacti
   return { databasePath, directory };
 }
 
+function createSealedWalRollbackProbeFixture() {
+  const directory = mkdtempSync(join(tmpdir(), "omnifin-rollback-wal-probe-"));
+  const sourceDatabasePath = join(directory, "source.sqlite");
+  const sealedDirectory = join(directory, "sealed");
+  const sealedDatabasePath = join(sealedDirectory, "rollback.sqlite");
+  let sourceDatabase;
+  try {
+    sourceDatabase = new DatabaseSync(sourceDatabasePath);
+    sourceDatabase.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0");
+    sourceDatabase.exec(`
+      create table oidc_providers (
+        id text,
+        slug text,
+        client_id text,
+        token_endpoint_auth_method text,
+        encrypted_client_secret text,
+        approved_endpoint_origins_json text,
+        discovery_state text,
+        discovery_capabilities_json text,
+        discovery_checked_at integer,
+        created_at integer,
+        updated_at integer,
+        allow_jit_provisioning integer,
+        enabled integer
+      );
+      create table auth_transactions (provider_id text);
+    `);
+    const insertProvider = sourceDatabase.prepare(`
+      insert into oidc_providers (
+        id,
+        slug,
+        client_id,
+        token_endpoint_auth_method,
+        encrypted_client_secret,
+        approved_endpoint_origins_json,
+        discovery_state,
+        discovery_capabilities_json,
+        discovery_checked_at,
+        created_at,
+        updated_at,
+        allow_jit_provisioning,
+        enabled
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertProvider.run(
+      ROLLBACK_PROVIDER.id,
+      ROLLBACK_PROVIDER.slug,
+      ROLLBACK_PROVIDER.clientId,
+      ROLLBACK_PROVIDER.tokenEndpointAuthMethod,
+      ROLLBACK_PROVIDER.encryptedClientSecret,
+      ROLLBACK_PROVIDER.approvedEndpointOriginsJson,
+      ROLLBACK_PROVIDER.discoveryState,
+      ROLLBACK_PROVIDER.discoveryCapabilitiesJson,
+      ROLLBACK_PROVIDER.discoveryCheckedAt,
+      ROLLBACK_PROVIDER.createdAt,
+      ROLLBACK_PROVIDER.updatedAt,
+      ROLLBACK_PROVIDER.allowJitProvisioning,
+      ROLLBACK_PROVIDER.enabled,
+    );
+    assert.equal(sourceDatabase.prepare("PRAGMA journal_mode").get().journal_mode, "wal");
+    sourceDatabase.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    sourceDatabase.exec(
+      "create table wal_marker (value text); insert into wal_marker values ('sealed')",
+    );
+
+    mkdirSync(sealedDirectory);
+    copyFileSync(sourceDatabasePath, sealedDatabasePath);
+    assert.ok(existsSync(`${sourceDatabasePath}-wal`));
+    copyFileSync(`${sourceDatabasePath}-wal`, `${sealedDatabasePath}-wal`);
+    sourceDatabase.close();
+    sourceDatabase = undefined;
+    chmodSync(sealedDatabasePath, 0o444);
+    chmodSync(`${sealedDatabasePath}-wal`, 0o444);
+    chmodSync(sealedDirectory, 0o555);
+    return { databasePath: sealedDatabasePath, directory, sealedDirectory };
+  } catch (error) {
+    sourceDatabase?.close();
+    if (existsSync(sealedDirectory)) chmodSync(sealedDirectory, 0o755);
+    rmSync(directory, { force: true, recursive: true });
+    throw error;
+  }
+}
+
 function withRollbackProbeFixture(options, callback) {
   const fixture = createRollbackProbeFixture(options);
   try {
@@ -207,6 +302,19 @@ test("verifies the quarantined rollback fixture without mocking SQLite", () => {
       false,
       name,
     );
+  }
+});
+
+test("uses immutable URI semantics for a WAL backup on a sealed read-only directory", () => {
+  const fixture = createSealedWalRollbackProbeFixture();
+  try {
+    const databaseUrl = immutableDatabaseUrl(fixture.databasePath);
+    assert.equal(databaseUrl.pathname, pathToFileURL(fixture.databasePath).pathname);
+    assert.deepEqual([...databaseUrl.searchParams.entries()], [["immutable", "1"]]);
+    assert.equal(verifyQuarantinedRollback(fixture.databasePath), true);
+  } finally {
+    chmodSync(fixture.sealedDirectory, 0o755);
+    rmSync(fixture.directory, { force: true, recursive: true });
   }
 });
 
@@ -649,7 +757,10 @@ test("keeps the raw rollback probe isolated and sanitized", () => {
     /encryptionFile|recoveryFile|omnifin_encryption_key|omnifin_recovery_secret/u,
   );
   assert.match(ROLLBACK_PROBE_SOURCE, /export function verifyQuarantinedRollback\(databasePath/u);
-  assert.match(ROLLBACK_PROBE_SOURCE, /new DatabaseSync\(databasePath, \{ readOnly: true \}\)/u);
+  assert.match(
+    ROLLBACK_PROBE_SOURCE,
+    /immutableDatabaseUrl\(databasePath\)[\s\S]*new DatabaseSync\(databaseUrl, \{ readOnly: true \}\)/u,
+  );
   assert.match(ROLLBACK_PROBE_SOURCE, /const DATABASE_PATH = "\/backups\/rollback\.sqlite"/u);
   assert.match(ROLLBACK_PROBE_SOURCE, /PRAGMA query_only=ON/u);
   assert.match(ROLLBACK_PROBE_SOURCE, /from oidc_providers/u);

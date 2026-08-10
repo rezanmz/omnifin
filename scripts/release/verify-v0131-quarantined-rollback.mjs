@@ -18,6 +18,12 @@ export const ROLLBACK_PROBE_CATEGORIES = Object.freeze([
   "probe_transaction",
 ]);
 
+export function immutableDatabaseUrl(databasePath) {
+  const databaseUrl = pathToFileURL(databasePath);
+  databaseUrl.searchParams.set("immutable", "1");
+  return databaseUrl;
+}
+
 function isValidTimestamp(value) {
   return (
     typeof value === "number" &&
@@ -54,7 +60,8 @@ function isValidFailureCapabilities(value) {
 
 export function classifyQuarantinedRollback(databasePath = DATABASE_PATH) {
   try {
-    const database = new DatabaseSync(databasePath, { readOnly: true });
+    const databaseUrl = immutableDatabaseUrl(databasePath);
+    const database = new DatabaseSync(databaseUrl, { readOnly: true });
     try {
       database.exec("PRAGMA query_only=ON");
       const providers = database
