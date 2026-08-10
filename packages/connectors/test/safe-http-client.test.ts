@@ -284,7 +284,36 @@ describe("SafeHttpClient", () => {
 
     await expect(
       client.requestText("api/v3/system/status", { operation: "probe" }),
-    ).rejects.toMatchObject({ code: "timeout", retryable: true });
+    ).rejects.toMatchObject({
+      cancellationSource: "timeout",
+      code: "timeout",
+      retryable: true,
+    });
+  });
+
+  it("preserves a bounded caller cancellation source in connector failures", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("aborted", "AbortError");
+    Object.defineProperty(reason, "cancellationSource", { value: "response_closed" });
+    controller.abort(reason);
+    const transport: ConnectorTransport = (_url, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        init.signal.addEventListener(
+          "abort",
+          () => reject(new DOMException("aborted", "AbortError")),
+          { once: true },
+        );
+      });
+
+    await expect(
+      clientWith(transport).requestText("api/v3/system/status", {
+        operation: "probe",
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({
+      cancellationSource: "response_closed",
+      code: "unreachable",
+    });
   });
 
   it("keeps the deadline active while consuming a slow response body", async () => {

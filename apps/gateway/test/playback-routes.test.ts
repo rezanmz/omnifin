@@ -2,6 +2,7 @@ import type {
   JellyfinPlaybackBytesResult,
   JellyfinPlaybackResult,
 } from "@omnifin/connectors/media/jellyfin-playback-client";
+import { request as httpRequest } from "node:http";
 import { apiErrorSchema } from "@omnifin/contracts/errors";
 import { playbackIssueSchema } from "@omnifin/contracts/issues";
 import {
@@ -99,13 +100,28 @@ function playbackResult(): JellyfinPlaybackResult {
 
 async function harness(
   options: {
+    holdNegotiation?: boolean;
     playbackIssueTokens?: readonly string[];
     playbackSessionTokens?: readonly string[];
     playbackTransferLimits?: { global?: number; perUser?: number };
   } = {},
 ) {
   const config = testConfig();
-  const negotiate = vi.fn(async () => playbackResult());
+  let negotiationStarted!: () => void;
+  const negotiationStartedPromise = new Promise<void>((resolve) => {
+    negotiationStarted = resolve;
+  });
+  const negotiationSignals: AbortSignal[] = [];
+  let releaseNegotiation!: () => void;
+  const negotiationGate = new Promise<void>((resolve) => {
+    releaseNegotiation = resolve;
+  });
+  const negotiate = vi.fn(async (_input: unknown, signal?: AbortSignal) => {
+    if (signal) negotiationSignals.push(signal);
+    negotiationStarted();
+    if (options.holdNegotiation) await negotiationGate;
+    return playbackResult();
+  });
   const readPlaybackTarget = vi.fn();
   const readSubtitleStream = vi.fn(async (): Promise<JellyfinPlaybackBytesResult> => {
     throw new Error("Subtitle bytes were not requested by this route test.");
@@ -268,6 +284,9 @@ async function harness(
     createPlaybackClient,
     headers,
     negotiate,
+    negotiationSignals,
+    negotiationStartedPromise,
+    releaseNegotiation,
     readPlaybackTarget,
     readSubtitleStream,
     referenceId,
@@ -534,6 +553,60 @@ describe("playback routes", () => {
       expect(reportPlaybackEvent).toHaveBeenCalledOnce();
       expect(progress.body).not.toMatch(/private-/u);
     } finally {
+      await app.close();
+    }
+  });
+
+  it("negotiates playback once over a real authenticated TCP POST before any manifest request", async () => {
+    const {
+      app,
+      headers,
+      negotiationSignals,
+      negotiationStartedPromise,
+      releaseNegotiation,
+      referenceId,
+      resolvePlaybackTarget,
+      streamPlaybackTarget,
+    } = await harness({ holdNegotiation: true });
+    try {
+      await app.listen({ host: "127.0.0.1", port: 0 });
+      const address = app.server.address();
+      if (!address || typeof address === "string") throw new Error("Test server did not bind.");
+      const responsePromise = new Promise<{ body: string; statusCode: number }>(
+        (resolve, reject) => {
+          const client = httpRequest(
+            {
+              headers: { ...headers, "content-type": "application/json" },
+              host: "127.0.0.1",
+              method: "POST",
+              path: `/v1/media/${referenceId}/playback`,
+              port: address.port,
+            },
+            (response) => {
+              const chunks: Buffer[] = [];
+              response.on("data", (chunk: Buffer) => chunks.push(chunk));
+              response.on("end", () =>
+                resolve({
+                  body: Buffer.concat(chunks).toString("utf8"),
+                  statusCode: response.statusCode ?? 0,
+                }),
+              );
+            },
+          );
+          client.on("error", reject);
+          client.end(JSON.stringify(negotiation));
+        },
+      );
+
+      await negotiationStartedPromise;
+      expect(negotiationSignals).toHaveLength(1);
+      expect(negotiationSignals[0]?.aborted).toBe(false);
+      releaseNegotiation();
+      await expect(responsePromise).resolves.toMatchObject({ statusCode: 201 });
+      expect(streamPlaybackTarget).not.toHaveBeenCalled();
+      expect(resolvePlaybackTarget).not.toHaveBeenCalled();
+    } finally {
+      releaseNegotiation();
       await app.close();
     }
   });

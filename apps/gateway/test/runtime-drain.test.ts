@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { request as httpRequest } from "node:http";
 import { createConnection } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
@@ -66,6 +67,8 @@ describe("runtime drain", () => {
   it("exposes a request signal that aborts on a real client disconnect", async () => {
     const app = await createApp({ config: testConfig(), database: openDatabase(":memory:") });
     let signal: AbortSignal | undefined;
+    let abortCount = 0;
+    let cancellationSource: unknown;
     let entered!: () => void;
     const enteredPromise = new Promise<void>((resolve) => {
       entered = resolve;
@@ -73,6 +76,12 @@ describe("runtime drain", () => {
     let release!: () => void;
     app.get("/v1/test-request-abort", async (request) => {
       signal = request.operationSignal;
+      const operationSignal = request.operationSignal;
+      operationSignal.addEventListener("abort", () => {
+        abortCount += 1;
+        cancellationSource = (operationSignal.reason as { cancellationSource?: unknown })
+          .cancellationSource;
+      });
       entered();
       await new Promise<void>((resolve) => {
         release = resolve;
@@ -95,6 +104,8 @@ describe("runtime drain", () => {
       await waitFor(() => signal?.aborted === true);
       expect(signal?.reason).toBeInstanceOf(DOMException);
       expect((signal?.reason as DOMException).name).toBe("AbortError");
+      expect(abortCount).toBe(1);
+      expect(cancellationSource).toBe("client_abort");
       release();
     } finally {
       release?.();
@@ -102,22 +113,151 @@ describe("runtime drain", () => {
     }
   });
 
-  it("aborts on a premature reply close and cleans up a hijacked reply", async () => {
+  it("keeps a JSON POST operation live after body completion during delayed work", async () => {
     const app = await createApp({ config: testConfig(), database: openDatabase(":memory:") });
-    let prematureSignal: AbortSignal | undefined;
+    let signal: AbortSignal | undefined;
     let entered!: () => void;
     const enteredPromise = new Promise<void>((resolve) => {
       entered = resolve;
     });
     let release!: () => void;
-    app.get("/v1/test-premature-close", async (request) => {
-      prematureSignal = request.operationSignal;
-      entered();
-      await new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      return { ok: true };
+    const work = new Promise<void>((resolve) => {
+      release = resolve;
     });
+    app.post(
+      "/v1/test-json-operation",
+      { config: { omnifinSecurity: { kind: "public-browser" } } },
+      async (request) => {
+        signal = request.operationSignal;
+        entered();
+        await work;
+        return { ok: true };
+      },
+    );
+
+    try {
+      await app.listen({ host: "127.0.0.1", port: 0 });
+      const address = app.server.address();
+      if (!address || typeof address === "string") throw new Error("Test server did not bind.");
+      const responsePromise = new Promise<{ body: string; statusCode: number }>(
+        (resolve, reject) => {
+          const client = httpRequest(
+            {
+              host: "127.0.0.1",
+              method: "POST",
+              path: "/v1/test-json-operation",
+              port: address.port,
+              headers: {
+                "content-type": "application/json",
+                origin: "https://omnifin.example",
+              },
+            },
+            (response) => {
+              const chunks: Buffer[] = [];
+              response.on("data", (chunk: Buffer) => chunks.push(chunk));
+              response.on("end", () =>
+                resolve({
+                  body: Buffer.concat(chunks).toString("utf8"),
+                  statusCode: response.statusCode ?? 0,
+                }),
+              );
+            },
+          );
+          client.on("error", reject);
+          client.end(JSON.stringify({ payload: "complete" }));
+        },
+      );
+
+      await enteredPromise;
+      expect(signal?.aborted).toBe(false);
+      release();
+      await expect(responsePromise).resolves.toMatchObject({
+        statusCode: 200,
+        body: '{"ok":true}',
+      });
+    } finally {
+      release?.();
+      await app.close();
+    }
+  });
+
+  it("aborts a partial JSON body once with the client-abort source", async () => {
+    const app = await createApp({ config: testConfig(), database: openDatabase(":memory:") });
+    let signal: AbortSignal | undefined;
+    let abortCount = 0;
+    let cancellationSource: unknown;
+    let requestObserved!: () => void;
+    const requestObservedPromise = new Promise<void>((resolve) => {
+      requestObserved = resolve;
+    });
+    app.post(
+      "/v1/test-partial-json",
+      {
+        config: { omnifinSecurity: { kind: "public-browser" } },
+        onRequest: async (request) => {
+          signal = request.operationSignal;
+          const operationSignal = request.operationSignal;
+          operationSignal.addEventListener("abort", () => {
+            abortCount += 1;
+            cancellationSource = (operationSignal.reason as { cancellationSource?: unknown })
+              .cancellationSource;
+          });
+          requestObserved();
+        },
+      },
+      async () => {
+        return { ok: true };
+      },
+    );
+
+    try {
+      await app.listen({ host: "127.0.0.1", port: 0 });
+      const address = app.server.address();
+      if (!address || typeof address === "string") throw new Error("Test server did not bind.");
+      const socket = createConnection({ host: "127.0.0.1", port: address.port });
+      await once(socket, "connect");
+      socket.write(
+        'POST /v1/test-partial-json HTTP/1.1\r\nHost: localhost\r\nOrigin: https://omnifin.example\r\nContent-Type: application/json\r\nContent-Length: 32\r\nConnection: close\r\n\r\n{"payload":"partial',
+      );
+      await requestObservedPromise;
+      socket.destroy();
+      await once(socket, "close");
+      await waitFor(() => signal?.aborted === true);
+      expect(abortCount).toBe(1);
+      expect(cancellationSource).toBe("client_abort");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("aborts on a premature reply close and cleans up a hijacked reply", async () => {
+    const app = await createApp({ config: testConfig(), database: openDatabase(":memory:") });
+    let prematureSignal: AbortSignal | undefined;
+    let prematureAbortCount = 0;
+    let prematureCancellationSource: unknown;
+    let entered!: () => void;
+    const enteredPromise = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    app.post(
+      "/v1/test-premature-close",
+      { config: { omnifinSecurity: { kind: "public-browser" } } },
+      async (request) => {
+        prematureSignal = request.operationSignal;
+        prematureSignal.addEventListener("abort", () => {
+          prematureAbortCount += 1;
+          prematureCancellationSource = (
+            prematureSignal?.reason as { cancellationSource?: unknown }
+          ).cancellationSource;
+        });
+        entered();
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return { ok: true };
+      },
+    );
     let hijackedSignal: AbortSignal | undefined;
     app.get("/v1/test-hijacked", async (request, reply) => {
       hijackedSignal = request.operationSignal;
@@ -133,13 +273,15 @@ describe("runtime drain", () => {
       const socket = createConnection({ host: "127.0.0.1", port: address.port });
       await once(socket, "connect");
       socket.write(
-        "GET /v1/test-premature-close HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        'POST /v1/test-premature-close HTTP/1.1\r\nHost: localhost\r\nOrigin: https://omnifin.example\r\nContent-Type: application/json\r\nContent-Length: 22\r\nConnection: close\r\n\r\n{"payload":"complete"}',
       );
       await enteredPromise;
       socket.destroy();
       await once(socket, "close");
       await waitFor(() => prematureSignal?.aborted === true);
       expect((prematureSignal?.reason as DOMException).name).toBe("AbortError");
+      expect(prematureAbortCount).toBe(1);
+      expect(prematureCancellationSource).toBe("response_closed");
       release();
 
       const response = await responseFromSocket(address.port, "/v1/test-hijacked");
