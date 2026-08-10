@@ -50,6 +50,8 @@ import {
   MAX_PLAYBACK_ASSET_TOKEN_LENGTH,
   MAX_PLAYBACK_MANIFEST_BYTES,
   MAX_PLAYBACK_MANIFEST_REFERENCES,
+  PlaybackTransferLeaseManager,
+  type PlaybackTransferLimitOverrides,
 } from "./playback-limits.js";
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
@@ -254,6 +256,7 @@ export interface PlaybackSessionDependencies {
   >;
   createToken?: () => string;
   mediaReferences?: MediaReferenceDependencies;
+  playbackTransferLimits?: PlaybackTransferLimitOverrides;
 }
 
 export type PlaybackSessionErrorReason =
@@ -500,6 +503,60 @@ function isManifestTarget(target: JellyfinPlaybackTarget) {
   return target.path.toLowerCase().endsWith(".m3u8");
 }
 
+function leasedPlaybackStream(body: ReadableStream<Uint8Array>, release: () => void) {
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let settled = false;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    release();
+  };
+  const releaseReader = () => {
+    reader?.releaseLock();
+    reader = undefined;
+  };
+
+  return new ReadableStream<Uint8Array>({
+    start() {
+      try {
+        reader = body.getReader();
+      } catch (error) {
+        finish();
+        throw error;
+      }
+    },
+    async pull(controller) {
+      const activeReader = reader;
+      if (!activeReader) {
+        controller.close();
+        return;
+      }
+      try {
+        const result = await activeReader.read();
+        if (result.done) {
+          releaseReader();
+          finish();
+          controller.close();
+        } else {
+          controller.enqueue(result.value);
+        }
+      } catch (error) {
+        releaseReader();
+        finish();
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      try {
+        await reader?.cancel(reason);
+      } finally {
+        releaseReader();
+        finish();
+      }
+    },
+  });
+}
+
 export class PlaybackSessionService {
   readonly #beforeProgressCompletion:
     NonNullable<PlaybackSessionDependencies["beforeProgressCompletion"]> | undefined;
@@ -511,6 +568,7 @@ export class PlaybackSessionService {
   readonly #createToken: () => string;
   readonly #database: DatabaseHandle;
   readonly #journal: ExternalMutationJournal;
+  readonly #transfers: PlaybackTransferLeaseManager;
   readonly #reportPipelineTails = new Map<string, Promise<void>>();
   readonly #references: MediaReferenceService;
 
@@ -528,6 +586,7 @@ export class PlaybackSessionService {
     this.#createClient = dependencies.createClient ?? defaultClient;
     this.#createToken = dependencies.createToken ?? (() => randomToken(16));
     this.#journal = new ExternalMutationJournal(database.sqlite, config.encryptionKey);
+    this.#transfers = new PlaybackTransferLeaseManager(dependencies.playbackTransferLimits);
     this.#references = new MediaReferenceService(database, config, {
       ...dependencies.mediaReferences,
       clock: dependencies.mediaReferences?.clock ?? this.#clock,
@@ -783,31 +842,35 @@ export class PlaybackSessionService {
     range: string | undefined,
     signal?: AbortSignal,
   ) {
-    const { client, payload } = this.#stream(context, sessionId, DIRECT_RANGE_BYTES);
+    const { client, payload, userId } = this.#stream(context, sessionId, DIRECT_RANGE_BYTES);
     if (
       !["DirectPlay", "DirectStream"].includes(payload.playMethod) ||
       payload.upstreamTarget.path.endsWith(".m3u8")
     ) {
       throw new PlaybackSessionError("not_found");
     }
+    const normalizedRange = parseRange(range);
+    const release = this.#acquireTransfer(userId);
     let response: JellyfinPlaybackBytesResult;
     try {
       response = await client.readPlaybackTarget({
         accept: "video/*,audio/*,application/octet-stream",
-        range: parseRange(range),
+        range: normalizedRange,
         ...(signal === undefined ? {} : { signal }),
         target: payload.upstreamTarget,
       });
+      return {
+        body: response.status === 416 ? new Uint8Array() : response.body,
+        contentRange: contentRange(response.headers),
+        contentType: contentType(response.headers, "application/octet-stream"),
+        status: response.status === 206 ? 206 : response.status === 416 ? 416 : 200,
+      } as const;
     } catch (error) {
       if (error instanceof PlaybackSessionError) throw error;
       throw new PlaybackSessionError("unavailable", { cause: error });
+    } finally {
+      release();
     }
-    return {
-      body: response.status === 416 ? new Uint8Array() : response.body,
-      contentRange: contentRange(response.headers),
-      contentType: contentType(response.headers, "application/octet-stream"),
-      status: response.status === 206 ? 206 : response.status === 416 ? 416 : 200,
-    } as const;
   }
 
   public async readManifest(
@@ -815,7 +878,7 @@ export class PlaybackSessionService {
     sessionId: string,
     signal?: AbortSignal,
   ) {
-    const { client, payload, session } = this.#stream(
+    const { client, payload, session, userId } = this.#stream(
       context,
       sessionId,
       MAX_PLAYBACK_MANIFEST_BYTES,
@@ -823,7 +886,12 @@ export class PlaybackSessionService {
     if (payload.playMethod !== "Transcode" || !isManifestTarget(payload.upstreamTarget)) {
       throw new PlaybackSessionError("not_found");
     }
-    return this.#manifest(client, session, payload.upstreamTarget, "hls/", signal);
+    const release = this.#acquireTransfer(userId);
+    try {
+      return await this.#manifest(client, session, payload.upstreamTarget, "hls/", signal);
+    } finally {
+      release();
+    }
   }
 
   public async readAsset(
@@ -838,7 +906,7 @@ export class PlaybackSessionService {
     ) {
       throw new PlaybackSessionError("not_found");
     }
-    const { client, now, payload, session } = this.#stream(
+    const { client, now, payload, session, userId } = this.#stream(
       context,
       sessionId,
       MAX_PLAYBACK_MANIFEST_BYTES,
@@ -858,8 +926,16 @@ export class PlaybackSessionService {
     } catch (error) {
       throw new PlaybackSessionError("not_found", { cause: error });
     }
-    if (isManifestTarget(target)) return this.#manifest(client, session, target, "./", signal);
+    if (isManifestTarget(target)) {
+      const release = this.#acquireTransfer(userId);
+      try {
+        return await this.#manifest(client, session, target, "./", signal);
+      } finally {
+        release();
+      }
+    }
 
+    const release = this.#acquireTransfer(userId);
     let response: JellyfinPlaybackStreamResult;
     try {
       response = await client.streamPlaybackTarget({
@@ -869,14 +945,20 @@ export class PlaybackSessionService {
         target,
       });
     } catch (error) {
+      release();
       throw new PlaybackSessionError("unavailable", { cause: error });
     }
-    return {
-      body: response.body,
-      contentType: contentType(response.headers, "application/octet-stream"),
-      kind: "asset" as const,
-      status: response.status === 206 ? 206 : 200,
-    };
+    try {
+      return {
+        body: leasedPlaybackStream(response.body, release),
+        contentType: contentType(response.headers, "application/octet-stream"),
+        kind: "asset" as const,
+        status: response.status === 206 ? 206 : 200,
+      };
+    } catch (error) {
+      release();
+      throw new PlaybackSessionError("unavailable", { cause: error });
+    }
   }
 
   public async readSubtitle(
@@ -887,10 +969,11 @@ export class PlaybackSessionService {
   ) {
     const specificIndexSchema = z.int().nonnegative().max(4_095);
     const index = specificIndexSchema.parse(subtitleIndex);
-    const { client, payload } = this.#stream(context, sessionId, SUBTITLE_MAX_BYTES);
+    const { client, payload, userId } = this.#stream(context, sessionId, SUBTITLE_MAX_BYTES);
     if (!payload.textSubtitleIndexes.includes(index)) {
       throw new PlaybackSessionError("not_found");
     }
+    const release = this.#acquireTransfer(userId);
     let response: JellyfinPlaybackBytesResult;
     try {
       response = await client.readSubtitleStream({
@@ -899,17 +982,20 @@ export class PlaybackSessionService {
         subtitleIndex: index,
         ...(signal === undefined ? {} : { signal }),
       });
+      if (response.status !== 200 && response.status !== 206) {
+        throw new PlaybackSessionError("unavailable");
+      }
+      return {
+        body: response.body,
+        contentType: contentType(response.headers, "text/vtt"),
+        status: response.status === 206 ? 206 : 200,
+      } as const;
     } catch (error) {
+      if (error instanceof PlaybackSessionError) throw error;
       throw new PlaybackSessionError("unavailable", { cause: error });
+    } finally {
+      release();
     }
-    if (response.status !== 200 && response.status !== 206) {
-      throw new PlaybackSessionError("unavailable");
-    }
-    return {
-      body: response.body,
-      contentType: contentType(response.headers, "text/vtt"),
-      status: response.status === 206 ? 206 : 200,
-    } as const;
   }
 
   #client(source: PlaybackSourceRow, maxResponseBytes?: number) {
@@ -1424,7 +1510,14 @@ export class PlaybackSessionService {
       now,
       payload: this.#payload(session),
       session,
+      userId: source.linkUserId,
     };
+  }
+
+  #acquireTransfer(userId: string) {
+    const releaseLease = this.#transfers.acquire(userId);
+    if (!releaseLease) throw new PlaybackSessionError("unavailable");
+    return releaseLease;
   }
 
   async #manifest(
