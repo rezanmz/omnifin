@@ -228,6 +228,54 @@ test("release candidates and required artifacts retain stable identities across 
   assert.match(stable, /Existing candidate tag does not match this run's built digest/u);
 });
 
+test("edge publication builds one OCI archive and publishes only its verified digest", () => {
+  const source = workflow("edge.yml");
+  const document = workflowDocument("edge.yml");
+  const buildJob = document.jobs["build-candidate"];
+  const build = namedStep(buildJob.steps, "Build candidate archive without edge aliases");
+  const publish = namedStep(
+    buildJob.steps,
+    "Publish and verify candidate through the bounded helper",
+  );
+  const login = namedStep(buildJob.steps, "Authenticate to GHCR after the local build");
+  const buildIndex = buildJob.steps.indexOf(build);
+
+  assert.equal(build.with.push, undefined);
+  assert.equal(
+    build.with.outputs,
+    "type=oci,dest=${{ runner.temp }}/edge-artifacts/candidate.oci.tar",
+  );
+  assert.equal(build.with.platforms, "linux/amd64,linux/arm64");
+  assert.equal(build.with.provenance, "mode=max");
+  assert.equal(build.with.sbom, true);
+  assert.equal(build.with.tags, "${{ steps.metadata.outputs.tags }}");
+  assert.equal(build.with.labels, "${{ steps.metadata.outputs.labels }}");
+  assert.equal(build.with.annotations, "${{ steps.metadata.outputs.annotations }}");
+  assert.equal(publish.id, "publish");
+  assert.equal(publish.run, "node scripts/ci/publish-oci-candidate.mjs");
+  assert.equal(publish.env.BUILD_DIGEST, "${{ steps.build.outputs.digest }}");
+  assert.equal(publish.env.CANDIDATE_TAG, "${{ env.CANDIDATE_TAG }}");
+  assert.equal(publish.env.IMAGE_NAME, "${{ env.IMAGE_NAME }}");
+  assert.equal(publish.env.OCI_ARCHIVE, "${{ runner.temp }}/edge-artifacts/candidate.oci.tar");
+  assert.ok(buildIndex < buildJob.steps.indexOf(login));
+  assert.ok(buildJob.steps.indexOf(login) < buildJob.steps.indexOf(publish));
+  assert.equal(buildJob.outputs.digest, "${{ steps.publish.outputs.digest }}");
+  assert.doesNotMatch(JSON.stringify(buildJob), /oras\s+cp/u);
+  assert.doesNotMatch(
+    source.slice(
+      source.indexOf("Build candidate archive"),
+      source.indexOf("Publish and verify candidate"),
+    ),
+    /push:\s*true/u,
+  );
+  for (const jobName of ["attest-candidate", "scan-candidate", "verify-candidate", "promote"]) {
+    assert.match(
+      JSON.stringify(document.jobs[jobName]),
+      /needs\.build-candidate\.outputs\.digest/u,
+    );
+  }
+});
+
 test("security workflow creates the SBOM output directory before generation", () => {
   const source = workflow("security.yml");
   const prepare = source.indexOf("- name: Prepare SBOM output directory");
