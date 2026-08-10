@@ -9,6 +9,11 @@ const fullShaPattern = /^[0-9a-f]{40}$/u;
 const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const releaseBranchPattern = /^release-please--branches--main--components--[A-Za-z0-9._-]+$/u;
 const releaseTitlePattern = /^chore\(release\): prepare 0\.\d+\.\d+$/u;
+export const gitCommandTimeoutMs = 60_000;
+export const temporaryReferenceFetchAttempts = 3;
+export const temporaryReferenceFetchRetryDelaysMs = Object.freeze([2_000, 5_000]);
+const temporaryReferenceFetchErrorMessage = "The temporary signing reference could not be fetched.";
+const leasePushErrorMessage = "The lease-protected release branch replacement failed.";
 const allowedFiles = Object.freeze([
   ".release-please-manifest.json",
   "CHANGELOG.md",
@@ -28,6 +33,14 @@ export const gitSafetyArguments = Object.freeze([
   "-c",
   "credential.helper=!gh auth git-credential",
 ]);
+
+export function runGit(arguments_, options) {
+  return execFile("git", arguments_, options);
+}
+
+export function pause(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
 
 export class PullRequestBaseNotReadyError extends Error {
   constructor() {
@@ -389,6 +402,72 @@ function encodedReference(branch) {
   return branch.split("/").map(encodeURIComponent).join("/");
 }
 
+function isTemporaryReferencePropagationError(error, temporaryBranch) {
+  const expectedStderr = `fatal: couldn't find remote ref refs/heads/${temporaryBranch}`;
+  return (
+    error?.code === 128 &&
+    (error?.stderr === expectedStderr || error?.stderr === `${expectedStderr}\n`)
+  );
+}
+
+function isGitTimeout(error) {
+  return error?.killed === true && error?.code === null && error?.signal === "SIGTERM";
+}
+
+export async function fetchTemporaryReference(
+  { temporaryBranch, remote, workspace, environment },
+  { runGit: injectedRunGit = runGit, pause: injectedPause = pause } = {},
+) {
+  const arguments_ = [
+    ...gitSafetyArguments,
+    "fetch",
+    "--no-tags",
+    "--depth=1",
+    remote,
+    `refs/heads/${temporaryBranch}`,
+  ];
+  const options = { cwd: workspace, env: environment, timeout: gitCommandTimeoutMs };
+
+  for (let attempt = 1; attempt <= temporaryReferenceFetchAttempts; attempt += 1) {
+    try {
+      await injectedRunGit(arguments_, options);
+      return;
+    } catch (error) {
+      const retryable =
+        isGitTimeout(error) || isTemporaryReferencePropagationError(error, temporaryBranch);
+      if (!retryable || attempt === temporaryReferenceFetchAttempts) {
+        throw new Error(temporaryReferenceFetchErrorMessage);
+      }
+      await injectedPause(temporaryReferenceFetchRetryDelaysMs[attempt - 1]);
+    }
+  }
+}
+
+export async function replaceWithLease(
+  { branch, expectedHeadSha, signedSha, temporaryBranch, remote, workspace, environment },
+  { runGit: injectedRunGit = runGit, pause: injectedPause = pause } = {},
+) {
+  await fetchTemporaryReference(
+    { environment, remote, temporaryBranch, workspace },
+    { pause: injectedPause, runGit: injectedRunGit },
+  );
+  try {
+    await injectedRunGit(
+      [
+        ...gitSafetyArguments,
+        "push",
+        "--porcelain",
+        `--force-with-lease=refs/heads/${branch}:${expectedHeadSha}`,
+        remote,
+        `${signedSha}:refs/heads/${branch}`,
+      ],
+      { cwd: workspace, env: environment, timeout: gitCommandTimeoutMs },
+    );
+  } catch {
+    throw new Error(leasePushErrorMessage);
+  }
+}
+
 function makeProductionDependencies(config) {
   const headers = {
     accept: "application/vnd.github+json",
@@ -499,33 +578,21 @@ function makeProductionDependencies(config) {
     fetchPullRequest: (number) => request("GET", `/repos/${config.repository}/pulls/${number}`),
     fetchReference: (branch) =>
       request("GET", `/repos/${config.repository}/git/ref/heads/${encodedReference(branch)}`),
-    pause: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
-    replaceWithLease: async ({ branch, expectedHeadSha, signedSha, temporaryBranch }) => {
+    pause,
+    replaceWithLease: ({ branch, expectedHeadSha, signedSha, temporaryBranch }) => {
       const remote = `${config.serverUrl}/${config.repository}.git`;
       const gitEnvironment = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
-      await execFile(
-        "git",
-        [
-          ...gitSafetyArguments,
-          "fetch",
-          "--no-tags",
-          "--depth=1",
+      return replaceWithLease(
+        {
+          branch,
+          environment: gitEnvironment,
+          expectedHeadSha,
           remote,
-          `refs/heads/${temporaryBranch}`,
-        ],
-        { cwd: config.workspace, env: gitEnvironment, timeout: 60_000 },
-      );
-      await execFile(
-        "git",
-        [
-          ...gitSafetyArguments,
-          "push",
-          "--porcelain",
-          `--force-with-lease=refs/heads/${branch}:${expectedHeadSha}`,
-          remote,
-          `${signedSha}:refs/heads/${branch}`,
-        ],
-        { cwd: config.workspace, env: gitEnvironment, timeout: 60_000 },
+          signedSha,
+          temporaryBranch,
+          workspace: config.workspace,
+        },
+        { pause, runGit },
       );
     },
   };
