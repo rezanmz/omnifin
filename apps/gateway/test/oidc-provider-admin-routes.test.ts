@@ -367,6 +367,52 @@ describe("OIDC provider administration routes", () => {
     }
   });
 
+  it("lists a quarantined provider with empty origins without exposing stored secrets", async () => {
+    const { app, config, session } = await harness();
+    const providerId = "oidc-quarantined";
+    const ciphertext = new EnvelopeCipher(config.encryptionKey).encrypt(
+      "private-quarantined-secret",
+      oidcClientSecretEncryptionContext(providerId),
+    );
+    app.database.db
+      .insert(oidcProviders)
+      .values({
+        approvedEndpointOriginsJson: "[]",
+        clientId: "quarantined-client",
+        displayName: "Quarantined identity",
+        encryptedClientSecret: ciphertext,
+        id: providerId,
+        issuer: "https://id.example.test/application/o/quarantined/",
+        slug: "quarantined-identity",
+        tokenEndpointAuthMethod: "client_secret_basic",
+      })
+      .run();
+
+    try {
+      const response = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${session.sessionToken}` },
+        method: "GET",
+        url: "/v1/admin/auth/oidc/providers",
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      const provider = oidcProvidersAdminResponseSchema
+        .parse(response.json())
+        .providers.find((candidate) => candidate.id === providerId);
+      expect(provider).toMatchObject({
+        approvedEndpointOrigins: [],
+        clientSecretConfigured: true,
+        slug: "quarantined-identity",
+      });
+      expect(response.body).not.toContain("private-quarantined-secret");
+      expect(response.body).not.toContain(ciphertext);
+      expect(response.body).not.toContain("approvedEndpointOriginsJson");
+      expect(response.body).not.toContain("encryptedClientSecret");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("namespaces base64url audit entropy before enforcing identifier shape", async () => {
     const { app, session } = await harness(providerRegistryDependencies(), {
       clock: () => new Date(now),

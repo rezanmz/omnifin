@@ -7,6 +7,7 @@ on:
       - .github/workflows/publish.yml
       - .github/workflows/upgrade-rehearsal.yml
       - scripts/release/upgrade-rehearsal.mjs
+      - scripts/release/verify-v0131-quarantined-rollback.mjs
       - scripts/ci/release-upgrade-rehearsal.test.mjs
 
 permissions:
