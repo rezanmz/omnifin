@@ -973,6 +973,7 @@
 .field input:focus,
 .field select:focus { border-color: rgb(216 255 112 / 42%); box-shadow: 0 0 0 3px rgb(216 255 112 / 8%); outline: none; }
 .credentialStatus { align-items: flex-start; border-top: 1px solid var(--line-soft); color: var(--success); display: flex; font-size: 0.68rem; gap: 8px; padding-top: 12px; }
+.credentialStatus[data-configured="false"] { color: var(--paper-2); }
 .credentialStatus span { display: grid; gap: 3px; }
 .credentialStatus small { color: var(--paper-3); font-size: 0.62rem; }
 .enableChoice { align-items: flex-start; background: rgb(216 255 112 / 5%); border: 1px solid rgb(216 255 112 / 12%); border-radius: var(--radius-sm); padding: 11px; }

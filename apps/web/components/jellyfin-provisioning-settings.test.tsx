@@ -60,4 +60,54 @@ describe("JellyfinProvisioningSettings", () => {
     expect(get).toHaveBeenCalledTimes(2);
     expect(client.update).toHaveBeenCalled();
   });
+
+  it("clears a configured template with an explicit empty template payload", async () => {
+    const user = userEvent.setup();
+    const config = { ...credentialed, template: { id: "template-1", displayName: "Household" }, enabled: true };
+    const client = renderSettings({}, config);
+    await user.click(await screen.findByRole("button", { name: "Clear credential" }));
+    await user.click(screen.getByRole("button", { name: "Clear credential", hidden: true }));
+    await waitFor(() => expect(client.update).toHaveBeenCalledWith("jellyfin", expect.objectContaining({ credential: { kind: "clear" }, templateUserId: null, enabled: false, revision: 1 }), "csrf"));
+  });
+
+  it("clears entered secrets when saving fails", async () => {
+    const user = userEvent.setup();
+    const client = renderSettings({ update: vi.fn().mockRejectedValue(new Error("offline")) });
+    await user.type(await screen.findByLabelText("Username"), "admin");
+    await user.type(screen.getByLabelText("Password"), "secret-value");
+    await user.click(screen.getByRole("button", { name: /Save credential/ }));
+    await waitFor(() => expect(screen.getByLabelText("Password")).toHaveValue(""));
+    expect(screen.getByLabelText("Username")).toHaveValue("");
+    expect(screen.getByText(/Re-enter any credential/i)).toBeVisible();
+    expect(client.update).toHaveBeenCalled();
+  });
+
+  it("resets entered secrets when the connector changes", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<JellyfinProvisioningSettings client={{ get: vi.fn(async () => base), templates: vi.fn(), update: vi.fn() } as JellyfinProvisioningClient} connector={connector} csrfToken="csrf" />);
+    await user.type(await screen.findByLabelText("Username"), "admin");
+    await user.type(screen.getByLabelText("Password"), "secret-value");
+    rerender(<JellyfinProvisioningSettings client={{ get: vi.fn(async () => base), templates: vi.fn(), update: vi.fn() } as JellyfinProvisioningClient} connector={{ ...connector, id: "jellyfin-secondary" } as ConnectorAdmin} csrfToken="csrf" />);
+    await waitFor(() => expect(screen.getByLabelText("Password")).toHaveValue(""));
+    expect(screen.getByLabelText("Username")).toHaveValue("");
+  });
+
+  it("announces template loading and retries in place", async () => {
+    const user = userEvent.setup();
+    let resolveTemplates!: (value: { templates: { id: string; displayName: string }[] }) => void;
+    const templates = vi.fn(() => new Promise<{ templates: { id: string; displayName: string }[] }>((resolve) => { resolveTemplates = resolve; }));
+    const get = vi.fn().mockResolvedValue(credentialed);
+    const client = renderSettings({ templates, get, update: vi.fn().mockRejectedValue(new Error("offline")) }, credentialed);
+    await user.click(await screen.findByRole("button", { name: "Load templates" }));
+    expect(screen.getByRole("button", { name: "Loading templates…" })).toBeVisible();
+    expect(screen.getByText("Loading template users…").closest("[role=status]")).toBeTruthy();
+    resolveTemplates({ templates: [] });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Load templates" })).toBeVisible());
+    await user.type(screen.getByLabelText("Username"), "admin");
+    await user.type(screen.getByLabelText("Password"), "secret");
+    await user.click(screen.getByRole("button", { name: /Save credential/ }));
+    await user.click(await screen.findByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    expect(client.update).toHaveBeenCalled();
+  });
 });
