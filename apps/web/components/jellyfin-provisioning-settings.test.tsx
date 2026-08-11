@@ -68,6 +68,36 @@ describe("JellyfinProvisioningSettings", () => {
     await user.click(await screen.findByRole("button", { name: "Clear credential" }));
     await user.click(screen.getByRole("button", { name: "Clear credential", hidden: true }));
     await waitFor(() => expect(client.update).toHaveBeenCalledWith("jellyfin", expect.objectContaining({ credential: { kind: "clear" }, templateUserId: null, enabled: false, revision: 1 }), "csrf"));
+    expect(screen.getByText(/Credential cleared/)).toBeVisible();
+    expect(screen.getByText(/No provisioning credential configured/)).toBeVisible();
+  });
+
+  it("does not let a pending connector A response update connector B", async () => {
+    let resolveA!: (value: JellyfinProvisioningConfig) => void;
+    let resolveB!: (value: JellyfinProvisioningConfig) => void;
+    const get = vi.fn((id: string) => new Promise<JellyfinProvisioningConfig>((resolve) => {
+      if (id === "jellyfin") resolveA = resolve;
+      else resolveB = resolve;
+    }));
+    const { rerender } = render(<JellyfinProvisioningSettings client={{ get, templates: vi.fn(), update: vi.fn() } as JellyfinProvisioningClient} connector={connector} csrfToken="csrf" />);
+    await waitFor(() => expect(get).toHaveBeenCalledWith("jellyfin"));
+    rerender(<JellyfinProvisioningSettings client={{ get, templates: vi.fn(), update: vi.fn() } as JellyfinProvisioningClient} connector={{ ...connector, id: "jellyfin-secondary" } as ConnectorAdmin} csrfToken="csrf" />);
+    await waitFor(() => expect(get).toHaveBeenCalledWith("jellyfin-secondary"));
+    resolveA({ ...credentialed, connectorId: "jellyfin", revision: 99, template: { id: "from-a", displayName: "A" } });
+    resolveB({ ...base, connectorId: "jellyfin-secondary", revision: 2 });
+    await waitFor(() => expect(screen.getByText(/No provisioning credential configured/)).toBeVisible());
+    expect(screen.queryByText("A")).not.toBeInTheDocument();
+  });
+
+  it("keeps a retryable error when conflict reconciliation fails", async () => {
+    const get = vi.fn().mockResolvedValueOnce(base).mockRejectedValueOnce(new Error("offline"));
+    renderSettings({ get, update: vi.fn().mockRejectedValue(new ConnectorAdminClientError("rejected", "connector_jellyfin_provisioning_revision_conflict", "changed")) }, credentialed);
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText("Username"), "admin");
+    await user.type(screen.getByLabelText("Password"), "secret");
+    await user.click(screen.getByRole("button", { name: "Save credential (disabled)" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/could not be completed|offline/i));
+    expect(screen.queryByText(/latest version loaded/i)).not.toBeInTheDocument();
   });
 
   it("clears entered secrets when saving fails", async () => {

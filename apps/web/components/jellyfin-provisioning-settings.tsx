@@ -7,7 +7,7 @@ import type {
   JellyfinProvisioningTemplateSummary,
 } from "@omnifin/contracts/connectors";
 import { Check, CircleAlert, KeyRound, LoaderCircle, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   ConnectorAdminClientError,
@@ -22,7 +22,7 @@ function safeError(error: unknown) {
   if (error.code.includes("not_verified")) return "Probe the Jellyfin connector successfully before loading templates.";
   if (error.code.includes("credential_invalid")) return "Use a valid elevated Jellyfin administrator credential, then save it again.";
   if (error.code.includes("credential_not_configured")) return "Save a provisioning credential before loading templates.";
-  if (error.code.includes("revision_conflict")) return "These settings changed elsewhere. The latest version is loaded; re-enter any credential and try again.";
+  if (error.code.includes("revision_conflict")) return "These settings changed elsewhere. Reload the latest version, then re-enter any credential and try again.";
   return error.message || "The operation could not be completed. Re-enter any credential and try again. No unconfirmed settings were applied.";
 }
 
@@ -51,26 +51,51 @@ export function JellyfinProvisioningSettings({ connector, csrfToken, client = je
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  const generation = useRef(0);
+  const controllers = useRef(new Set<AbortController>());
+
+  const startRequest = useCallback(() => {
+    const controller = new AbortController();
+    controllers.current.add(controller);
+    return controller;
+  }, []);
+
+  const isCurrent = useCallback((requestGeneration: number, connectorId: string) => {
+    return generation.current === requestGeneration && connector.id === connectorId;
+  }, [connector.id]);
 
   const refetchConfig = useCallback(async () => {
+    const requestGeneration = generation.current;
+    const connectorId = connector.id;
+    const controller = startRequest();
     setBusy("load");
     setError(null);
     try {
-      const next = await client.get(connector.id);
+      const next = client === jellyfinProvisioningClient ? await client.get(connectorId, controller.signal) : await client.get(connectorId);
+      if (!isCurrent(requestGeneration, connectorId)) return;
       setConfig(next);
       setEnabled(next.enabled);
       setTemplateUserId(next.template?.id ?? "");
     } catch (reason) {
-      setError(safeError(reason));
+      if (isCurrent(requestGeneration, connectorId) && !controller.signal.aborted) {
+        setError(safeError(reason));
+      }
+      throw reason;
     } finally {
-      setBusy(null);
+      controllers.current.delete(controller);
+      if (isCurrent(requestGeneration, connectorId)) setBusy(null);
     }
-  }, [client, connector.id]);
+  }, [client, connector.id, isCurrent, startRequest]);
 
   useEffect(() => {
-    const controller = new AbortController();
+    const activeControllers = controllers.current;
+    generation.current += 1;
+    for (const request of activeControllers) request.abort();
+    activeControllers.clear();
+    const requestGeneration = generation.current;
+    const connectorId = connector.id;
     void Promise.resolve().then(() => {
-      if (controller.signal.aborted) return;
+      if (!isCurrent(requestGeneration, connectorId)) return;
       setConfig(null);
       setTemplates([]);
       setTemplateUserId("");
@@ -81,18 +106,23 @@ export function JellyfinProvisioningSettings({ connector, csrfToken, client = je
       setConfirmClear(false);
       setBusy("load");
       setError(null);
-      return client.get(connector.id);
+      const controller = startRequest();
+      return (client === jellyfinProvisioningClient ? client.get(connectorId, controller.signal) : client.get(connectorId)).finally(() => controllers.current.delete(controller));
     }).then((next) => {
-      if (!next || controller.signal.aborted) return;
+      if (!next || !isCurrent(requestGeneration, connectorId)) return;
       setConfig(next);
       setEnabled(next.enabled);
       setTemplateUserId(next.template?.id ?? "");
       setBusy(null);
     }).catch((reason: unknown) => {
-      if (!controller.signal.aborted) { setError(safeError(reason)); setBusy(null); }
+      if (isCurrent(requestGeneration, connectorId)) { setError(safeError(reason)); setBusy(null); }
     });
-    return () => controller.abort();
-  }, [client, connector.id]);
+    return () => {
+      generation.current += 1;
+      for (const request of activeControllers) request.abort();
+      activeControllers.clear();
+    };
+  }, [client, connector.id, isCurrent, startRequest]);
 
   if (connector.service !== "jellyfin") return null;
   const credentialExists = config?.credentialConfigured === true;
@@ -102,36 +132,52 @@ export function JellyfinProvisioningSettings({ connector, csrfToken, client = je
 
   const save = async (credential: JellyfinProvisioningCredentialWrite, nextEnabled = enabled, nextTemplateUserId = selectedTemplate?.id ?? null) => {
     if (!config) return;
+    const requestGeneration = generation.current;
+    const connectorId = connector.id;
+    const revision = config.revision;
+    const controller = startRequest();
     setBusy("save"); setError(null); setNotice(null);
     try {
-      const next = await client.update(connector.id, { credential, enabled: nextEnabled && canEnable, revision: config.revision, templateUserId: nextTemplateUserId }, csrfToken);
+      const next = client === jellyfinProvisioningClient ? await client.update(connectorId, { credential, enabled: nextEnabled && canEnable, revision, templateUserId: nextTemplateUserId }, csrfToken, controller.signal) : await client.update(connectorId, { credential, enabled: nextEnabled && canEnable, revision, templateUserId: nextTemplateUserId }, csrfToken);
+      if (!isCurrent(requestGeneration, connectorId)) return;
       setConfig(next); setEnabled(next.enabled); setTemplateUserId(next.template?.id ?? "");
-      setNotice(next.enabled ? "Provisioning template enabled." : "Credential saved. Provisioning remains disabled until you choose a template.");
+      setNotice(credential.kind === "clear" ? "Credential cleared. Provisioning remains disabled." : next.enabled ? "Provisioning template enabled." : "Credential saved. Provisioning remains disabled until you choose a template.");
     } catch (reason) {
+      if (!isCurrent(requestGeneration, connectorId) || controller.signal.aborted) return;
       const message = safeError(reason);
       setError(message);
       if (reason instanceof ConnectorAdminClientError && reason.code.includes("revision_conflict")) {
-        await refetchConfig();
-        setError(message);
+        try {
+          await refetchConfig();
+          if (isCurrent(requestGeneration, connectorId)) { setError(message); setNotice("Latest version loaded. Re-enter any credential and try again."); }
+        } catch (refetchReason) {
+          if (isCurrent(requestGeneration, connectorId) && !controller.signal.aborted) setError(safeError(refetchReason));
+        }
       }
     } finally {
-      setUsername(""); setPassword(""); setApiKey("");
-      setBusy(null);
+      controllers.current.delete(controller);
+      if (isCurrent(requestGeneration, connectorId)) {
+        setUsername(""); setPassword(""); setApiKey("");
+        setBusy(null);
+      }
     }
   };
 
   const loadTemplates = async () => {
+    const requestGeneration = generation.current;
+    const connectorId = connector.id;
+    const controller = startRequest();
     setBusy("templates"); setError(null);
-    try { const result = await client.templates(connector.id); setTemplates(result.templates); setNotice(`${result.templates.length} template${result.templates.length === 1 ? "" : "s"} available.`); }
-    catch (reason) { setError(safeError(reason)); }
-    finally { setBusy(null); }
+    try { const result = client === jellyfinProvisioningClient ? await client.templates(connectorId, controller.signal) : await client.templates(connectorId); if (isCurrent(requestGeneration, connectorId)) { setTemplates(result.templates); setNotice(`${result.templates.length} template${result.templates.length === 1 ? "" : "s"} available.`); } }
+    catch (reason) { if (isCurrent(requestGeneration, connectorId) && !controller.signal.aborted) setError(safeError(reason)); }
+    finally { controllers.current.delete(controller); if (isCurrent(requestGeneration, connectorId)) setBusy(null); }
   };
 
   return <section className={styles.provisioning} aria-labelledby="provisioning-title">
     <div className={styles.sectionHeading}><div><p className="section-kicker">Jellyfin identity</p><h3 id="provisioning-title">Provisioning template</h3></div><ShieldCheck aria-hidden="true" size={19} /></div>
     <p className={styles.provisioningIntro}>An opt-in template for future account provisioning. This setting does not create or adopt Jellyfin accounts yet.</p>
     {busy === "load" ? <p role="status" aria-busy="true" className={styles.quietCopy}>Loading provisioning status…</p> : null}
-    {error ? <div className={styles.formError} role="alert"><CircleAlert aria-hidden="true" size={16} /> {error}<button className={styles.inlineAction} onClick={() => void refetchConfig()} type="button">Retry</button></div> : null}
+    {error ? <div className={styles.formError} role="alert"><CircleAlert aria-hidden="true" size={16} /> {error}<button className={styles.inlineAction} onClick={() => void refetchConfig().catch(() => undefined)} type="button">Retry</button></div> : null}
     {config ? <>
       <div className={styles.provisioningGrid}>
         <fieldset className={styles.provisioningFieldset} disabled={busy !== null}>

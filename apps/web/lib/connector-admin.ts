@@ -65,7 +65,8 @@ export class ConnectorAdminClientError extends Error {
 async function safeJson(response: Response): Promise<unknown> {
   try {
     return await response.json();
-  } catch {
+  } catch (reason) {
+    if (reason instanceof DOMException && reason.name === "AbortError") throw reason;
     throw new ConnectorAdminClientError(
       "invalid_response",
       "invalid_response",
@@ -230,12 +231,13 @@ export interface ConnectorAdminClient {
 }
 
 export interface JellyfinProvisioningClient {
-  get(connectorId: string): Promise<JellyfinProvisioningConfig>;
-  templates(connectorId: string): Promise<JellyfinProvisioningTemplatesResponse>;
+  get(connectorId: string, signal?: AbortSignal): Promise<JellyfinProvisioningConfig>;
+  templates(connectorId: string, signal?: AbortSignal): Promise<JellyfinProvisioningTemplatesResponse>;
   update(
     connectorId: string,
     input: JellyfinProvisioningReplaceRequest,
     csrfToken: string,
+    signal?: AbortSignal,
   ): Promise<JellyfinProvisioningConfig>;
 }
 
@@ -300,21 +302,23 @@ export const connectorAdminClient: ConnectorAdminClient = {
 };
 
 export const jellyfinProvisioningClient: JellyfinProvisioningClient = {
-  async get(connectorId) {
+  async get(connectorId, signal) {
     const schemas = (await contractSchemas()).connectors;
     const response = await fetchSameOrigin(
       `/api/admin/connectors/${encodeURIComponent(connectorId)}/jellyfin-provisioning`,
+      signal ? { signal } : {},
     );
     return parsedResponse(response, schemas.jellyfinProvisioningConfigSchema);
   },
-  async templates(connectorId) {
+  async templates(connectorId, signal) {
     const schemas = (await contractSchemas()).connectors;
     const response = await fetchSameOrigin(
       `/api/admin/connectors/${encodeURIComponent(connectorId)}/jellyfin-provisioning/templates`,
+      signal ? { signal } : {},
     );
     return parsedResponse(response, schemas.jellyfinProvisioningTemplatesResponseSchema);
   },
-  async update(connectorId, input, csrfToken) {
+  async update(connectorId, input, csrfToken, signal) {
     const schemas = (await contractSchemas()).connectors;
     const body = schemas.jellyfinProvisioningReplaceRequestSchema.parse(input);
     const response = await fetchSameOrigin(
@@ -323,6 +327,7 @@ export const jellyfinProvisioningClient: JellyfinProvisioningClient = {
         body: JSON.stringify(body),
         headers: { "content-type": "application/json", [CSRF_HEADER]: csrfToken },
         method: "PUT",
+        ...(signal ? { signal } : {}),
       },
     );
     return parsedResponse(response, schemas.jellyfinProvisioningConfigSchema);
