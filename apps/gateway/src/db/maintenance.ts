@@ -940,7 +940,9 @@ function restoreRootKey(explicitRootKey: Buffer | undefined) {
 }
 
 export function resolveRestoreRootKey() {
-  return restoreRootKey(undefined);
+  const rootKey = restoreRootKey(undefined);
+  if (!rootKey) throw new MaintenanceError("restore_sanitization_failed");
+  return rootKey;
 }
 
 function initializeStagedKeyVerifier(sqlite: Database.Database, rootKey: Buffer) {
