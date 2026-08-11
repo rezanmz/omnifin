@@ -7,6 +7,14 @@
 * **auth:** add single-use administrator invitations with OIDC/Jellyfin onboarding proof,
   lifecycle auditing, and restore-safe replacement handling ([#335](https://github.com/rezanmz/omnifin/issues/335))
 
+## [0.15.0](https://github.com/rezanmz/omnifin/compare/v0.14.0...v0.15.0) (2026-08-11)
+
+
+### Features
+
+* **gateway:** activate Jellyfin HTTP lanes ([#368](https://github.com/rezanmz/omnifin/issues/368)) ([3962ede](https://github.com/rezanmz/omnifin/commit/3962ede419516e325dfa0e06e06d805f6237bd46)), closes [#360](https://github.com/rezanmz/omnifin/issues/360)
+* **gateway:** manage connector HTTP lane lifecycles ([#360](https://github.com/rezanmz/omnifin/issues/360)) ([25520e1](https://github.com/rezanmz/omnifin/commit/25520e127eab95a19ae1ff7b6d3099b64a51ab3b))
+
 ## [0.14.0](https://github.com/rezanmz/omnifin/compare/v0.13.1...v0.14.0) (2026-08-10)
 
 
