@@ -1,6 +1,8 @@
+import { timingSafeEqual } from "node:crypto";
+
 import { z } from "zod";
 
-import { SafeHttpClient } from "../http/safe-http-client.js";
+import { SafeConnectorError, SafeHttpClient } from "../http/safe-http-client.js";
 import type { ConnectorTargetConfig } from "../types.js";
 import { jellyfinAuthorization } from "./jellyfin-authorization.js";
 
@@ -105,7 +107,7 @@ const userPolicyShape = {
   IsHidden: z.boolean(),
   LoginAttemptsBeforeLockout: z.int(),
   MaxActiveSessions: z.int(),
-  MaxParentalRating: z.int().nullable(),
+  MaxParentalRating: z.int().nullable().default(null),
   PasswordResetProviderId: z.string().trim().min(1),
   RemoteClientBitrateLimit: z.int(),
   SyncPlayAccess: z.enum(["CreateAndJoinGroups", "JoinGroups", "None"]),
@@ -114,7 +116,9 @@ const userPolicyShape = {
 const policySchemaForVersion = (protocolVersion: JellyfinProvisioningProtocolVersion) =>
   z.strictObject({
     ...userPolicyShape,
-    ...(protocolVersion === "10.11" ? { MaxParentalSubRating: z.int().nullable() } : {}),
+    ...(protocolVersion === "10.11"
+      ? { MaxParentalSubRating: z.int().nullable().default(null) }
+      : {}),
   });
 
 const userSchemaForVersion = (protocolVersion: JellyfinProvisioningProtocolVersion) =>
@@ -136,7 +140,15 @@ const authenticationSchema = z.object({
 });
 
 const publicSystemInfoSchema = z.object({ Version: z.string().trim().min(1).max(128) });
-const authKeysResponseSchema = z.unknown();
+const authenticationInfoSchema = z.object({
+  AccessToken: z.string().min(1).max(4_096),
+  IsActive: z.boolean().optional(),
+});
+const authKeysResponseSchema = z.strictObject({
+  Items: z.array(authenticationInfoSchema).max(1_000),
+  StartIndex: z.int().nonnegative().max(1_000_000).optional(),
+  TotalRecordCount: z.int().nonnegative().max(1_000_000).optional(),
+});
 
 export type JellyfinProvisioningAdminUser = z.infer<typeof authenticationUserSchema>;
 export type JellyfinProvisioningAuthentication = z.infer<typeof authenticationSchema>;
@@ -147,6 +159,12 @@ function protocolVersionFor(version: string): JellyfinProvisioningProtocolVersio
   if (match[1] === "10" && match[2] === "10") return "10.10";
   if (match[1] === "10" && match[2] === "11") return "10.11";
   throw new JellyfinProvisioningUnsupportedVersionError();
+}
+
+function tokensEqual(left: string, right: string): boolean {
+  const leftBytes = Buffer.from(left, "utf8");
+  const rightBytes = Buffer.from(right, "utf8");
+  return leftBytes.byteLength === rightBytes.byteLength && timingSafeEqual(leftBytes, rightBytes);
 }
 
 export class JellyfinProvisioningAdminClient {
@@ -276,7 +294,7 @@ export class JellyfinProvisioningAdminClient {
       },
     );
     const protocolVersion = protocolVersionFor(systemInfo.Version);
-    await this.#client.requestJson("Auth/Keys", authKeysResponseSchema, {
+    const authKeys = await this.#client.requestJson("Auth/Keys", authKeysResponseSchema, {
       headers: {
         authorization,
       },
@@ -285,6 +303,22 @@ export class JellyfinProvisioningAdminClient {
       requiredStatus: 200,
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     });
+    if (
+      input.credentialKind === "api_key" &&
+      !authKeys.Items.some(
+        (authenticationInfo) =>
+          authenticationInfo.IsActive !== false &&
+          tokensEqual(authenticationInfo.AccessToken, input.accessToken),
+      )
+    ) {
+      throw new SafeConnectorError({
+        service: "jellyfin",
+        operation: "provisioning_admin_auth_keys_validation",
+        code: "invalid_credentials",
+        message: "Jellyfin rejected the configured API key.",
+        retryable: false,
+      });
+    }
     return { protocolVersion };
   }
 }

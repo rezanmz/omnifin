@@ -15,7 +15,7 @@ const target = (transport: ReturnType<typeof createMockTransport>["transport"]) 
 });
 
 function policy(
-  version: JellyfinProvisioningProtocolVersion,
+  _version: JellyfinProvisioningProtocolVersion,
   overrides: Record<string, unknown> = {},
 ) {
   return {
@@ -58,11 +58,9 @@ function policy(
     IsHidden: false,
     LoginAttemptsBeforeLockout: -1,
     MaxActiveSessions: 0,
-    MaxParentalRating: null,
     PasswordResetProviderId: "Jellyfin.Server.Core",
     RemoteClientBitrateLimit: 0,
     SyncPlayAccess: "CreateAndJoinGroups",
-    ...(version === "10.11" ? { MaxParentalSubRating: null } : {}),
     ...overrides,
   };
 }
@@ -71,7 +69,11 @@ describe("JellyfinProvisioningAdminClient", () => {
   it("validates a 10.10.7 API key only through the privileged Auth/Keys read", async () => {
     const mock = createMockTransport([
       jsonResponse({ Id: "server-10-10", ServerName: "Home", Version: "10.10.7" }),
-      jsonResponse([]),
+      jsonResponse({
+        Items: [{ AccessToken: "server-api-key", IsActive: true }],
+        StartIndex: 0,
+        TotalRecordCount: 1,
+      }),
     ]);
     const client = new JellyfinProvisioningAdminClient(target(mock.transport));
 
@@ -89,7 +91,7 @@ describe("JellyfinProvisioningAdminClient", () => {
   it("validates a 10.11.11 administrator access token through Auth/Keys", async () => {
     const mock = createMockTransport([
       jsonResponse({ Id: "server-10-11", ServerName: "Home", Version: "10.11.11" }),
-      jsonResponse([]),
+      jsonResponse({ Items: [], StartIndex: 0, TotalRecordCount: 0 }),
     ]);
     const client = new JellyfinProvisioningAdminClient(target(mock.transport));
 
@@ -126,6 +128,38 @@ describe("JellyfinProvisioningAdminClient", () => {
     ]);
   });
 
+  it("rejects an administrator access token submitted as an API key", async () => {
+    const mock = createMockTransport([
+      jsonResponse({ Id: "server-10-11", ServerName: "Home", Version: "10.11.11" }),
+      jsonResponse({
+        Items: [{ AccessToken: "server-api-key", IsActive: true }],
+        StartIndex: 0,
+        TotalRecordCount: 1,
+      }),
+    ]);
+    const client = new JellyfinProvisioningAdminClient(target(mock.transport));
+
+    await expect(
+      client.validateAdministratorCredential({
+        accessToken: "administrator-access-token",
+        credentialKind: "api_key",
+        deviceId: "device-1",
+      }),
+    ).rejects.toMatchObject({ code: "invalid_credentials" });
+  });
+
+  it("rejects a malformed API key inventory response", async () => {
+    const mock = createMockTransport([
+      jsonResponse({ Id: "server-10-10", ServerName: "Home", Version: "10.10.7" }),
+      jsonResponse({ Items: [{ AccessToken: 42 }], StartIndex: 0, TotalRecordCount: 1 }),
+    ]);
+    const client = new JellyfinProvisioningAdminClient(target(mock.transport));
+
+    await expect(
+      client.validateAdministratorApiKey({ accessToken: "server-api-key", deviceId: "device-1" }),
+    ).rejects.toMatchObject({ code: "response_invalid" });
+  });
+
   it("accepts complete versioned policies and rejects unknown or malformed policy fields", async () => {
     const mock = createMockTransport([
       jsonResponse({
@@ -154,7 +188,7 @@ describe("JellyfinProvisioningAdminClient", () => {
         protocolVersion: "10.10",
         userId: "template-user",
       }),
-    ).resolves.toMatchObject({ Id: "template-user" });
+    ).resolves.toMatchObject({ Id: "template-user", Policy: { MaxParentalRating: null } });
 
     const invalid = createMockTransport([
       jsonResponse({
@@ -221,6 +255,65 @@ describe("JellyfinProvisioningAdminClient", () => {
         protocolVersion: "10.11",
         userId: "template-user",
       }),
-    ).resolves.toMatchObject({ Policy: { MaxParentalSubRating: null } });
+    ).resolves.toMatchObject({
+      Policy: { MaxParentalRating: null, MaxParentalSubRating: null },
+    });
+
+    const explicitNulls = createMockTransport([
+      jsonResponse({
+        Id: "template-user",
+        Name: "Template user",
+        Policy: policy("10.11", { MaxParentalRating: null, MaxParentalSubRating: null }),
+      }),
+    ]);
+    await expect(
+      new JellyfinProvisioningAdminClient(target(explicitNulls.transport)).readTemplateUser({
+        accessToken: "server-api-key",
+        deviceId: "device-1",
+        protocolVersion: "10.11",
+        userId: "template-user",
+      }),
+    ).resolves.toMatchObject({
+      Policy: { MaxParentalRating: null, MaxParentalSubRating: null },
+    });
+
+    for (const [version, overrides] of [
+      ["10.10", { MaxParentalRating: "PG" }],
+      ["10.11", { MaxParentalSubRating: "TV-14" }],
+    ] as const) {
+      const malformedParentalRating = createMockTransport([
+        jsonResponse({
+          Id: "template-user",
+          Name: "Template user",
+          Policy: policy(version, overrides),
+        }),
+      ]);
+      await expect(
+        new JellyfinProvisioningAdminClient(
+          target(malformedParentalRating.transport),
+        ).readTemplateUser({
+          accessToken: "server-api-key",
+          deviceId: "device-1",
+          protocolVersion: version,
+          userId: "template-user",
+        }),
+      ).rejects.toMatchObject({ code: "response_invalid" });
+    }
+
+    const unsupportedSubRating = createMockTransport([
+      jsonResponse({
+        Id: "template-user",
+        Name: "Template user",
+        Policy: policy("10.10", { MaxParentalSubRating: null }),
+      }),
+    ]);
+    await expect(
+      new JellyfinProvisioningAdminClient(target(unsupportedSubRating.transport)).readTemplateUser({
+        accessToken: "server-api-key",
+        deviceId: "device-1",
+        protocolVersion: "10.10",
+        userId: "template-user",
+      }),
+    ).rejects.toMatchObject({ code: "response_invalid" });
   });
 });
