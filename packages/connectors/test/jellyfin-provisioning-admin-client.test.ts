@@ -1,0 +1,181 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  JellyfinProvisioningAdminClient,
+  type JellyfinProvisioningProtocolVersion,
+} from "../src/auth/jellyfin-provisioning-admin-client.js";
+import { createMockTransport, jsonResponse, publicResolver } from "./helpers/mock-fetch.js";
+
+const target = (transport: ReturnType<typeof createMockTransport>["transport"]) => ({
+  baseUrl: "https://jellyfin.example.test/base/",
+  connectorId: "jellyfin-home",
+  displayName: "Home Jellyfin",
+  resolveHost: publicResolver,
+  transport,
+});
+
+function policy(
+  version: JellyfinProvisioningProtocolVersion,
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    AccessSchedules: [],
+    AuthenticationProviderId: "Jellyfin.Server.Core",
+    AllowedTags: [],
+    BlockUnratedItems: ["Movie", "Series"],
+    BlockedChannels: [],
+    BlockedMediaFolders: [],
+    BlockedTags: [],
+    EnableAllChannels: true,
+    EnableAllDevices: true,
+    EnableAllFolders: true,
+    EnableAudioPlaybackTranscoding: true,
+    EnableCollectionManagement: false,
+    EnableContentDeletion: false,
+    EnableContentDeletionFromFolders: [],
+    EnableContentDownloading: true,
+    EnableLiveTvAccess: true,
+    EnableLiveTvManagement: false,
+    EnableLyricManagement: false,
+    EnableMediaConversion: true,
+    EnableMediaPlayback: true,
+    EnablePlaybackRemuxing: true,
+    EnablePublicSharing: true,
+    EnableRemoteAccess: true,
+    EnableRemoteControlOfOtherUsers: false,
+    EnableSharedDeviceControl: false,
+    EnableSyncTranscoding: true,
+    EnableSubtitleManagement: false,
+    EnableUserPreferenceAccess: true,
+    EnableVideoPlaybackTranscoding: true,
+    EnabledChannels: [],
+    EnabledDevices: [],
+    EnabledFolders: [],
+    ForceRemoteSourceTranscoding: false,
+    InvalidLoginAttemptCount: 0,
+    IsAdministrator: false,
+    IsDisabled: false,
+    IsHidden: false,
+    LoginAttemptsBeforeLockout: -1,
+    MaxActiveSessions: 0,
+    MaxParentalRating: null,
+    PasswordResetProviderId: "Jellyfin.Server.Core",
+    RemoteClientBitrateLimit: 0,
+    SyncPlayAccess: "CreateAndJoin",
+    ...(version === "10.11" ? { MaxParentalSubRating: null } : {}),
+    ...overrides,
+  };
+}
+
+describe("JellyfinProvisioningAdminClient", () => {
+  it("validates a 10.10.7 API key through common authenticated system info", async () => {
+    const mock = createMockTransport([
+      jsonResponse({ Id: "server-10-10", ServerName: "Home", Version: "10.10.7" }),
+      jsonResponse({ Id: "server-10-10", ServerName: "Home", Version: "10.10.7" }),
+    ]);
+    const client = new JellyfinProvisioningAdminClient(target(mock.transport));
+
+    await expect(
+      client.validateAdministratorApiKey({ accessToken: "server-api-key", deviceId: "device-1" }),
+    ).resolves.toEqual({ protocolVersion: "10.10" });
+    expect(mock.requests.map((request) => request.url.pathname)).toEqual([
+      "/base/System/Info/Public",
+      "/base/System/Info",
+    ]);
+    expect(mock.requests[1]?.init.headers.get("authorization")).toContain('Token="server-api-key"');
+    expect(mock.requests.map((request) => request.url.pathname)).not.toContain("/base/Users/Me");
+  });
+
+  it("validates a 10.11.11 access token against its administrator identity", async () => {
+    const mock = createMockTransport([
+      jsonResponse({ Id: "server-10-11", ServerName: "Home", Version: "10.11.11" }),
+      jsonResponse({ Id: "server-10-11", ServerName: "Home", Version: "10.11.11" }),
+      jsonResponse({
+        Id: "administrator",
+        Name: "Administrator",
+        Policy: { IsAdministrator: true, IsDisabled: false },
+      }),
+    ]);
+    const client = new JellyfinProvisioningAdminClient(target(mock.transport));
+
+    await expect(
+      client.validateAdministratorCredential({
+        accessToken: "server-api-key",
+        deviceId: "device-1",
+        credentialKind: "access_token",
+      }),
+    ).resolves.toEqual({ protocolVersion: "10.11" });
+    expect(mock.requests.map((request) => request.url.pathname)).toEqual([
+      "/base/System/Info/Public",
+      "/base/System/Info",
+      "/base/Users/Me",
+    ]);
+  });
+
+  it("accepts complete versioned policies and rejects unknown or malformed policy fields", async () => {
+    const mock = createMockTransport([
+      jsonResponse({
+        Id: "template-user",
+        Name: "Template user",
+        Policy: policy("10.10", {
+          AccessSchedules: [{ DayOfWeek: 1, EndHour: 22.5, StartHour: 8 }],
+          BlockUnratedItems: ["Movie", "Episode"],
+        }),
+      }),
+    ]);
+    const client = new JellyfinProvisioningAdminClient(target(mock.transport));
+
+    await expect(
+      client.readTemplateUser({
+        accessToken: "server-api-key",
+        deviceId: "device-1",
+        protocolVersion: "10.10",
+        userId: "template-user",
+      }),
+    ).resolves.toMatchObject({ Id: "template-user" });
+
+    const invalid = createMockTransport([
+      jsonResponse({
+        Id: "template-user",
+        Name: "Template user",
+        Policy: policy("10.10", { UnknownPolicyField: true }),
+      }),
+    ]);
+    await expect(
+      new JellyfinProvisioningAdminClient(target(invalid.transport)).readTemplateUser({
+        accessToken: "server-api-key",
+        deviceId: "device-1",
+        protocolVersion: "10.10",
+        userId: "template-user",
+      }),
+    ).rejects.toMatchObject({ code: "response_invalid" });
+
+    const malformed = createMockTransport([
+      jsonResponse({
+        Id: "template-user",
+        Name: "Template user",
+        Policy: policy("10.10", { AccessSchedules: [{ DayOfWeek: 7, EndHour: 22 }] }),
+      }),
+    ]);
+    await expect(
+      new JellyfinProvisioningAdminClient(target(malformed.transport)).readTemplateUser({
+        accessToken: "server-api-key",
+        deviceId: "device-1",
+        protocolVersion: "10.10",
+        userId: "template-user",
+      }),
+    ).rejects.toMatchObject({ code: "response_invalid" });
+
+    const versioned = createMockTransport([
+      jsonResponse({ Id: "template-user", Name: "Template user", Policy: policy("10.11") }),
+    ]);
+    await expect(
+      new JellyfinProvisioningAdminClient(target(versioned.transport)).readTemplateUser({
+        accessToken: "server-api-key",
+        deviceId: "device-1",
+        protocolVersion: "10.11",
+        userId: "template-user",
+      }),
+    ).resolves.toMatchObject({ Policy: { MaxParentalSubRating: null } });
+  });
+});

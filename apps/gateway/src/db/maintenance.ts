@@ -25,7 +25,7 @@ import {
   preflightDatabase,
   readMigrationCatalog,
 } from "./migration-preflight.js";
-import { constantTimeTextEqual, databaseKeyVerifier } from "../security/crypto.js";
+import { constantTimeTextEqual, databaseKeyVerifier, EnvelopeCipher } from "../security/crypto.js";
 
 const BACKUP_FORMAT = "omnifin-sqlite-backup";
 const BACKUP_FORMAT_VERSION = 1;
@@ -1210,6 +1210,90 @@ function mergeRollbackInvitationFacts(sqlite: Database.Database, now: number) {
   `);
 }
 
+function mergeRollbackJellyfinProvisioningFacts(sqlite: Database.Database) {
+  sqlite.exec(`
+    delete from main.jellyfin_provisioning_configs as restored
+    where not exists (
+      select 1 from rollback_timeline.jellyfin_provisioning_configs current
+      where current.connector_id = restored.connector_id
+    );
+
+    insert or replace into main.jellyfin_provisioning_configs (
+      connector_id, connector_revision, connector_instance_generation,
+      connector_instance_identity_hash, encrypted_configuration, revision,
+      created_at, updated_at
+    ) select
+      current.connector_id, current.connector_revision,
+      current.connector_instance_generation, current.connector_instance_identity_hash,
+      current.encrypted_configuration, current.revision, current.created_at,
+      current.updated_at
+    from rollback_timeline.jellyfin_provisioning_configs current
+    join main.connector_configs connector on connector.id = current.connector_id;
+  `);
+}
+
+function rebindJellyfinProvisioningConfigs(sqlite: Database.Database, rootKey?: Buffer) {
+  const rows = sqlite
+    .prepare(
+      `select provisioning.connector_id as connectorId, connector.type,
+              connector.config_generation as configGeneration,
+              connector.instance_generation as instanceGeneration,
+              connector.instance_identity_hash as instanceIdentityHash,
+              provisioning.connector_revision as connectorRevision,
+              provisioning.connector_instance_generation as provisioningInstanceGeneration,
+              provisioning.connector_instance_identity_hash as provisioningIdentityHash,
+              provisioning.encrypted_configuration as encryptedConfiguration
+       from main.jellyfin_provisioning_configs provisioning
+       join main.connector_configs connector on connector.id = provisioning.connector_id`,
+    )
+    .all() as {
+    connectorId: string;
+    configGeneration: number;
+    instanceGeneration: number;
+    instanceIdentityHash: string | null;
+    connectorRevision: string;
+    encryptedConfiguration: string;
+    provisioningIdentityHash: string | null;
+    provisioningInstanceGeneration: number;
+    type: string;
+  }[];
+  const update = sqlite.prepare(
+    `update main.jellyfin_provisioning_configs
+     set connector_revision = ?, connector_instance_generation = ?,
+         connector_instance_identity_hash = ?, encrypted_configuration = ?
+     where connector_id = ?`,
+  );
+  const cipher = rootKey === undefined ? undefined : new EnvelopeCipher(rootKey);
+  for (const row of rows) {
+    const connectorRevision = createHash("sha256")
+      .update(`${row.type}\0${row.connectorId}\0${row.configGeneration}`, "utf8")
+      .digest("base64url");
+    let encryptedConfiguration = row.encryptedConfiguration;
+    if (cipher) {
+      let plaintext: string;
+      try {
+        plaintext = cipher.decrypt(
+          row.encryptedConfiguration,
+          `jellyfin_provisioning:${row.connectorId}:${row.connectorRevision}:${row.provisioningInstanceGeneration}:${row.provisioningIdentityHash ?? "none"}`,
+        );
+        encryptedConfiguration = cipher.encrypt(
+          plaintext,
+          `jellyfin_provisioning:${row.connectorId}:${connectorRevision}:${row.instanceGeneration}:${row.instanceIdentityHash ?? "none"}`,
+        );
+      } catch (error) {
+        throw new MaintenanceError("restore_sanitization_failed", { cause: error });
+      }
+    }
+    update.run(
+      connectorRevision,
+      row.instanceGeneration,
+      row.instanceIdentityHash,
+      encryptedConfiguration,
+      row.connectorId,
+    );
+  }
+}
+
 function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number) {
   const exhaustedRevision = sqlite
     .prepare(
@@ -1431,6 +1515,7 @@ function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number) {
     ) select secret_hash, purpose, origin_session_id, reserved_at
       from rollback_timeline.session_secret_reservations;
   `);
+  mergeRollbackJellyfinProvisioningFacts(sqlite);
   mergeIdempotencyReceipts(sqlite);
   mergeRollbackExternalMutationFacts(sqlite);
   mergeRollbackInvitationFacts(sqlite, now);
@@ -1622,6 +1707,7 @@ export function sanitizeRestoredDatabase(
     failpoint?: (sqlite: Database.Database) => void;
     now?: Date;
     rollbackDatabasePath?: string;
+    rootKey?: Buffer;
   } = {},
 ) {
   const now = safeRestoreTime(options.now);
@@ -1704,6 +1790,7 @@ export function sanitizeRestoredDatabase(
               updated_at = max(updated_at, ?)`,
         )
         .run(now, now);
+      if (options.rollbackDatabasePath) rebindJellyfinProvisioningConfigs(sqlite!, options.rootKey);
       sqlite!
         .prepare(
           `update oidc_providers
@@ -1838,6 +1925,7 @@ async function stageSelectedBackup(
     ...(dependencies.sanitationFailpoint ? { failpoint: dependencies.sanitationFailpoint } : {}),
     ...(now ? { now } : {}),
     ...(rollbackDatabasePath ? { rollbackDatabasePath } : {}),
+    ...(rootKey ? { rootKey } : {}),
   });
   inspectDatabase(temporaryPath);
   await syncFile(temporaryPath);

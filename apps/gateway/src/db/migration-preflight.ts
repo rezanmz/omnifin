@@ -329,7 +329,7 @@ export function inspectDatabaseFile<T>(
 }
 
 interface EncryptedSample {
-  context: (row: Record<string, string>) => string;
+  context: (row: Record<string, string | null>) => string;
   orderBy: string;
   select: string;
   table: string;
@@ -493,6 +493,14 @@ const ENCRYPTED_SAMPLES: readonly EncryptedSample[] = [
     context: ({ id }) => `jellyfin-quick-connect:${id}:payload`,
   },
   {
+    table: "jellyfin_provisioning_configs",
+    select:
+      "connector_id as connectorId, connector_revision as connectorRevision, connector_instance_generation as instanceGeneration, connector_instance_identity_hash as instanceIdentityHash, encrypted_configuration as encryptedValue",
+    orderBy: "connector_id",
+    context: ({ connectorId, connectorRevision, instanceGeneration, instanceIdentityHash }) =>
+      `jellyfin_provisioning:${connectorId}:${connectorRevision}:${instanceGeneration}:${instanceIdentityHash ?? "none"}`,
+  },
+  {
     table: "external_mutation_dispatches",
     select: "id, kind, encrypted_normalized_request as encryptedValue",
     orderBy: "id",
@@ -537,6 +545,10 @@ export function encryptedSampleColumns() {
 export function legacyEncryptedSampleFixtures() {
   return ENCRYPTED_SAMPLES.map((sample, index) => {
     const row = {
+      connectorId: "encrypted-sample-connector",
+      connectorRevision: "encrypted-sample-revision",
+      instanceGeneration: "0",
+      instanceIdentityHash: null,
       id: `encrypted-sample-${index.toString().padStart(2, "0")}`,
       kind: "playback.progress",
       sessionId: "encrypted-sample-session",

@@ -29,6 +29,7 @@ const requiredTables = [
   "external_mutation_dispatches",
   "external_mutation_target_locks",
   "invitations",
+  "jellyfin_provisioning_configs",
   "jellyfin_quick_connect_transactions",
   "library_artwork_searches",
   "library_mutation_operations",
@@ -730,9 +731,10 @@ function writeHistoricalMigrationFixture() {
     [33, "0033_living_risque"],
     [34, "0034_external_mutation_journal"],
     [35, "0035_invitations"],
+    [36, "0036_jellyfin_provisioning"],
   ];
   assertCondition(
-    JSON.stringify(journal.entries.slice(-8).map(({ idx, tag }) => [idx, tag])) ===
+    JSON.stringify(journal.entries.slice(-9).map(({ idx, tag }) => [idx, tag])) ===
       JSON.stringify(expectedTail),
     "Current migration journal must preserve the linear parent, saved-list, and playback-preference ancestry.",
   );
@@ -910,8 +912,8 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined && currentMigrationTag === "0035_invitations",
-  "Current migration journal must end at migration 0035_invitations.",
+  currentMigrationTimestamp !== undefined && currentMigrationTag === "0036_jellyfin_provisioning",
+  "Current migration journal must end at migration 0036_jellyfin_provisioning.",
 );
 
 try {
@@ -925,7 +927,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Fresh empty migration did not advance exactly through migration 0035.",
+      "Fresh empty migration did not advance exactly through migration 0036.",
     );
     assertInvitationMigration(database, "Fresh empty migration");
     const tables = database.sqlite
@@ -1409,7 +1411,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0035.",
+      "Production migration did not advance the historical fixture exactly through migration 0036.",
     );
     assertInvitationMigration(upgradeDatabase, "Historical upgrade migration");
     const reservations = upgradeDatabase.sqlite
@@ -1575,7 +1577,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0035, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0036, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });
