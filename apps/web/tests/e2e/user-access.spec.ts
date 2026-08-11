@@ -174,11 +174,9 @@ test("assigns an OIDC individual fallback without exposing identity subjects", a
   await page.goto("/settings/users");
   await page.getByRole("button", { name: /OIDC Morgan/i }).click();
   await page.getByRole("button", { name: "Assign individual provider role" }).click();
-  await page
-    .getByRole("button", { name: /operator.*Manage requests/i })
-    .last()
-    .click();
-  await page.getByRole("button", { name: "Continue" }).click();
+  const wizard = page.locator('section[aria-labelledby="oidc-role-assignment-title"]');
+  await wizard.getByRole("button", { name: /operator.*Manage requests/i }).click();
+  await wizard.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("region", { name: "Review role assignment" })).toContainText(
     "next OIDC sign-in",
   );
