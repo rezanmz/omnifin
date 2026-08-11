@@ -50,6 +50,7 @@ import {
 } from "../lib/invite-admin";
 import styles from "./user-access-control.module.css";
 import { UserAccessPageShell } from "./user-access-page-shell";
+import { UserRoleAssignmentWizard } from "./user-role-assignment-wizard";
 
 const administrationQueryKey = ["user-access-administration"] as const;
 const roles = ["viewer", "requester", "operator", "admin"] as const;
@@ -409,9 +410,9 @@ function statusLabel(user: UserAccessSummary) {
 }
 
 function sourceLabel(user: UserAccessSummary) {
-  if (user.authenticationMethods.includes("oidc")) return "Provider managed";
   if (user.roleSource === "manual") return "Locally assigned";
   if (user.roleSource === "recovery_bootstrap") return "Bootstrap authority";
+  if (user.roleSource === "oidc_mapping") return "Provider managed";
   return "Default access";
 }
 
@@ -504,6 +505,7 @@ function UserAccessControlContent({
   const [draftEnabled, setDraftEnabled] = useState<boolean | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
+  const [assignmentOpen, setAssignmentOpen] = useState(false);
 
   if (outcomeQuery.isPending) {
     return (
@@ -546,7 +548,9 @@ function UserAccessControlContent({
   const stateChanged = selected !== null && nextEnabled !== currentEnabled;
   const hasDraft = roleChanged || stateChanged;
   const isSelf = selected?.id === snapshot.principal.userId;
-  const providerManaged = selected?.authenticationMethods.includes("oidc") ?? false;
+  const oidcOwned = selected?.authenticationMethods.includes("oidc") ?? false;
+  const assignmentEligible =
+    oidcOwned && (selected?.roleSource === "default" || selected?.roleSource === "oidc_mapping");
   const statistics = {
     active: users.filter((user) => user.status === "active").length,
     administrators: users.filter((user) => user.role === "admin" && user.status === "active")
@@ -559,12 +563,52 @@ function UserAccessControlContent({
     setDraftRole(null);
     setDraftEnabled(null);
     setOperationError(null);
+    setAssignmentOpen(false);
   };
 
   const resetDraft = () => {
     setDraftRole(null);
     setDraftEnabled(null);
     setOperationError(null);
+  };
+
+  const assignOidcRole = async (role: Role) => {
+    if (!selected || mutation.isPending) return;
+    setOperationError(null);
+    setNotice(null);
+    try {
+      await mutation.mutateAsync(async () => {
+        await client.assignOidcRole(
+          selected.id,
+          { expectedUpdatedAt: selected.updatedAt, role },
+          snapshot.csrfToken,
+        );
+        const refreshed = await client.load();
+        if (refreshed.status === "signed_out" || refreshed.status === "forbidden") {
+          queryClient.setQueryData(administrationQueryKey, refreshed);
+          return;
+        }
+        if (refreshed.status !== "ready") {
+          throw new UserAccessAdminClientError(
+            "unavailable",
+            "session_recheck_failed",
+            "The provider role was submitted, but the session could not be rechecked. Reload the directory before continuing.",
+          );
+        }
+        queryClient.setQueryData(administrationQueryKey, refreshed);
+        setAssignmentOpen(false);
+        setNotice(
+          "Provider role assigned for the next OIDC sign-in. Affected provider-managed sessions may have been closed.",
+        );
+      });
+    } catch (error) {
+      setOperationError(userFacingError(error));
+      if (error instanceof UserAccessAdminClientError && error.kind === "session_changed") {
+        queryClient.setQueryData(administrationQueryKey, {
+          status: error.code === "session_signed_out" ? "signed_out" : "forbidden",
+        });
+      }
+    }
   };
 
   const apply = async () => {
@@ -771,17 +815,46 @@ function UserAccessControlContent({
                   so an administrator cannot accidentally remove their own authority here.
                 </p>
               </div>
-            ) : providerManaged ? (
+            ) : oidcOwned ? (
               <div className={styles.contextNote}>
                 <Sparkles aria-hidden="true" size={18} />
                 <p>
-                  This role comes from an OIDC claim mapping. Change the provider mapping to keep
-                  identity policy deterministic; account suspension remains local.
+                  {assignmentEligible
+                    ? selected.roleSource === "oidc_mapping"
+                      ? "This role comes from an OIDC claim mapping. Change provider policy in Identity providers, or assign an individual provider fallback below."
+                      : "This OIDC identity currently uses the default role. You can assign an individual provider fallback below."
+                    : selected.roleSource === "manual"
+                      ? "This OIDC identity uses a local role assignment. Individual provider role assignment is unavailable here."
+                      : selected.roleSource === "recovery_bootstrap"
+                        ? "This OIDC identity is governed by bootstrap authority. Individual provider role assignment is unavailable here."
+                        : "This OIDC identity is not eligible for an individual provider role assignment."}
                 </p>
+                {assignmentEligible ? (
+                  <button
+                    className={styles.secondaryButton}
+                    disabled={isSelf || mutation.isPending}
+                    onClick={() => setAssignmentOpen(true)}
+                    type="button"
+                  >
+                    Assign individual provider role
+                  </button>
+                ) : null}
               </div>
             ) : null}
 
-            <fieldset className={styles.roleFieldset} disabled={isSelf || mutation.isPending}>
+            {assignmentOpen && assignmentEligible ? (
+              <UserRoleAssignmentWizard
+                busy={mutation.isPending}
+                onCancel={() => setAssignmentOpen(false)}
+                onSubmit={assignOidcRole}
+                user={selected}
+              />
+            ) : null}
+
+            <fieldset
+              className={styles.roleFieldset}
+              disabled={isSelf || oidcOwned || mutation.isPending}
+            >
               <legend>
                 <span className="section-kicker">Omnifin role</span>
                 <strong>Choose the narrowest useful authority.</strong>
@@ -791,7 +864,7 @@ function UserAccessControlContent({
                   <button
                     aria-pressed={nextRole === role}
                     className={styles.roleOption}
-                    disabled={isSelf || providerManaged || mutation.isPending}
+                    disabled={isSelf || oidcOwned || mutation.isPending}
                     key={role}
                     onClick={() => setDraftRole(role)}
                     type="button"

@@ -183,6 +183,7 @@ describe("identity provider administration client", () => {
       providerId: provider.id,
       role: "operator" as const,
       values: ["media-operators"],
+      valuesRedacted: false as const,
     };
     const capabilities = {
       authorizationCodeFlow: true,

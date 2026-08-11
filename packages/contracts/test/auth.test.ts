@@ -592,6 +592,7 @@ describe("authentication contracts", () => {
       ...create,
       id: "mapping-1",
       providerId: "oidc-home",
+      valuesRedacted: false,
     };
     expect(oidcRoleMappingsAdminResponseSchema.parse({ mappings: [mapping] })).toEqual({
       mappings: [mapping],

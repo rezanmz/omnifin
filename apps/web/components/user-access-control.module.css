@@ -762,6 +762,113 @@
   margin-top: 9px;
 }
 
+.assignmentWizard {
+  background:
+    linear-gradient(145deg, rgb(255 255 255 / 7%), transparent 40%), var(--surface-recessed);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  margin: 0 0 28px;
+  padding: clamp(18px, 3vw, 26px);
+}
+
+.assignmentHeading,
+.assignmentActions {
+  align-items: center;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+}
+
+.assignmentHeading h3 {
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  font-weight: 520;
+  margin-top: 5px;
+}
+
+.assignmentHeading h3:focus-visible {
+  border-radius: var(--radius-xs);
+  outline: 2px solid var(--acid);
+  outline-offset: 4px;
+}
+
+.assignmentSteps {
+  color: var(--paper-2);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.65rem;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  text-transform: uppercase;
+}
+
+.assignmentSteps li[data-current="true"] {
+  color: var(--acid);
+  font-weight: 700;
+}
+
+.assignmentIntro,
+.assignmentLimitations,
+.assignmentReview > p {
+  color: var(--paper-2);
+  font-size: 0.72rem;
+  line-height: 1.55;
+  margin: 16px 0 0;
+  max-width: 72ch;
+}
+
+.assignmentFacts {
+  border-top: 1px solid var(--line-soft);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 20px 0;
+  padding-top: 14px;
+}
+
+.assignmentFacts dt {
+  color: var(--paper-2);
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.assignmentFacts dd {
+  font-size: 0.78rem;
+  font-weight: 670;
+  margin-top: 5px;
+  text-transform: capitalize;
+}
+
+.assignmentFieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.assignmentFieldset legend {
+  color: var(--paper-1);
+  font-size: 0.76rem;
+  font-weight: 650;
+  margin-bottom: 12px;
+}
+
+.assignmentReview {
+  border-left: 2px solid var(--acid);
+  padding-left: 14px;
+}
+
+.assignmentReview .assignmentFacts {
+  margin-bottom: 0;
+}
+
+.assignmentActions {
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
 .accountState {
   border-top: 1px solid var(--line-soft);
   gap: 28px;
@@ -1419,6 +1526,25 @@
   }
 
   .roleGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .assignmentHeading,
+  .assignmentActions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .assignmentSteps {
+    align-self: flex-start;
+  }
+
+  .assignmentFacts {
+    grid-template-columns: 1fr;
+  }
+
+  .assignmentActions {
+    display: grid;
     grid-template-columns: 1fr;
   }
 

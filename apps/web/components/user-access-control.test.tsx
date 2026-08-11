@@ -3,7 +3,7 @@ import {
   type SessionPrincipal,
   type UserAccessSummary,
 } from "@omnifin/contracts/auth";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -66,6 +66,26 @@ const viewer: UserAccessSummary = {
   status: "active",
   updatedAt: "2026-07-30T11:30:00.000Z",
 };
+const oidcViewer: UserAccessSummary = {
+  ...viewer,
+  authenticationMethods: ["oidc"],
+  displayName: "OIDC Morgan",
+  id: "oidc-viewer-user",
+  jellyfinLinkHealth: null,
+  roleSource: "default",
+};
+const oidcManual: UserAccessSummary = {
+  ...oidcViewer,
+  displayName: "OIDC Manual",
+  id: "oidc-manual-user",
+  roleSource: "manual",
+};
+const oidcRecoveryBootstrap: UserAccessSummary = {
+  ...oidcViewer,
+  displayName: "OIDC Bootstrap",
+  id: "oidc-bootstrap-user",
+  roleSource: "recovery_bootstrap",
+};
 
 function readyOutcome(
   users: readonly UserAccessSummary[] = [admin, viewer],
@@ -74,10 +94,83 @@ function readyOutcome(
 }
 
 function client(update: UserAccessAdminClient["update"] = vi.fn()): UserAccessAdminClient {
-  return { load: vi.fn(async () => readyOutcome()), update };
+  return {
+    assignOidcRole: vi.fn(async () => ({
+      effectiveAfter: "next_oidc_sign_in" as const,
+      fallbackPrecedence: "lowest" as const,
+      mappingId: "mapping-user-fallback",
+      priority: 0 as const,
+      revokedSessions: 0,
+      role: "viewer" as const,
+    })),
+    load: vi.fn(async () => readyOutcome()),
+    update,
+  };
 }
 
 describe("UserAccessControl", () => {
+  it.each([
+    [oidcManual, "Locally assigned", "This OIDC identity uses a local role assignment."],
+    [
+      oidcRecoveryBootstrap,
+      "Bootstrap authority",
+      "This OIDC identity is governed by bootstrap authority.",
+    ],
+  ] as const)("describes ineligible OIDC source %s accurately", (user, source, copy) => {
+    render(<UserAccessControl client={client()} embedded initialOutcome={readyOutcome([user])} />);
+
+    expect(screen.getByText(source)).toBeVisible();
+    expect(screen.getByText(copy, { exact: false })).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Assign individual provider role" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /operator.*Manage requests/i })).toBeDisabled();
+  });
+
+  it("assigns a provider-owned individual fallback with truthful timing", async () => {
+    const user = userEvent.setup();
+    const assignOidcRole = vi.fn(async () => ({
+      effectiveAfter: "next_oidc_sign_in" as const,
+      fallbackPrecedence: "lowest" as const,
+      mappingId: "mapping-user-fallback",
+      priority: 0 as const,
+      revokedSessions: 2,
+      role: "operator" as const,
+    }));
+    const load = vi.fn(async () => readyOutcome([admin, oidcViewer]));
+    render(
+      <UserAccessControl
+        client={{ assignOidcRole, load, update: vi.fn() }}
+        embedded
+        initialOutcome={readyOutcome([admin, oidcViewer])}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /OIDC Morgan/i }));
+    await user.click(screen.getByRole("button", { name: "Assign individual provider role" }));
+    expect(screen.getByText(/after the target's next OIDC sign-in/i)).toBeVisible();
+    const wizard = screen
+      .getByRole("heading", { name: "Assign an individual role" })
+      .closest("section");
+    expect(wizard).not.toBeNull();
+    await user.click(within(wizard!).getByRole("button", { name: /operator.*Manage requests/i }));
+    await user.click(within(wizard!).getByRole("button", { name: "Continue" }));
+    expect(screen.getAllByRole("region", { name: "Review role assignment" })).toHaveLength(1);
+    expect(
+      within(wizard!).getByText(/Higher-priority provider mappings may override it/i),
+    ).toBeVisible();
+    await user.click(within(wizard!).getByRole("button", { name: "Apply provider role" }));
+
+    await waitFor(() =>
+      expect(assignOidcRole).toHaveBeenCalledWith(
+        oidcViewer.id,
+        { expectedUpdatedAt: oidcViewer.updatedAt, role: "operator" },
+        csrfToken,
+      ),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent("next OIDC sign-in");
+  });
+
   it("stages a role change, explains session impact, and applies the optimistic revision", async () => {
     const user = userEvent.setup();
     const update = vi.fn(async () => ({
@@ -125,7 +218,15 @@ describe("UserAccessControl", () => {
       );
     });
     render(
-      <UserAccessControl client={{ load, update }} embedded initialOutcome={readyOutcome()} />,
+      <UserAccessControl
+        client={{
+          assignOidcRole: vi.fn(),
+          load,
+          update,
+        }}
+        embedded
+        initialOutcome={readyOutcome()}
+      />,
     );
 
     await user.click(screen.getByRole("button", { name: /Morgan Lee/i }));

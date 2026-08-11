@@ -133,6 +133,33 @@ describe("user access administration client", () => {
     expect(new Headers(request.headers).get("x-omnifin-csrf")).toBe(csrfToken);
   });
 
+  it("sends only the role assignment contract to the safe OIDC endpoint", async () => {
+    const result = {
+      effectiveAfter: "next_oidc_sign_in" as const,
+      fallbackPrecedence: "lowest" as const,
+      mappingId: "mapping-user-fallback",
+      priority: 0 as const,
+      revokedSessions: 2,
+      role: "operator" as const,
+    };
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(result, 201));
+    vi.stubGlobal("fetch", fetchMock);
+    const input = { expectedUpdatedAt: user.updatedAt, role: "operator" as const };
+
+    await expect(userAccessAdminClient.assignOidcRole(user.id, input, csrfToken)).resolves.toEqual(
+      result,
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/admin/users/${user.id}/oidc-role-assignment`,
+      expect.objectContaining({
+        body: JSON.stringify(input),
+        method: "POST",
+      }),
+    );
+    expect(JSON.stringify(fetchMock.mock.calls[0]?.[1])).not.toContain("subject");
+    expect(JSON.stringify(fetchMock.mock.calls[0]?.[1])).not.toContain("provider");
+  });
+
   it("normalizes authority changes and stable gateway conflicts", async () => {
     const fetchMock = vi
       .fn()

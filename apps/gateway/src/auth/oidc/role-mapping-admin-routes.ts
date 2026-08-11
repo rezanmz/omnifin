@@ -7,6 +7,7 @@ import {
   oidcRoleMappingUpdateRequestSchema,
   oidcRoleMappingsAdminParamsSchema,
   oidcRoleMappingsAdminResponseSchema,
+  type RoleMapping,
   type SessionPrincipal,
 } from "@omnifin/contracts/auth";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
@@ -63,12 +64,35 @@ const roleMappingJsonSchema = {
   },
 } as const;
 
+const publicRoleMappingJsonSchema = {
+  oneOf: [
+    {
+      ...roleMappingJsonSchema,
+      required: [...roleMappingJsonSchema.required, "valuesRedacted"],
+      properties: {
+        ...roleMappingJsonSchema.properties,
+        valuesRedacted: { const: false },
+      },
+    },
+    {
+      ...roleMappingJsonSchema,
+      required: [...roleMappingJsonSchema.required, "valuesRedacted"],
+      properties: {
+        ...roleMappingJsonSchema.properties,
+        claimPath: { type: "array", minItems: 1, maxItems: 1, items: { const: "sub" } },
+        values: { type: "array", maxItems: 0 },
+        valuesRedacted: { const: true },
+      },
+    },
+  ],
+} as const;
+
 const mutationResponseJsonSchema = {
   type: "object",
   additionalProperties: false,
   required: ["mapping", "revokedSessions"],
   properties: {
-    mapping: roleMappingJsonSchema,
+    mapping: publicRoleMappingJsonSchema,
     revokedSessions: { type: "integer", minimum: 0, maximum: 2_147_483_647 },
   },
 } as const;
@@ -128,6 +152,13 @@ function context(request: FastifyRequest, principal: SessionPrincipal) {
   };
 }
 
+function presentPublicMapping(mapping: RoleMapping) {
+  const subjectMapping = mapping.claimPath.length === 1 && mapping.claimPath[0] === "sub";
+  return subjectMapping
+    ? { ...mapping, values: [], valuesRedacted: true as const }
+    : { ...mapping, valuesRedacted: false as const };
+}
+
 function requireRoleMappingAdministrator(principal: SessionPrincipal | null | undefined) {
   return principal?.authenticationMethod.kind === "recovery"
     ? requirePermission(principal, "recovery.oidc.manage")
@@ -168,7 +199,7 @@ export const oidcRoleMappingAdminRoutes: FastifyPluginAsync<
               mappings: {
                 type: "array",
                 maxItems: OIDC_ROLE_MAPPINGS_MAX_COUNT,
-                items: roleMappingJsonSchema,
+                items: publicRoleMappingJsonSchema,
               },
             },
           },
@@ -190,7 +221,9 @@ export const oidcRoleMappingAdminRoutes: FastifyPluginAsync<
       requireRoleMappingAdministrator(session?.principal);
       const { providerId } = oidcRoleMappingsAdminParamsSchema.parse(request.params);
       try {
-        return oidcRoleMappingsAdminResponseSchema.parse({ mappings: mappings.list(providerId) });
+        return oidcRoleMappingsAdminResponseSchema.parse({
+          mappings: mappings.list(providerId).map(presentPublicMapping),
+        });
       } catch (error) {
         if (error instanceof OidcRoleMappingAdminError) throw administrationError(error);
         throw error;
@@ -226,7 +259,10 @@ export const oidcRoleMappingAdminRoutes: FastifyPluginAsync<
       try {
         const result = mappings.create(providerId, input, context(request, principal));
         reply.status(201);
-        return oidcRoleMappingMutationResponseSchema.parse(result);
+        return oidcRoleMappingMutationResponseSchema.parse({
+          ...result,
+          mapping: presentPublicMapping(result.mapping),
+        });
       } catch (error) {
         if (error instanceof OidcRoleMappingAdminError) throw administrationError(error);
         throw error;
@@ -263,9 +299,11 @@ export const oidcRoleMappingAdminRoutes: FastifyPluginAsync<
       const { mappingId, providerId } = oidcRoleMappingAdminParamsSchema.parse(request.params);
       const input = oidcRoleMappingUpdateRequestSchema.parse(request.body);
       try {
-        return oidcRoleMappingMutationResponseSchema.parse(
-          mappings.update(providerId, mappingId, input, context(request, principal)),
-        );
+        const result = mappings.update(providerId, mappingId, input, context(request, principal));
+        return oidcRoleMappingMutationResponseSchema.parse({
+          ...result,
+          mapping: presentPublicMapping(result.mapping),
+        });
       } catch (error) {
         if (error instanceof OidcRoleMappingAdminError) throw administrationError(error);
         throw error;

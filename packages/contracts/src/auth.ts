@@ -690,6 +690,22 @@ export const userAccessMutationResponseSchema = z.strictObject({
 });
 export type UserAccessMutationResponse = z.infer<typeof userAccessMutationResponseSchema>;
 
+export const oidcRoleAssignmentRequestSchema = z.strictObject({
+  expectedUpdatedAt: z.iso.datetime({ offset: true }),
+  role: roleSchema,
+});
+export type OidcRoleAssignmentRequest = z.infer<typeof oidcRoleAssignmentRequestSchema>;
+
+export const oidcRoleAssignmentResponseSchema = z.strictObject({
+  effectiveAfter: z.literal("next_oidc_sign_in"),
+  fallbackPrecedence: z.literal("lowest"),
+  mappingId: identifierSchema,
+  priority: z.literal(0),
+  revokedSessions: z.int().min(0).max(2_147_483_647),
+  role: roleSchema,
+});
+export type OidcRoleAssignmentResponse = z.infer<typeof oidcRoleAssignmentResponseSchema>;
+
 export const ADMINISTRATOR_RECOVERY_CONFIRMATION = "REPLACE ADMINISTRATOR" as const;
 
 export const administratorRecoveryPreviewRequestSchema = z.strictObject({});
@@ -840,6 +856,40 @@ export const roleMappingSchema = z.strictObject({
 });
 export type RoleMapping = z.infer<typeof roleMappingSchema>;
 
+const publicRoleMappingShape = {
+  ...roleMappingConfigurationShape,
+  id: identifierSchema,
+  providerId: identifierSchema,
+} as const;
+
+const redactedOidcRoleMappingSchema = z.strictObject({
+  ...publicRoleMappingShape,
+  claimPath: z.tuple([z.literal("sub")]),
+  values: z.array(z.never()).length(0),
+  valuesRedacted: z.literal(true),
+});
+
+const visibleOidcRoleMappingSchema = z
+  .strictObject({
+    ...publicRoleMappingShape,
+    valuesRedacted: z.literal(false),
+  })
+  .superRefine((mapping, context) => {
+    if (mapping.claimPath.length === 1 && mapping.claimPath[0] === "sub") {
+      context.addIssue({
+        code: "custom",
+        message: "Subject mappings must redact their values.",
+        path: ["values"],
+      });
+    }
+  });
+
+export const oidcRoleMappingAdminSchema = z.union([
+  redactedOidcRoleMappingSchema,
+  visibleOidcRoleMappingSchema,
+]);
+export type OidcRoleMappingAdmin = z.infer<typeof oidcRoleMappingAdminSchema>;
+
 export const oidcRoleMappingCreateRequestSchema = z
   .strictObject(roleMappingConfigurationShape)
   .superRefine((mapping, context) => {
@@ -869,14 +919,14 @@ export const oidcRoleMappingAdminParamsSchema = z.strictObject({
 export type OidcRoleMappingAdminParams = z.infer<typeof oidcRoleMappingAdminParamsSchema>;
 
 export const oidcRoleMappingsAdminResponseSchema = z.strictObject({
-  mappings: z.array(roleMappingSchema).max(OIDC_ROLE_MAPPINGS_MAX_COUNT),
+  mappings: z.array(oidcRoleMappingAdminSchema).max(OIDC_ROLE_MAPPINGS_MAX_COUNT),
 });
 export type OidcRoleMappingsAdminResponse = z.infer<typeof oidcRoleMappingsAdminResponseSchema>;
 
 const revokedSessionsSchema = z.int().min(0).max(2_147_483_647);
 
 export const oidcRoleMappingMutationResponseSchema = z.strictObject({
-  mapping: roleMappingSchema,
+  mapping: oidcRoleMappingAdminSchema,
   revokedSessions: revokedSessionsSchema,
 });
 export type OidcRoleMappingMutationResponse = z.infer<typeof oidcRoleMappingMutationResponseSchema>;

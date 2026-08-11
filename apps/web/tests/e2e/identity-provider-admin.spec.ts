@@ -73,6 +73,7 @@ const roleMapping = {
   providerId: provider.id,
   role: "operator",
   values: ["media-operators"],
+  valuesRedacted: false,
 } as const;
 
 async function mockAdministrationReads(

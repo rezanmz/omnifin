@@ -2,7 +2,7 @@ import {
   RECOVERY_PERMISSIONS,
   ROLE_PERMISSIONS,
   type OidcProviderAdmin,
-  type RoleMapping,
+  type OidcRoleMappingAdmin,
   type SessionPrincipal,
 } from "@omnifin/contracts/auth";
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
@@ -54,7 +54,7 @@ const principal: SessionPrincipal = {
   sessionId: "session-admin-1",
   userId: "user-admin-1",
 };
-const mapping: RoleMapping = {
+const mapping: OidcRoleMappingAdmin = {
   claimPath: ["groups"],
   enabled: true,
   id: "mapping-operators",
@@ -63,6 +63,7 @@ const mapping: RoleMapping = {
   providerId: provider.id,
   role: "operator",
   values: ["media-operators"],
+  valuesRedacted: false,
 };
 const ready: IdentityProviderAdminLoadOutcome = {
   snapshot: {

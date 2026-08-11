@@ -5,7 +5,7 @@ import {
   ROLE_PERMISSIONS,
   type OidcProviderAdmin,
   type OidcProviderCapabilities,
-  type RoleMapping,
+  type OidcRoleMappingAdmin,
   type SessionPrincipal,
 } from "@omnifin/contracts/auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -61,7 +61,7 @@ const principal: SessionPrincipal = {
   sessionId: "session-admin-1",
   userId: "user-admin-1",
 };
-const mapping: RoleMapping = {
+const mapping: OidcRoleMappingAdmin = {
   claimPath: ["groups"],
   enabled: true,
   id: "mapping-operators",
@@ -70,6 +70,15 @@ const mapping: RoleMapping = {
   providerId: provider.id,
   role: "operator",
   values: ["media-operators"],
+  valuesRedacted: false,
+};
+const redactedSubjectMapping: OidcRoleMappingAdmin = {
+  ...mapping,
+  claimPath: ["sub"],
+  id: "mapping-sub-fallback",
+  priority: 0,
+  values: [],
+  valuesRedacted: true,
 };
 const capabilities: OidcProviderCapabilities = {
   authorizationCodeFlow: true,
@@ -146,6 +155,37 @@ describe("IdentityProviderConsole", () => {
     expect(await screen.findByText(/media-operators/)).toBeVisible();
     expect(screen.getByText("operator")).toBeVisible();
     expect(screen.queryByText(/client secret value/i)).not.toBeInTheDocument();
+  });
+
+  it("redacts subject mapping values and keeps only a safe removal path", async () => {
+    const user = userEvent.setup();
+    const deleteRoleMapping = vi.fn(async () => ({
+      deletedMappingId: redactedSubjectMapping.id,
+      revokedSessions: 1,
+    }));
+    render(
+      <IdentityProviderConsole
+        client={client({
+          deleteRoleMapping,
+          listRoleMappings: vi.fn(async () => [redactedSubjectMapping]),
+        })}
+        initialMappings={{ [provider.id]: [redactedSubjectMapping] }}
+        initialOutcome={ready()}
+        publicBaseUrl="https://omnifin.example.test/"
+      />,
+    );
+
+    expect(await screen.findByText("Subject value protected")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Edit sub mapping" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remove protected subject mapping" }));
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+    await waitFor(() =>
+      expect(deleteRoleMapping).toHaveBeenCalledWith(
+        provider.id,
+        redactedSubjectMapping.id,
+        csrfToken,
+      ),
+    );
   });
 
   it("quarantines a restored provider until its issuer approval is repaired", async () => {
@@ -373,7 +413,7 @@ describe("IdentityProviderConsole", () => {
 
   it("creates, edits, and deliberately removes exact typed role mappings", async () => {
     const user = userEvent.setup();
-    const booleanMapping: RoleMapping = {
+    const booleanMapping: OidcRoleMappingAdmin = {
       ...mapping,
       id: "mapping-staff",
       role: "requester",
@@ -437,7 +477,7 @@ describe("IdentityProviderConsole", () => {
 
   it("preserves mixed scalar claim values while editing", async () => {
     const user = userEvent.setup();
-    const mixedMapping: RoleMapping = {
+    const mixedMapping: OidcRoleMappingAdmin = {
       ...mapping,
       id: "mapping-mixed-entitlements",
       values: ["media-staff", 7, true],

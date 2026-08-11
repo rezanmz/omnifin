@@ -1,5 +1,7 @@
 import {
   AUTH_USERS_PAGE_MAX_COUNT,
+  oidcRoleAssignmentRequestSchema,
+  oidcRoleAssignmentResponseSchema,
   userAccessListQuerySchema,
   userAccessListResponseSchema,
   userAccessMutationRequestSchema,
@@ -11,11 +13,17 @@ import {
   type UserAccessMutationRequest,
   type UserAccessMutationResponse,
   type UserAccessSummary,
+  type OidcRoleAssignmentResponse,
 } from "@omnifin/contracts/auth";
 
 import type { AppConfig } from "../config.js";
 import type { DatabaseHandle } from "../db/client.js";
 import { privacyHash, randomToken } from "../security/crypto.js";
+import {
+  OidcRoleMappingAdminError,
+  OidcRoleMappingAdminService,
+  type OidcRoleMappingAdminDependencies,
+} from "./oidc/role-mapping-admin-service.js";
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const USER_ROW_SELECT = `
@@ -53,7 +61,11 @@ type UserAccessAdminErrorReason =
   | "cursor_invalid"
   | "integrity_failure"
   | "last_active_admin"
+  | "mapping_conflict"
+  | "mapping_limit_reached"
   | "no_effect"
+  | "oidc_identity_unavailable"
+  | "oidc_role_assignment_unavailable"
   | "permission_denied"
   | "role_managed_by_provider"
   | "self_mutation"
@@ -74,6 +86,7 @@ export class UserAccessAdminError extends Error {
 export interface UserAccessAdminDependencies {
   clock?: () => Date;
   createId?: () => string;
+  oidcRoleMapping?: OidcRoleMappingAdminDependencies;
 }
 
 export interface UserAccessAdminContext {
@@ -145,6 +158,7 @@ export class UserAccessAdminService {
   readonly #config: AppConfig;
   readonly #createId: () => string;
   readonly #database: DatabaseHandle;
+  readonly #oidcRoleMappings: OidcRoleMappingAdminService;
 
   public constructor(
     database: DatabaseHandle,
@@ -155,6 +169,11 @@ export class UserAccessAdminService {
     this.#config = config;
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createId = dependencies.createId ?? (() => randomToken(16));
+    this.#oidcRoleMappings = new OidcRoleMappingAdminService(
+      database,
+      config,
+      dependencies.oidcRoleMapping,
+    );
   }
 
   public list(input: UserAccessListQuery): UserAccessListResponse {
@@ -316,6 +335,123 @@ export class UserAccessAdminService {
       throw new UserAccessAdminError("storage_failure", { cause: error });
     }
 
+    if (!result) throw new UserAccessAdminError("integrity_failure");
+    return result;
+  }
+
+  public assignOidcRole(
+    userId: string,
+    input: unknown,
+    context: UserAccessAdminContext,
+  ): OidcRoleAssignmentResponse {
+    const parsed = oidcRoleAssignmentRequestSchema.safeParse(input);
+    if (!validIdentifier(userId) || !parsed.success || !this.#validContext(context)) {
+      throw new UserAccessAdminError("integrity_failure");
+    }
+    const principal = context.principal;
+    if (
+      principal.authenticationMethod.kind === "recovery" ||
+      principal.accountState !== "active" ||
+      principal.role !== "admin" ||
+      !principal.permissions.includes("roles.manage")
+    ) {
+      throw new UserAccessAdminError("permission_denied");
+    }
+    if (principal.userId === userId) throw new UserAccessAdminError("self_mutation");
+    const expectedUpdatedAt = Date.parse(parsed.data.expectedUpdatedAt);
+    if (!validTimestamp(expectedUpdatedAt)) {
+      throw new UserAccessAdminError("integrity_failure");
+    }
+
+    let result: OidcRoleAssignmentResponse | undefined;
+    try {
+      this.#database.sqlite
+        .transaction(() => {
+          const current = this.#readRow(userId, this.#currentTime().getTime());
+          if (!current) throw new UserAccessAdminError("user_not_found");
+          if (current.updatedAt !== expectedUpdatedAt) {
+            throw new UserAccessAdminError("stale_revision");
+          }
+          if (!(current.roleSource === "default" || current.roleSource === "oidc_mapping")) {
+            throw new UserAccessAdminError("oidc_role_assignment_unavailable");
+          }
+
+          const identities = this.#database.sqlite
+            .prepare(
+              `select provider_id as providerId, subject
+               from external_identities
+               where user_id = ?
+               limit 2`,
+            )
+            .all(userId) as Array<{ providerId: string; subject: string }>;
+          const identity = identities[0];
+          if (
+            identities.length !== 1 ||
+            !identity ||
+            !validIdentifier(identity.providerId) ||
+            typeof identity.subject !== "string" ||
+            identity.subject.length < 1 ||
+            identity.subject.length > 512
+          ) {
+            throw new UserAccessAdminError("oidc_identity_unavailable");
+          }
+
+          const existingFallback = this.#database.sqlite
+            .prepare(
+              `select id
+               from role_mappings
+               where provider_id = ?
+                 and claim_path_json = ?
+                 and operator = 'equals'
+                 and values_json = ?
+                 and priority = 0
+                 and enabled = 1
+               limit 1`,
+            )
+            .get(identity.providerId, '["sub"]', JSON.stringify([identity.subject]));
+          if (existingFallback !== undefined) {
+            throw new UserAccessAdminError("mapping_conflict");
+          }
+
+          let mapping: ReturnType<OidcRoleMappingAdminService["createInExistingTransaction"]>;
+          try {
+            mapping = this.#oidcRoleMappings.createInExistingTransaction(
+              identity.providerId,
+              {
+                claimPath: ["sub"],
+                enabled: true,
+                operator: "equals",
+                priority: 0,
+                role: parsed.data.role,
+                values: [identity.subject],
+              },
+              context,
+            );
+          } catch (error) {
+            if (error instanceof OidcRoleMappingAdminError) {
+              if (error.reason === "mapping_conflict") {
+                throw new UserAccessAdminError("mapping_conflict", { cause: error });
+              }
+              if (error.reason === "mapping_limit_reached") {
+                throw new UserAccessAdminError("mapping_limit_reached", { cause: error });
+              }
+            }
+            throw error;
+          }
+          result = oidcRoleAssignmentResponseSchema.parse({
+            effectiveAfter: "next_oidc_sign_in",
+            fallbackPrecedence: "lowest",
+            mappingId: mapping.mapping.id,
+            priority: 0,
+            revokedSessions: mapping.revokedSessions,
+            role: parsed.data.role,
+          });
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof UserAccessAdminError) throw error;
+      throw new UserAccessAdminError("storage_failure", { cause: error });
+    }
     if (!result) throw new UserAccessAdminError("integrity_failure");
     return result;
   }
