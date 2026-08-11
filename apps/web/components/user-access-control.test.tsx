@@ -74,6 +74,18 @@ const oidcViewer: UserAccessSummary = {
   jellyfinLinkHealth: null,
   roleSource: "default",
 };
+const oidcManual: UserAccessSummary = {
+  ...oidcViewer,
+  displayName: "OIDC Manual",
+  id: "oidc-manual-user",
+  roleSource: "manual",
+};
+const oidcRecoveryBootstrap: UserAccessSummary = {
+  ...oidcViewer,
+  displayName: "OIDC Bootstrap",
+  id: "oidc-bootstrap-user",
+  roleSource: "recovery_bootstrap",
+};
 
 function readyOutcome(
   users: readonly UserAccessSummary[] = [admin, viewer],
@@ -97,6 +109,24 @@ function client(update: UserAccessAdminClient["update"] = vi.fn()): UserAccessAd
 }
 
 describe("UserAccessControl", () => {
+  it.each([
+    [oidcManual, "Locally assigned", "This OIDC identity uses a local role assignment."],
+    [
+      oidcRecoveryBootstrap,
+      "Bootstrap authority",
+      "This OIDC identity is governed by bootstrap authority.",
+    ],
+  ] as const)("describes ineligible OIDC source %s accurately", (user, source, copy) => {
+    render(<UserAccessControl client={client()} embedded initialOutcome={readyOutcome([user])} />);
+
+    expect(screen.getByText(source)).toBeVisible();
+    expect(screen.getByText(copy, { exact: false })).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Assign individual provider role" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /operator.*Manage requests/i })).toBeDisabled();
+  });
+
   it("assigns a provider-owned individual fallback with truthful timing", async () => {
     const user = userEvent.setup();
     const assignOidcRole = vi.fn(async () => ({

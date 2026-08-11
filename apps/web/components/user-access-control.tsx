@@ -410,9 +410,9 @@ function statusLabel(user: UserAccessSummary) {
 }
 
 function sourceLabel(user: UserAccessSummary) {
-  if (user.authenticationMethods.includes("oidc")) return "Provider managed";
   if (user.roleSource === "manual") return "Locally assigned";
   if (user.roleSource === "recovery_bootstrap") return "Bootstrap authority";
+  if (user.roleSource === "oidc_mapping") return "Provider managed";
   return "Default access";
 }
 
@@ -823,7 +823,11 @@ function UserAccessControlContent({
                     ? selected.roleSource === "oidc_mapping"
                       ? "This role comes from an OIDC claim mapping. Change provider policy in Identity providers, or assign an individual provider fallback below."
                       : "This OIDC identity currently uses the default role. You can assign an individual provider fallback below."
-                    : "This OIDC identity is governed by bootstrap authority. Individual provider role assignment is unavailable here."}
+                    : selected.roleSource === "manual"
+                      ? "This OIDC identity uses a local role assignment. Individual provider role assignment is unavailable here."
+                      : selected.roleSource === "recovery_bootstrap"
+                        ? "This OIDC identity is governed by bootstrap authority. Individual provider role assignment is unavailable here."
+                        : "This OIDC identity is not eligible for an individual provider role assignment."}
                 </p>
                 {assignmentEligible ? (
                   <button
