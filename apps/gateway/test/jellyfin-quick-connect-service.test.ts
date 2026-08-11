@@ -2,6 +2,7 @@ import type {
   JellyfinAuthenticationResult,
   JellyfinQuickConnectResult,
 } from "@omnifin/connectors/auth/jellyfin-authentication-client";
+import { ConnectorHttpLane } from "@omnifin/connectors/http/connector-http-lane";
 import { ADMINISTRATOR_RECOVERY_CONFIRMATION } from "@omnifin/contracts/auth";
 import { describe, expect, it } from "vitest";
 
@@ -10,8 +11,10 @@ import {
   JELLYFIN_QUICK_CONNECT_POLL_INTERVAL_MS,
   JellyfinQuickConnectService,
   JellyfinQuickConnectServiceError,
+  type JellyfinQuickConnectServiceDependencies,
 } from "../src/auth/jellyfin/quick-connect-service.js";
 import { JellyfinSignInService } from "../src/auth/jellyfin/sign-in-service.js";
+import { ConnectorHttpLaneRegistry } from "../src/connectors/http-lane-registry.js";
 import { SessionService } from "../src/auth/session-service.js";
 import type { AppConfig } from "../src/config.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
@@ -105,11 +108,13 @@ function fixture(
   handle: DatabaseHandle,
   options: {
     authenticated?: boolean;
+    clientTargets?: unknown[];
     enabled?: boolean;
     isAdministrator?: boolean;
     onPoll?: () => void;
     pollServerId?: string;
     serverId?: string;
+    laneProvider?: JellyfinQuickConnectServiceDependencies["laneProvider"];
   } = {},
 ) {
   let now = new Date(START);
@@ -118,56 +123,64 @@ function fixture(
   const sessions = new SessionService(handle, appConfig, { clock: () => new Date(now) });
   const signIn = new JellyfinSignInService(handle, appConfig, sessions, {
     clock: () => new Date(now),
-    createClient: () => ({
-      authenticateByName: async () => authentication(),
-      getPublicSystemInfo: async () => ({
-        Id: "server-1",
-        ServerName: "Home Jellyfin",
-        Version: "10.10.7",
-      }),
-    }),
+    createClient: (target) => {
+      options.clientTargets?.push(target);
+      return {
+        authenticateByName: async () => authentication(),
+        getPublicSystemInfo: async () => ({
+          Id: "server-1",
+          ServerName: "Home Jellyfin",
+          Version: "10.10.7",
+        }),
+      };
+    },
     createDeviceId: () => "password-device",
+    ...(options.laneProvider === undefined ? {} : { laneProvider: options.laneProvider }),
   });
   let nextId = 0;
   const service = new JellyfinQuickConnectService(handle, appConfig, signIn, {
     clock: () => new Date(now),
     createBrowserBinding: () => BROWSER_BINDING,
-    createClient: () => ({
-      authenticateWithQuickConnect: async () => {
-        calls.authenticate += 1;
-        return authentication({
-          ServerId: options.serverId ?? "server-1",
-          User: {
-            Id: "jellyfin-user-1",
-            Name: "Riley",
-            Policy: { IsAdministrator: options.isAdministrator ?? true },
-          },
-        });
-      },
-      getPublicSystemInfo: async () => {
-        calls.publicInfo += 1;
-        return {
-          Id: calls.publicInfo > 1 ? (options.pollServerId ?? "server-1") : "server-1",
-          ServerName: "Home Jellyfin",
-          Version: "10.10.7",
-        };
-      },
-      initiateQuickConnect: async () => {
-        calls.initiate += 1;
-        return quickConnect(false);
-      },
-      pollQuickConnect: async () => {
-        calls.poll += 1;
-        options.onPoll?.();
-        return quickConnect(options.authenticated ?? false);
-      },
-      quickConnectEnabled: async () => {
-        calls.enabled += 1;
-        return options.enabled ?? true;
-      },
-    }),
+    createClient: (target) => {
+      options.clientTargets?.push(target);
+      return {
+        authenticateWithQuickConnect: async () => {
+          calls.authenticate += 1;
+          return authentication({
+            ServerId: options.serverId ?? "server-1",
+            User: {
+              Id: "jellyfin-user-1",
+              Name: "Riley",
+              Policy: { IsAdministrator: options.isAdministrator ?? true },
+            },
+          });
+        },
+        getPublicSystemInfo: async () => {
+          calls.publicInfo += 1;
+          return {
+            Id: calls.publicInfo > 1 ? (options.pollServerId ?? "server-1") : "server-1",
+            ServerName: "Home Jellyfin",
+            Version: "10.10.7",
+          };
+        },
+        initiateQuickConnect: async () => {
+          calls.initiate += 1;
+          return quickConnect(false);
+        },
+        pollQuickConnect: async () => {
+          calls.poll += 1;
+          options.onPoll?.();
+          return quickConnect(options.authenticated ?? false);
+        },
+        quickConnectEnabled: async () => {
+          calls.enabled += 1;
+          return options.enabled ?? true;
+        },
+      };
+    },
     createDeviceId: () => "quick-device-1",
     createId: () => `quick-connect-${++nextId}`,
+    ...(options.laneProvider === undefined ? {} : { laneProvider: options.laneProvider }),
   });
   return {
     advance(milliseconds: number) {
@@ -791,6 +804,23 @@ describe("JellyfinQuickConnectService", () => {
       ]);
       expect(test.sessions.resolveAndRefresh(secondSession.sessionToken)).toBeNull();
     } finally {
+      handle.close();
+    }
+  });
+
+  it("passes the configured connector lane through Quick Connect", async () => {
+    const handle = database();
+    const lanes = new ConnectorHttpLaneRegistry({
+      createLane: (service) => new ConnectorHttpLane({ service }),
+    });
+    const clientTargets: unknown[] = [];
+    try {
+      const test = fixture(handle, { clientTargets, laneProvider: lanes });
+      await test.service.start({});
+      const lane = lanes.laneFor("jellyfin", "jellyfin-home");
+      expect(clientTargets[0]).toMatchObject({ connectorId: "jellyfin-home", lane });
+    } finally {
+      lanes.close();
       handle.close();
     }
   });

@@ -12,6 +12,7 @@ import type {
   RadarrLibraryMovieOwnership,
 } from "@omnifin/connectors/adapters/radarr";
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
+import { ConnectorHttpLane } from "@omnifin/connectors/http/connector-http-lane";
 import type { ApiKeyConnectorConfig } from "@omnifin/connectors/types";
 import {
   ROLE_PERMISSIONS,
@@ -33,6 +34,7 @@ import { playbackContextResponseSchema } from "@omnifin/contracts/playback";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AppConfig } from "../src/config.js";
+import { ConnectorHttpLaneRegistry } from "../src/connectors/http-lane-registry.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
 import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
 import { DiscoverySearchError } from "../src/discovery/search-service.js";
@@ -40,6 +42,7 @@ import {
   ContinueWatchingError,
   ContinueWatchingService,
   type ContinueWatchingClientFactoryInput,
+  type ContinueWatchingDependencies,
   LibraryConnectedActionError,
   type MediaArtworkError,
 } from "../src/media/continue-watching-service.js";
@@ -321,6 +324,7 @@ function harness(
         })
       | null
     >;
+    laneProvider?: ContinueWatchingDependencies["laneProvider"];
     withIdentity?: boolean;
   } = {},
 ) {
@@ -511,6 +515,7 @@ function harness(
   const service = new ContinueWatchingService(database, config, {
     clock: () => now,
     createClient,
+    ...(options.laneProvider === undefined ? {} : { laneProvider: options.laneProvider }),
     createRemovalOperationToken: options.createRemovalOperationToken ?? (() => "r".repeat(22)),
     createRemovalPreviewToken: options.createRemovalPreviewToken ?? (() => "d".repeat(22)),
     ...(options.createRadarrAdapter === undefined
@@ -3626,6 +3631,102 @@ describe("ContinueWatchingService", () => {
       );
     } finally {
       database.close();
+    }
+  });
+
+  it("keys persisted multi-connector media sources by connector lane", async () => {
+    const lanes = new ConnectorHttpLaneRegistry({
+      createLane: (service) => new ConnectorHttpLane({ service }),
+    });
+    const test = harness({ laneProvider: lanes });
+    try {
+      const secondConnectorId = "jellyfin-secondary";
+      const secondLinkId = "viewer-link-secondary";
+      const cipher = new EnvelopeCipher(test.config.encryptionKey);
+      test.database.db
+        .insert(connectorConfigs)
+        .values({
+          baseUrl: "https://jellyfin-secondary.example.test/",
+          createdAt: now,
+          displayName: "Secondary Jellyfin",
+          enabled: true,
+          encryptedCredentials: cipher.encrypt(
+            JSON.stringify({ credentials: { kind: "none" }, schemaVersion: 1 }),
+            `connector_credentials:jellyfin:${secondConnectorId}`,
+          ),
+          healthState: "healthy",
+          id: secondConnectorId,
+          tlsPolicy: "strict",
+          type: "jellyfin",
+          updatedAt: now,
+        })
+        .run();
+      test.database.db
+        .insert(users)
+        .values({
+          createdAt: now,
+          displayName: "Secondary viewer",
+          id: "viewer-user-secondary",
+          role: "viewer",
+          roleSource: "manual",
+          status: "active",
+          updatedAt: now,
+        })
+        .run();
+      test.database.db
+        .insert(serviceIdentityLinks)
+        .values({
+          connectorId: secondConnectorId,
+          createdAt: now,
+          deviceId: "viewer-device-secondary",
+          encryptedAccessToken: cipher.encrypt(
+            privateAccessToken,
+            `service_identity_access_token:jellyfin:${secondLinkId}`,
+          ),
+          externalDisplayName: "Secondary viewer",
+          externalServerId: "server-2",
+          externalUserId: "viewer-external-secondary",
+          externalUsername: "viewer-secondary",
+          healthState: "linked",
+          id: secondLinkId,
+          lastVerifiedAt: now,
+          revision: 1,
+          service: "jellyfin",
+          tokenCreatedAt: now,
+          updatedAt: now,
+          userId: "viewer-user-secondary",
+        })
+        .run();
+      const sourceB = sessionPrincipalSchema.parse({
+        ...principal(),
+        userId: "viewer-user-secondary",
+        linkedServices: [
+          {
+            ...principal().linkedServices[0]!,
+            id: secondLinkId,
+            externalUserId: "viewer-external-secondary",
+          },
+        ],
+      });
+      await test.service.read({ principal: principal() });
+      await test.service.read({ principal: sourceB });
+      await test.service.read({ principal: principal() });
+      const laneA = lanes.laneFor("jellyfin", "jellyfin-main");
+      const laneB = lanes.laneFor("jellyfin", secondConnectorId);
+      expect(laneA).not.toBe(laneB);
+      expect(
+        test.createClient.mock.calls.map(([input]) => ({
+          connectorId: input.connectorId,
+          lane: input.lane,
+        })),
+      ).toEqual([
+        { connectorId: "jellyfin-main", lane: laneA },
+        { connectorId: secondConnectorId, lane: laneB },
+        { connectorId: "jellyfin-main", lane: laneA },
+      ]);
+    } finally {
+      lanes.close();
+      test.database.close();
     }
   });
 });

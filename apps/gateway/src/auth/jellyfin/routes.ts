@@ -17,6 +17,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { randomUUID } from "node:crypto";
 
 import { SafeHttpError } from "../../http-error.js";
+import type { ConnectorHttpLaneLifecycle } from "../../connectors/http-lane-registry.js";
 import { clientNetworkGroup } from "../../security/client-network.js";
 import { privacyHash } from "../../security/crypto.js";
 import { requirePermission } from "../authorization.js";
@@ -51,6 +52,7 @@ const TRANSACTION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 export interface JellyfinRoutesOptions {
   dependencies?: JellyfinSignInServiceDependencies;
+  laneProvider?: ConnectorHttpLaneLifecycle;
   quickConnectDependencies?: JellyfinQuickConnectServiceDependencies;
 }
 
@@ -85,10 +87,12 @@ export const jellyfinRoutes: FastifyPluginAsync<JellyfinRoutesOptions> = async (
   const signIn = new JellyfinSignInService(app.database, app.appConfig, app.sessionService, {
     ...(options.dependencies ?? {}),
     invitationService: invitations,
+    laneProvider: options.laneProvider ?? app.connectorHttpLaneRegistry,
   });
   const quickConnect = new JellyfinQuickConnectService(app.database, app.appConfig, signIn, {
     ...(options.quickConnectDependencies ?? {}),
     invitationService: invitations,
+    laneProvider: options.laneProvider ?? app.connectorHttpLaneRegistry,
   });
   const globalCredentialRateLimit = app.createRateLimit({
     keyGenerator: () => "jellyfin-password-global:v1",

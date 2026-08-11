@@ -74,6 +74,7 @@ import { z, ZodError } from "zod";
 
 import { requirePermission } from "../auth/authorization.js";
 import type { AppConfig } from "../config.js";
+import type { ConnectorHttpLaneLifecycle } from "../connectors/http-lane-registry.js";
 import type { DatabaseHandle } from "../db/client.js";
 import { DiscoverySearchError, DiscoverySearchService } from "../discovery/search-service.js";
 import {
@@ -343,6 +344,7 @@ export interface ContinueWatchingClientFactoryInput extends ConnectorTargetConfi
 }
 
 export interface ContinueWatchingDependencies {
+  laneProvider?: ConnectorHttpLaneLifecycle;
   clock?: () => Date;
   createAuditToken?: () => string;
   createRemovalOperationToken?: () => string;
@@ -770,6 +772,7 @@ function viewingHistorySince(range: ViewingHistoryQuery["range"], now: Date) {
 }
 
 export class ContinueWatchingService {
+  readonly #laneProvider: ConnectorHttpLaneLifecycle | undefined;
   readonly #cipher: EnvelopeCipher;
   readonly #clock: () => Date;
   readonly #config: AppConfig;
@@ -800,6 +803,7 @@ export class ContinueWatchingService {
     dependencies: ContinueWatchingDependencies = {},
   ) {
     this.#database = database;
+    this.#laneProvider = dependencies.laneProvider;
     this.#config = config;
     this.#cipher = new EnvelopeCipher(config.encryptionKey);
     this.#clock = dependencies.clock ?? (() => new Date());
@@ -2224,6 +2228,9 @@ export class ContinueWatchingService {
         ...(maxResponseBytes === undefined ? {} : { maxResponseBytes }),
         tlsPolicy,
         ...secrets,
+        ...(this.#laneProvider === undefined
+          ? {}
+          : { lane: this.#laneProvider.laneFor("jellyfin", row.connectorId) }),
       });
     } catch (error) {
       throw new ContinueWatchingConfigurationError("invalid", { cause: error });

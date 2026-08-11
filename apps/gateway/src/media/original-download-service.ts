@@ -16,6 +16,7 @@ import { z } from "zod";
 
 import { requirePermission } from "../auth/authorization.js";
 import type { AppConfig } from "../config.js";
+import type { ConnectorHttpLaneLifecycle } from "../connectors/http-lane-registry.js";
 import type { DatabaseHandle } from "../db/client.js";
 import { EnvelopeCipher, hashToken, privacyHash, randomToken } from "../security/crypto.js";
 import {
@@ -101,6 +102,7 @@ type OriginalDownloadClient = Pick<
 >;
 
 export interface OriginalDownloadDependencies {
+  laneProvider?: ConnectorHttpLaneLifecycle;
   clock?: () => Date;
   createAuditToken?: () => string;
   createClient?: (input: OriginalDownloadClientFactoryInput) => OriginalDownloadClient;
@@ -223,6 +225,7 @@ function defaultClient(input: OriginalDownloadClientFactoryInput) {
 }
 
 export class OriginalDownloadService {
+  readonly #laneProvider: ConnectorHttpLaneLifecycle | undefined;
   readonly #activeByUser = new Map<string, number>();
   #activeGlobal = 0;
   readonly #cipher: EnvelopeCipher;
@@ -241,6 +244,7 @@ export class OriginalDownloadService {
     dependencies: OriginalDownloadDependencies = {},
   ) {
     this.#database = database;
+    this.#laneProvider = dependencies.laneProvider;
     this.#config = config;
     this.#cipher = new EnvelopeCipher(config.encryptionKey);
     this.#clock = dependencies.clock ?? (() => new Date());
@@ -612,6 +616,9 @@ export class OriginalDownloadService {
         insecureHttpApproved: row.insecureHttpApproved === 1,
         tlsPolicy,
         ...(typeof ca === "string" ? { tlsCaCertificatePem: ca } : {}),
+        ...(this.#laneProvider === undefined
+          ? {}
+          : { lane: this.#laneProvider.laneFor("jellyfin", row.connectorId) }),
       });
     } catch (error) {
       if (error instanceof OriginalDownloadError) throw error;

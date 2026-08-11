@@ -50,6 +50,7 @@ import { z } from "zod";
 import { requirePermission } from "../auth/authorization.js";
 import { sessionCookieName, writeSessionCookie } from "../auth/session-cookie.js";
 import { SafeHttpError } from "../http-error.js";
+import type { ConnectorHttpLaneLifecycle } from "../connectors/http-lane-registry.js";
 import {
   ContinueWatchingError,
   ContinueWatchingService,
@@ -306,13 +307,17 @@ function libraryRemovalError(error: LibraryRemovalError, reply: FastifyReply) {
 
 export interface ContinueWatchingRoutesOptions {
   dependencies?: ContinueWatchingDependencies;
+  laneProvider?: ConnectorHttpLaneLifecycle;
 }
 
 export const continueWatchingRoutes: FastifyPluginAsync<ContinueWatchingRoutesOptions> = async (
   app,
   options,
 ) => {
-  const service = new ContinueWatchingService(app.database, app.appConfig, options.dependencies);
+  const service = new ContinueWatchingService(app.database, app.appConfig, {
+    ...(options.dependencies ?? {}),
+    laneProvider: options.laneProvider ?? app.connectorHttpLaneRegistry,
+  });
 
   app.get(
     "/v1/media/continue-watching",

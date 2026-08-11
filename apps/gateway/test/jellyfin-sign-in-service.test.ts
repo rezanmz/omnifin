@@ -3,6 +3,7 @@ import type {
   JellyfinPublicSystemInfo,
 } from "@omnifin/connectors/auth/jellyfin-authentication-client";
 import { SafeConnectorError } from "@omnifin/connectors/http/safe-http-client";
+import { ConnectorHttpLane } from "@omnifin/connectors/http/connector-http-lane";
 import { eq } from "drizzle-orm";
 import { createHmac } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -14,7 +15,11 @@ import {
   bootstrapConfiguredJellyfinConnector,
   JellyfinConnectorConfigurationError,
 } from "../src/auth/jellyfin/connector-registry.js";
-import { JellyfinSignInService } from "../src/auth/jellyfin/sign-in-service.js";
+import {
+  JellyfinSignInService,
+  type JellyfinSignInServiceDependencies,
+} from "../src/auth/jellyfin/sign-in-service.js";
+import { ConnectorHttpLaneRegistry } from "../src/connectors/http-lane-registry.js";
 import { SessionService } from "../src/auth/session-service.js";
 import type { AppConfig } from "../src/config.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
@@ -114,6 +119,8 @@ function service(
   options: {
     afterPublicInfo?: () => void;
     authentication?: JellyfinAuthenticationResult | Error;
+    clientTargets?: unknown[];
+    laneProvider?: JellyfinSignInServiceDependencies["laneProvider"];
     publicInfo?: JellyfinPublicSystemInfo | Error;
   } = {},
 ) {
@@ -121,20 +128,24 @@ function service(
   const sessions = new SessionService(handle, appConfig, { clock: () => new Date(NOW) });
   const signIn = new JellyfinSignInService(handle, appConfig, sessions, {
     clock: () => new Date(NOW),
-    createClient: () => ({
-      authenticateByName: async () => {
-        options.afterPublicInfo?.();
-        const result = options.authentication ?? authentication();
-        if (result instanceof Error) throw result;
-        return result;
-      },
-      getPublicSystemInfo: async () => {
-        const result = options.publicInfo ?? publicInfo();
-        if (result instanceof Error) throw result;
-        return result;
-      },
-    }),
+    createClient: (target) => {
+      options.clientTargets?.push(target);
+      return {
+        authenticateByName: async () => {
+          options.afterPublicInfo?.();
+          const result = options.authentication ?? authentication();
+          if (result instanceof Error) throw result;
+          return result;
+        },
+        getPublicSystemInfo: async () => {
+          const result = options.publicInfo ?? publicInfo();
+          if (result instanceof Error) throw result;
+          return result;
+        },
+      };
+    },
     createDeviceId: () => "omnifin-device-1",
+    ...(options.laneProvider === undefined ? {} : { laneProvider: options.laneProvider }),
   });
   return { sessions, signIn };
 }
@@ -1184,6 +1195,26 @@ describe("bootstrapConfiguredJellyfinConnector", () => {
         "https://jellyfin.example.test",
       );
     } finally {
+      handle.close();
+    }
+  });
+
+  it("passes the configured connector lane to the authentication client boundary", async () => {
+    const handle = database();
+    seedConnector(handle);
+    const lanes = new ConnectorHttpLaneRegistry({
+      createLane: (service) => new ConnectorHttpLane({ service }),
+    });
+    const clientTargets: unknown[] = [];
+    try {
+      await service(handle, { clientTargets, laneProvider: lanes }).signIn.signInWithPassword(
+        credentials(),
+      );
+      const lane = lanes.laneFor("jellyfin", "jellyfin-home");
+      expect(clientTargets).toHaveLength(1);
+      expect(clientTargets[0]).toMatchObject({ connectorId: "jellyfin-home", lane });
+    } finally {
+      lanes.close();
       handle.close();
     }
   });

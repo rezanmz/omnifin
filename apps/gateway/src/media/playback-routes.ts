@@ -15,6 +15,7 @@ import { z } from "zod";
 import { requirePermission } from "../auth/authorization.js";
 import { sessionCookieName, writeSessionCookie } from "../auth/session-cookie.js";
 import { SafeHttpError } from "../http-error.js";
+import type { ConnectorHttpLaneLifecycle } from "../connectors/http-lane-registry.js";
 import { MAX_PLAYBACK_ASSET_TOKEN_LENGTH } from "./playback-limits.js";
 import {
   PlaybackSessionError,
@@ -143,10 +144,14 @@ function playbackError(error: PlaybackSessionError) {
 
 export interface PlaybackRoutesOptions {
   dependencies?: PlaybackSessionDependencies;
+  laneProvider?: ConnectorHttpLaneLifecycle;
 }
 
 export const playbackRoutes: FastifyPluginAsync<PlaybackRoutesOptions> = async (app, options) => {
-  const playback = new PlaybackSessionService(app.database, app.appConfig, options.dependencies);
+  const playback = new PlaybackSessionService(app.database, app.appConfig, {
+    ...(options.dependencies ?? {}),
+    laneProvider: options.laneProvider ?? app.connectorHttpLaneRegistry,
+  });
 
   function readPrincipal(request: FastifyRequest, reply: FastifyReply) {
     const session = app.sessionService.resolveAndRefresh(

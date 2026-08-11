@@ -6,6 +6,7 @@ import {
   type JellyfinPlaybackSourceSelection,
   type JellyfinPlaybackTarget,
 } from "@omnifin/connectors/media/jellyfin-playback-client";
+import { ConnectorHttpLane } from "@omnifin/connectors/http/connector-http-lane";
 import type { ConnectorTransport } from "@omnifin/connectors/types";
 import { ROLE_PERMISSIONS, sessionPrincipalSchema } from "@omnifin/contracts/auth";
 import {
@@ -15,6 +16,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import type { AppConfig } from "../src/config.js";
+import { ConnectorHttpLaneRegistry } from "../src/connectors/http-lane-registry.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
 import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
 import { MediaReferenceService } from "../src/media/media-reference-service.js";
@@ -270,6 +272,7 @@ function harness(
     | "clock"
     | "createAssetToken"
     | "createToken"
+    | "laneProvider"
     | "playbackTransferLimits"
   > = {},
 ) {
@@ -332,6 +335,9 @@ function harness(
     createClient,
     createAssetToken,
     createToken: dependencyOverrides.createToken ?? (() => "p".repeat(22)),
+    ...(dependencyOverrides.laneProvider === undefined
+      ? {}
+      : { laneProvider: dependencyOverrides.laneProvider }),
     ...(dependencyOverrides.playbackTransferLimits === undefined
       ? {}
       : { playbackTransferLimits: dependencyOverrides.playbackTransferLimits }),
@@ -2263,6 +2269,21 @@ describe("PlaybackSessionService", () => {
     } finally {
       fetchGate.resolve(undefined);
       database.close();
+    }
+  });
+
+  it("passes the persisted source connector lane to negotiation and reporting clients", async () => {
+    const lanes = new ConnectorHttpLaneRegistry({
+      createLane: (service) => new ConnectorHttpLane({ service }),
+    });
+    const test = harness(undefined, "movie", { laneProvider: lanes });
+    try {
+      await test.service.negotiate({ principal: principal() }, test.reference, negotiation);
+      const lane = lanes.laneFor("jellyfin", "jellyfin-main");
+      expect(test.createClient).toHaveBeenCalledWith(expect.objectContaining({ lane }));
+    } finally {
+      lanes.close();
+      test.database.close();
     }
   });
 });

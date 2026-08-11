@@ -2,6 +2,7 @@ import type {
   JellyfinOriginalDownloadMetadata,
   JellyfinOriginalDownloadStream,
 } from "@omnifin/connectors/media/jellyfin-user-media-client";
+import { ConnectorHttpLane } from "@omnifin/connectors/http/connector-http-lane";
 import {
   ROLE_PERMISSIONS,
   sessionPrincipalSchema,
@@ -13,10 +14,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
 import type { AppConfig } from "../src/config.js";
+import { ConnectorHttpLaneRegistry } from "../src/connectors/http-lane-registry.js";
 import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
 import {
   OriginalDownloadError,
   OriginalDownloadService,
+  type OriginalDownloadDependencies,
 } from "../src/media/original-download-service.js";
 import { MediaReferenceService } from "../src/media/media-reference-service.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
@@ -55,7 +58,7 @@ function asRole(principal: SessionPrincipal, role: Role) {
   });
 }
 
-async function harness() {
+async function harness(laneProvider?: OriginalDownloadDependencies["laneProvider"]) {
   const config = testConfig();
   let sessionId = 0;
   let sessionToken = 0;
@@ -168,10 +171,14 @@ async function harness() {
     contentType: "video/x-matroska",
     status: 206,
   }));
-  const createClient = vi.fn(() => ({
-    readOriginalDownloadMetadata,
-    streamOriginalDownload,
-  }));
+  const clientInputs: unknown[] = [];
+  const createClient = vi.fn((input) => {
+    clientInputs.push(input);
+    return {
+      readOriginalDownloadMetadata,
+      streamOriginalDownload,
+    };
+  });
   let auditToken = 0;
   let grantToken = 0;
   let internalToken = 0;
@@ -181,10 +188,12 @@ async function harness() {
     createGrantToken: () => String(++grantToken).padStart(22, "g"),
     createInternalToken: () => String(++internalToken).padStart(22, "i"),
     createClient,
+    ...(laneProvider === undefined ? {} : { laneProvider }),
   });
   return {
     app,
     createClient,
+    clientInputs,
     metadata,
     readOriginalDownloadMetadata,
     referenceId,
@@ -559,6 +568,21 @@ describe("OriginalDownloadService", () => {
         test.service.open(corrupt.grantId, undefined, { principal: test.session.principal }),
       ).rejects.toMatchObject({ reason: "storage_failure" });
     } finally {
+      await test.app.close();
+    }
+  });
+
+  it("passes the persisted source connector lane to download clients", async () => {
+    const lanes = new ConnectorHttpLaneRegistry({
+      createLane: (service) => new ConnectorHttpLane({ service }),
+    });
+    const test = await harness(lanes);
+    try {
+      await test.service.prepare(test.referenceId, { principal: test.session.principal });
+      const lane = lanes.laneFor("jellyfin", "jellyfin-main");
+      expect(test.clientInputs[0]).toMatchObject({ lane });
+    } finally {
+      lanes.close();
       await test.app.close();
     }
   });
