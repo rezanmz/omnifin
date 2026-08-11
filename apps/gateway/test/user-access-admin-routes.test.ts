@@ -536,6 +536,40 @@ describe("user access administration routes", () => {
           .all()
           .find((session) => session.id === duplicateSession.principal.sessionId)?.revokedAt,
       ).toBeNull();
+
+      const differentRoleSession = app.sessionService.createSession({
+        attribution: {
+          authMethod: "oidc",
+          externalIdentityId: "oidc-target-identity",
+          oidcProviderId: "oidc-home",
+          userId: "oidc-target",
+        },
+      });
+      const differentRole = await app.inject({
+        body: { expectedUpdatedAt: now.toISOString(), role: "requester" },
+        headers: mutationHeaders(admin),
+        method: "POST",
+        url,
+      });
+      expect(differentRole.statusCode, differentRole.body).toBe(409);
+      expect(differentRole.json()).toMatchObject({
+        error: { code: "oidc_role_mapping_conflict" },
+      });
+      expect(app.database.db.select().from(roleMappings).all()).toHaveLength(1);
+      expect(
+        app.database.db
+          .select()
+          .from(sessions)
+          .all()
+          .find((session) => session.id === differentRoleSession.principal.sessionId)?.revokedAt,
+      ).toBeNull();
+      expect(
+        app.database.sqlite
+          .prepare(
+            "select count(*) as count from audit_events where event_type = 'auth.oidc.role_mapping.created'",
+          )
+          .get(),
+      ).toEqual({ count: 1 });
     } finally {
       await app.close();
     }

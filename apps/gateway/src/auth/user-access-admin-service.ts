@@ -396,6 +396,23 @@ export class UserAccessAdminService {
             throw new UserAccessAdminError("oidc_identity_unavailable");
           }
 
+          const existingFallback = this.#database.sqlite
+            .prepare(
+              `select id
+               from role_mappings
+               where provider_id = ?
+                 and claim_path_json = ?
+                 and operator = 'equals'
+                 and values_json = ?
+                 and priority = 0
+                 and enabled = 1
+               limit 1`,
+            )
+            .get(identity.providerId, '["sub"]', JSON.stringify([identity.subject]));
+          if (existingFallback !== undefined) {
+            throw new UserAccessAdminError("mapping_conflict");
+          }
+
           let mapping: ReturnType<OidcRoleMappingAdminService["createInExistingTransaction"]>;
           try {
             mapping = this.#oidcRoleMappings.createInExistingTransaction(
