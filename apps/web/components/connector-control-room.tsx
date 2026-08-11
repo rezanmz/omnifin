@@ -368,7 +368,11 @@ function DetailWorkspace({
       </div>
 
       {connector.service === "jellyfin" ? (
-        <JellyfinProvisioningSettings key={connector.id} connector={connector} csrfToken={csrfToken} />
+        <JellyfinProvisioningSettings
+          key={connector.id}
+          connector={connector}
+          csrfToken={csrfToken}
+        />
       ) : null}
 
       <section className={styles.dangerZone}>

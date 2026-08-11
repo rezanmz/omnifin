@@ -232,7 +232,10 @@ export interface ConnectorAdminClient {
 
 export interface JellyfinProvisioningClient {
   get(connectorId: string, signal?: AbortSignal): Promise<JellyfinProvisioningConfig>;
-  templates(connectorId: string, signal?: AbortSignal): Promise<JellyfinProvisioningTemplatesResponse>;
+  templates(
+    connectorId: string,
+    signal?: AbortSignal,
+  ): Promise<JellyfinProvisioningTemplatesResponse>;
   update(
     connectorId: string,
     input: JellyfinProvisioningReplaceRequest,
