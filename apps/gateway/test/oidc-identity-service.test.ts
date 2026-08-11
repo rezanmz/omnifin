@@ -881,6 +881,24 @@ describe("OidcIdentityService", () => {
     });
     jit.database.close();
 
+    const invited = createHarness("invite-with-jit-disabled-fixture");
+    seedProvider(invited.database, { allowJitProvisioning: false });
+    expect(
+      await resolve(invited.database, invited.service, claims({ sub: "invited-subject" }), {
+        invited: true,
+      }),
+    ).toMatchObject({ provisioned: true, status: "resolved" });
+    invited.database.close();
+
+    const jitEnabled = createHarness("jit-enabled-fixture");
+    seedProvider(jitEnabled.database, { allowJitProvisioning: true });
+    expect(
+      await resolve(jitEnabled.database, jitEnabled.service, claims({ sub: "jit-subject" }), {
+        invited: false,
+      }),
+    ).toMatchObject({ provisioned: true, status: "resolved" });
+    jitEnabled.database.close();
+
     const unchecked = createHarness("provider-unchecked-fixture");
     seedProvider(unchecked.database, {
       discoveryCapabilitiesJson: "{}",
@@ -996,7 +1014,7 @@ describe("OidcIdentityService", () => {
 
   it("requires a usable Jellyfin link for active accounts", async () => {
     const { database, service } = createHarness();
-    seedProvider(database);
+    seedProvider(database, { allowJitProvisioning: false });
     seedIdentity(database, { status: "active" });
 
     expect(await resolve(database, service, claims())).toEqual({

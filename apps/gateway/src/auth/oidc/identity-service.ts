@@ -574,7 +574,11 @@ export class OidcIdentityService {
       .get(provider.issuer, identity.claims.subject) as ExistingIdentityRow | undefined;
 
     if (!existing) {
-      if (!administratorBootstrap && registration === undefined) {
+      if (
+        !administratorBootstrap &&
+        registration === undefined &&
+        provider.allowJitProvisioning !== 1
+      ) {
         return this.deny("jit_provisioning_disabled");
       }
       if (!administratorBootstrap && expectedResolution.role === "admin") {
