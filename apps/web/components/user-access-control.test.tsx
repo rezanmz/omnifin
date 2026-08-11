@@ -72,7 +72,7 @@ const oidcViewer: UserAccessSummary = {
   displayName: "OIDC Morgan",
   id: "oidc-viewer-user",
   jellyfinLinkHealth: null,
-  roleSource: "oidc_mapping",
+  roleSource: "default",
 };
 
 function readyOutcome(
@@ -119,13 +119,15 @@ describe("UserAccessControl", () => {
     await user.click(screen.getByRole("button", { name: /OIDC Morgan/i }));
     await user.click(screen.getByRole("button", { name: "Assign individual provider role" }));
     expect(screen.getByText(/after the target's next OIDC sign-in/i)).toBeVisible();
-    const wizard = screen.getByRole("heading", { name: "Assign an individual role" }).closest("section");
+    const wizard = screen
+      .getByRole("heading", { name: "Assign an individual role" })
+      .closest("section");
     expect(wizard).not.toBeNull();
     await user.click(within(wizard!).getByRole("button", { name: /operator.*Manage requests/i }));
     await user.click(within(wizard!).getByRole("button", { name: "Continue" }));
-    expect(within(wizard!).getByRole("region", { name: "Review role assignment" })).toHaveTextContent(
-      "Higher-priority provider mappings may override it",
-    );
+    expect(
+      within(wizard!).getByRole("region", { name: "Review role assignment" }),
+    ).toHaveTextContent("Higher-priority provider mappings may override it");
     await user.click(within(wizard!).getByRole("button", { name: "Apply provider role" }));
 
     await waitFor(() =>

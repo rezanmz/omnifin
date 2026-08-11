@@ -18,6 +18,10 @@ function roleLabel(role: Role) {
   return role.charAt(0).toUpperCase() + role.slice(1);
 }
 
+function sourceLabel(user: UserAccessSummary) {
+  return user.roleSource === "default" ? "Default role" : "OIDC mapping";
+}
+
 export function UserRoleAssignmentWizard({
   busy,
   onCancel,
@@ -63,7 +67,7 @@ export function UserRoleAssignmentWizard({
           <dl className={styles.assignmentFacts}>
             <div>
               <dt>Current source</dt>
-              <dd>OIDC mapping</dd>
+              <dd>{sourceLabel(user)}</dd>
             </div>
             <div>
               <dt>Current effective role</dt>
@@ -95,8 +99,9 @@ export function UserRoleAssignmentWizard({
             </div>
           </fieldset>
           <p className={styles.assignmentLimitations}>
-            This applies after the target&apos;s next OIDC sign-in. A higher-priority provider mapping
-            may override this assignment.
+            This applies after the target&apos;s next OIDC sign-in. A higher-priority provider
+            mapping may override this assignment. Saving may close affected provider-managed
+            sessions.
           </p>
         </>
       ) : (
@@ -107,7 +112,7 @@ export function UserRoleAssignmentWizard({
           <dl className={styles.assignmentFacts}>
             <div>
               <dt>Current source</dt>
-              <dd>OIDC mapping</dd>
+              <dd>{sourceLabel(user)}</dd>
             </div>
             <div>
               <dt>Current effective role</dt>
@@ -120,7 +125,8 @@ export function UserRoleAssignmentWizard({
           </dl>
           <p className={styles.assignmentLimitations}>
             The assignment takes effect after the target&apos;s next OIDC sign-in. Higher-priority
-            provider mappings may override it. The exact effective mapping cannot be determined here.
+            provider mappings may override it. Saving may close affected provider-managed sessions;
+            the exact effective mapping cannot be determined here.
           </p>
         </div>
       )}
@@ -155,7 +161,11 @@ export function UserRoleAssignmentWizard({
             onClick={() => void onSubmit(assignmentRole)}
             type="button"
           >
-            {busy ? <LoaderCircle aria-hidden="true" className={styles.spinner} size={16} /> : <ShieldCheck aria-hidden="true" size={16} />}
+            {busy ? (
+              <LoaderCircle aria-hidden="true" className={styles.spinner} size={16} />
+            ) : (
+              <ShieldCheck aria-hidden="true" size={16} />
+            )}
             {busy ? "Assigning role…" : "Apply provider role"}
           </button>
         )}

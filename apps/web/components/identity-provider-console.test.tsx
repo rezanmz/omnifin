@@ -165,7 +165,10 @@ describe("IdentityProviderConsole", () => {
     }));
     render(
       <IdentityProviderConsole
-        client={client({ deleteRoleMapping, listRoleMappings: vi.fn(async () => [redactedSubjectMapping]) })}
+        client={client({
+          deleteRoleMapping,
+          listRoleMappings: vi.fn(async () => [redactedSubjectMapping]),
+        })}
         initialMappings={{ [provider.id]: [redactedSubjectMapping] }}
         initialOutcome={ready()}
         publicBaseUrl="https://omnifin.example.test/"
@@ -177,7 +180,11 @@ describe("IdentityProviderConsole", () => {
     await user.click(screen.getByRole("button", { name: "Remove protected subject mapping" }));
     await user.click(screen.getByRole("button", { name: "Remove" }));
     await waitFor(() =>
-      expect(deleteRoleMapping).toHaveBeenCalledWith(provider.id, redactedSubjectMapping.id, csrfToken),
+      expect(deleteRoleMapping).toHaveBeenCalledWith(
+        provider.id,
+        redactedSubjectMapping.id,
+        csrfToken,
+      ),
     );
   });
 

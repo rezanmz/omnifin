@@ -77,7 +77,7 @@ const oidcViewer = {
   displayName: "OIDC Morgan",
   id: "oidc-morgan",
   jellyfinLinkHealth: null,
-  roleSource: "oidc_mapping",
+  roleSource: "default",
 } as const;
 
 async function mockAdministrationReads(page: Page, users: readonly object[] = [admin, viewer]) {
@@ -174,18 +174,23 @@ test("assigns an OIDC individual fallback without exposing identity subjects", a
   await page.goto("/settings/users");
   await page.getByRole("button", { name: /OIDC Morgan/i }).click();
   await page.getByRole("button", { name: "Assign individual provider role" }).click();
-  await page.getByRole("button", { name: /operator.*Manage requests/i }).last().click();
+  await page
+    .getByRole("button", { name: /operator.*Manage requests/i })
+    .last()
+    .click();
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("region", { name: "Review role assignment" })).toContainText(
     "next OIDC sign-in",
   );
   await page.getByRole("button", { name: "Apply provider role" }).click();
 
-  await expect.poll(() => assignment).toEqual({
-    body: { expectedUpdatedAt: oidcViewer.updatedAt, role: "operator" },
-    csrf: csrfToken,
-    method: "POST",
-  });
+  await expect
+    .poll(() => assignment)
+    .toEqual({
+      body: { expectedUpdatedAt: oidcViewer.updatedAt, role: "operator" },
+      csrf: csrfToken,
+      method: "POST",
+    });
   await expect(page.getByRole("status")).toContainText("next OIDC sign-in");
   await expect(page.locator("body")).not.toContainText("providerId");
   await expect(page.locator("body")).not.toContainText("subject");
