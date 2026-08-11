@@ -1,5 +1,7 @@
 import {
   AUTH_USERS_PAGE_MAX_COUNT,
+  oidcRoleAssignmentRequestSchema,
+  oidcRoleAssignmentResponseSchema,
   userAccessListQuerySchema,
   userAccessListResponseSchema,
   userAccessMutationParamsSchema,
@@ -126,6 +128,34 @@ function administrationError(error: UserAccessAdminError): SafeHttpError {
         cause: error,
         code: "last_active_admin_required",
         message: "At least one active administrator must remain.",
+        statusCode: 409,
+      });
+    case "mapping_conflict":
+      return new SafeHttpError({
+        cause: error,
+        code: "oidc_role_mapping_conflict",
+        message: "An equivalent role mapping already exists.",
+        statusCode: 409,
+      });
+    case "mapping_limit_reached":
+      return new SafeHttpError({
+        cause: error,
+        code: "oidc_role_mapping_limit_reached",
+        message: "The identity provider role mapping limit has been reached.",
+        statusCode: 409,
+      });
+    case "oidc_identity_unavailable":
+      return new SafeHttpError({
+        cause: error,
+        code: "oidc_identity_unavailable",
+        message: "The account does not have one usable OIDC identity.",
+        statusCode: 409,
+      });
+    case "oidc_role_assignment_unavailable":
+      return new SafeHttpError({
+        cause: error,
+        code: "oidc_role_assignment_unavailable",
+        message: "This account cannot receive a provider role assignment.",
         statusCode: 409,
       });
     case "no_effect":
@@ -286,6 +316,77 @@ export const userAccessAdminRoutes: FastifyPluginAsync<UserAccessAdminRoutesOpti
             requestId: request.id,
           }),
         );
+      } catch (error) {
+        if (error instanceof UserAccessAdminError) throw administrationError(error);
+        throw error;
+      }
+    },
+  );
+
+  app.post(
+    "/v1/admin/users/:userId/oidc-role-assignment",
+    {
+      bodyLimit: 4 * 1_024,
+      config: {
+        omnifinSecurity: { kind: "session" },
+        rateLimit: { max: 20, timeWindow: "1 minute" },
+      },
+      onSend: noStore,
+      schema: {
+        params: {
+          type: "object",
+          additionalProperties: false,
+          required: ["userId"],
+          properties: { userId: identifierJsonSchema },
+        },
+        body: {
+          type: "object",
+          additionalProperties: true,
+          required: ["expectedUpdatedAt", "role"],
+          properties: {
+            expectedUpdatedAt: dateTimeJsonSchema,
+            role: { enum: ["viewer", "requester", "operator", "admin"] },
+          },
+        },
+        response: {
+          201: {
+            type: "object",
+            additionalProperties: false,
+            required: [
+              "effectiveAfter",
+              "fallbackPrecedence",
+              "mappingId",
+              "priority",
+              "revokedSessions",
+              "role",
+            ],
+            properties: {
+              effectiveAfter: { const: "next_oidc_sign_in" },
+              fallbackPrecedence: { const: "lowest" },
+              mappingId: identifierJsonSchema,
+              priority: { const: 0 },
+              revokedSessions: { type: "integer", minimum: 0, maximum: 2_147_483_647 },
+              role: { enum: ["viewer", "requester", "operator", "admin"] },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const principal = requireUserAccessPermission(
+        request.server.sessionService.resolveValidatedSessionPrincipal(request.validatedSession),
+        "roles.manage",
+      );
+      const { userId } = userAccessMutationParamsSchema.parse(request.params);
+      const input = oidcRoleAssignmentRequestSchema.parse(request.body);
+      try {
+        const result = access.assignOidcRole(userId, input, {
+          ipAddress: request.ip,
+          principal,
+          requestId: request.id,
+        });
+        reply.status(201);
+        return oidcRoleAssignmentResponseSchema.parse(result);
       } catch (error) {
         if (error instanceof UserAccessAdminError) throw administrationError(error);
         throw error;

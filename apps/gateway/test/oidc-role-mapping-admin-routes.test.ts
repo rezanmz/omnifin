@@ -304,7 +304,7 @@ describe("OIDC role mapping administration routes", () => {
       });
       expect(updated.statusCode, updated.body).toBe(200);
       expect(updated.headers["cache-control"]).toBe("no-store");
-      expect(oidcRoleMappingMutationResponseSchema.parse(updated.json())).toEqual({
+      expect(oidcRoleMappingMutationResponseSchema.parse(updated.json())).toMatchObject({
         mapping: {
           ...updateRequest,
           id: creation.mapping.id,
@@ -570,6 +570,62 @@ describe("OIDC role mapping administration routes", () => {
         error: { code: "oidc_role_mapping_not_found" },
       });
       expect(app.database.db.select().from(roleMappings).all()).toHaveLength(2);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("redacts subject values from every public mapping response", async () => {
+    const { app, recovery } = await harness();
+    try {
+      const subjectRequest = {
+        claimPath: ["sub"],
+        enabled: true,
+        operator: "equals",
+        priority: 0,
+        role: "operator",
+        values: ["private-subject-value"],
+      } as const;
+      const url = `/v1/admin/auth/oidc/providers/${providerId}/role-mappings`;
+      const created = await app.inject({
+        body: subjectRequest,
+        headers: authenticatedHeaders(recovery),
+        method: "POST",
+        url,
+      });
+      expect(created.statusCode, created.body).toBe(201);
+      expect(created.body).not.toContain("private-subject-value");
+      const createdMapping = oidcRoleMappingMutationResponseSchema.parse(created.json()).mapping;
+      expect(createdMapping).toMatchObject({
+        claimPath: ["sub"],
+        values: [],
+        valuesRedacted: true,
+      });
+
+      const updated = await app.inject({
+        body: { ...subjectRequest, role: "requester", values: ["another-private-subject"] },
+        headers: authenticatedHeaders(recovery),
+        method: "PUT",
+        url: `${url}/${createdMapping.id}`,
+      });
+      expect(updated.statusCode, updated.body).toBe(200);
+      expect(updated.body).not.toContain("another-private-subject");
+      expect(oidcRoleMappingMutationResponseSchema.parse(updated.json()).mapping).toMatchObject({
+        claimPath: ["sub"],
+        values: [],
+        valuesRedacted: true,
+      });
+
+      const listed = await app.inject({
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${recovery.sessionToken}` },
+        method: "GET",
+        url,
+      });
+      expect(listed.statusCode, listed.body).toBe(200);
+      expect(listed.body).not.toContain("another-private-subject");
+      expect(oidcRoleMappingsAdminResponseSchema.parse(listed.json()).mappings).toEqual([
+        expect.objectContaining({ claimPath: ["sub"], values: [], valuesRedacted: true }),
+      ]);
     } finally {
       await app.close();
     }

@@ -156,6 +156,35 @@ export class OidcRoleMappingAdminService {
     if (!validIdentifier(providerId) || !parsed.success || !this.#validContext(context)) {
       throw new OidcRoleMappingAdminError("integrity_failure");
     }
+    let result: OidcRoleMappingMutationResult | undefined;
+    try {
+      this.#database.sqlite
+        .transaction(() => {
+          result = this.createInExistingTransaction(providerId, parsed.data, context);
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof OidcRoleMappingAdminError) throw error;
+      throw new OidcRoleMappingAdminError("storage_failure", { cause: error });
+    }
+    if (!result) throw new OidcRoleMappingAdminError("integrity_failure");
+    return result;
+  }
+
+  public createInExistingTransaction(
+    providerId: string,
+    input: OidcRoleMappingCreateRequest,
+    context: OidcRoleMappingAdminContext,
+  ): OidcRoleMappingMutationResult {
+    const parsed = oidcRoleMappingCreateRequestSchema.safeParse(input);
+    if (
+      !this.#database.sqlite.inTransaction ||
+      !validIdentifier(providerId) ||
+      !parsed.success ||
+      !this.#validContext(context)
+    ) {
+      throw new OidcRoleMappingAdminError("integrity_failure");
+    }
     const mappingId = this.#nextIdentifier("mapping");
     const auditId = this.#nextIdentifier("audit");
     const now = this.#currentTime();
@@ -163,83 +192,75 @@ export class OidcRoleMappingAdminService {
     const normalizedValues = canonicalValues(configuration);
     const claimPathJson = JSON.stringify(configuration.claimPath);
     const valuesJson = JSON.stringify(normalizedValues);
-    let revokedSessions = 0;
 
-    try {
-      this.#database.sqlite
-        .transaction(() => {
-          if (!this.#providerExists(providerId)) {
-            throw new OidcRoleMappingAdminError("provider_not_found");
-          }
-          const count = this.#database.sqlite
-            .prepare("select count(*) as count from role_mappings where provider_id = ?")
-            .get(providerId) as { count: number };
-          if (!Number.isSafeInteger(count.count) || count.count < 0) {
-            throw new OidcRoleMappingAdminError("integrity_failure");
-          }
-          if (count.count >= OIDC_ROLE_MAPPINGS_MAX_COUNT) {
-            throw new OidcRoleMappingAdminError("mapping_limit_reached");
-          }
-          const conflict = this.#database.sqlite
-            .prepare(
-              `select id from role_mappings
-               where provider_id = ?
-                 and claim_path_json = ?
-                 and operator = ?
-                 and values_json = ?
-                 and role = ?
-                 and priority = ?
-                 and enabled = ?
-               limit 1`,
-            )
-            .get(
-              providerId,
-              claimPathJson,
-              configuration.operator,
-              valuesJson,
-              configuration.role,
-              configuration.priority,
-              configuration.enabled ? 1 : 0,
-            );
-          if (conflict) throw new OidcRoleMappingAdminError("mapping_conflict");
-
-          this.#database.db
-            .insert(roleMappings)
-            .values({
-              claimPathJson,
-              createdAt: now,
-              enabled: configuration.enabled,
-              id: mappingId,
-              operator: configuration.operator,
-              priority: configuration.priority,
-              providerId,
-              role: configuration.role,
-              updatedAt: now,
-              valuesJson,
-            })
-            .run();
-          revokedSessions = this.#revokeAffectedSessions(providerId, now);
-          this.#insertAudit(
-            auditId,
-            "auth.oidc.role_mapping.created",
-            mappingId,
-            providerId,
-            configuration,
-            revokedSessions,
-            context,
-            now,
-          );
-        })
-        .immediate();
-    } catch (error) {
-      if (error instanceof OidcRoleMappingAdminError) throw error;
-      throw new OidcRoleMappingAdminError("storage_failure", { cause: error });
+    if (!this.#providerExists(providerId)) {
+      throw new OidcRoleMappingAdminError("provider_not_found");
     }
+    const count = this.#database.sqlite
+      .prepare("select count(*) as count from role_mappings where provider_id = ?")
+      .get(providerId) as { count: number };
+    if (!Number.isSafeInteger(count.count) || count.count < 0) {
+      throw new OidcRoleMappingAdminError("integrity_failure");
+    }
+    if (count.count >= OIDC_ROLE_MAPPINGS_MAX_COUNT) {
+      throw new OidcRoleMappingAdminError("mapping_limit_reached");
+    }
+    const conflict = this.#database.sqlite
+      .prepare(
+        `select id from role_mappings
+         where provider_id = ?
+           and claim_path_json = ?
+           and operator = ?
+           and values_json = ?
+           and role = ?
+           and priority = ?
+           and enabled = ?
+         limit 1`,
+      )
+      .get(
+        providerId,
+        claimPathJson,
+        configuration.operator,
+        valuesJson,
+        configuration.role,
+        configuration.priority,
+        configuration.enabled ? 1 : 0,
+      );
+    if (conflict) throw new OidcRoleMappingAdminError("mapping_conflict");
 
-    return {
-      mapping: this.#get(providerId, mappingId),
+    this.#database.db
+      .insert(roleMappings)
+      .values({
+        claimPathJson,
+        createdAt: now,
+        enabled: configuration.enabled,
+        id: mappingId,
+        operator: configuration.operator,
+        priority: configuration.priority,
+        providerId,
+        role: configuration.role,
+        updatedAt: now,
+        valuesJson,
+      })
+      .run();
+    const revokedSessions = this.#revokeAffectedSessions(providerId, now);
+    this.#insertAudit(
+      auditId,
+      "auth.oidc.role_mapping.created",
+      mappingId,
+      providerId,
+      configuration,
       revokedSessions,
-    };
+      context,
+      now,
+    );
+    const row = this.#database.db
+      .select()
+      .from(roleMappings)
+      .where(and(eq(roleMappings.id, mappingId), eq(roleMappings.providerId, providerId)))
+      .get();
+    if (!row) throw new OidcRoleMappingAdminError("integrity_failure");
+    return { mapping: presentMapping(row), revokedSessions };
   }
 
   public update(
