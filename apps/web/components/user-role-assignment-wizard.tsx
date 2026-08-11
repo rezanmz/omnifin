@@ -105,7 +105,7 @@ export function UserRoleAssignmentWizard({
           </p>
         </>
       ) : (
-        <div className={styles.assignmentReview} role="region" aria-label="Review role assignment">
+        <div className={styles.assignmentReview}>
           <p>
             <strong>{user.displayName}</strong> will receive a server-owned provider fallback.
           </p>

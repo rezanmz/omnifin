@@ -155,9 +155,10 @@ describe("UserAccessControl", () => {
     expect(wizard).not.toBeNull();
     await user.click(within(wizard!).getByRole("button", { name: /operator.*Manage requests/i }));
     await user.click(within(wizard!).getByRole("button", { name: "Continue" }));
+    expect(screen.getAllByRole("region", { name: "Review role assignment" })).toHaveLength(1);
     expect(
-      within(wizard!).getByRole("region", { name: "Review role assignment" }),
-    ).toHaveTextContent("Higher-priority provider mappings may override it");
+      within(wizard!).getByText(/Higher-priority provider mappings may override it/i),
+    ).toBeVisible();
     await user.click(within(wizard!).getByRole("button", { name: "Apply provider role" }));
 
     await waitFor(() =>
