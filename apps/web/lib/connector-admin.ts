@@ -5,6 +5,11 @@ import type {
   ConnectorDeleteResponse,
   ConnectorUpdateRequest,
 } from "@omnifin/contracts/connectors";
+import type {
+  JellyfinProvisioningConfig,
+  JellyfinProvisioningReplaceRequest,
+  JellyfinProvisioningTemplatesResponse,
+} from "@omnifin/contracts/connectors";
 
 const CSRF_HEADER = "x-omnifin-csrf";
 const PAGE_LIMIT = 50;
@@ -224,6 +229,16 @@ export interface ConnectorAdminClient {
   ): Promise<ConnectorAdmin>;
 }
 
+export interface JellyfinProvisioningClient {
+  get(connectorId: string): Promise<JellyfinProvisioningConfig>;
+  templates(connectorId: string): Promise<JellyfinProvisioningTemplatesResponse>;
+  update(
+    connectorId: string,
+    input: JellyfinProvisioningReplaceRequest,
+    csrfToken: string,
+  ): Promise<JellyfinProvisioningConfig>;
+}
+
 export const connectorAdminClient: ConnectorAdminClient = {
   async create(input, csrfToken) {
     const schemas = (await contractSchemas()).connectors;
@@ -281,5 +296,35 @@ export const connectorAdminClient: ConnectorAdminClient = {
       body,
     );
     return result.connector;
+  },
+};
+
+export const jellyfinProvisioningClient: JellyfinProvisioningClient = {
+  async get(connectorId) {
+    const schemas = (await contractSchemas()).connectors;
+    const response = await fetchSameOrigin(
+      `/api/admin/connectors/${encodeURIComponent(connectorId)}/jellyfin-provisioning`,
+    );
+    return parsedResponse(response, schemas.jellyfinProvisioningConfigSchema);
+  },
+  async templates(connectorId) {
+    const schemas = (await contractSchemas()).connectors;
+    const response = await fetchSameOrigin(
+      `/api/admin/connectors/${encodeURIComponent(connectorId)}/jellyfin-provisioning/templates`,
+    );
+    return parsedResponse(response, schemas.jellyfinProvisioningTemplatesResponseSchema);
+  },
+  async update(connectorId, input, csrfToken) {
+    const schemas = (await contractSchemas()).connectors;
+    const body = schemas.jellyfinProvisioningReplaceRequestSchema.parse(input);
+    const response = await fetchSameOrigin(
+      `/api/admin/connectors/${encodeURIComponent(connectorId)}/jellyfin-provisioning`,
+      {
+        body: JSON.stringify(body),
+        headers: { "content-type": "application/json", [CSRF_HEADER]: csrfToken },
+        method: "PUT",
+      },
+    );
+    return parsedResponse(response, schemas.jellyfinProvisioningConfigSchema);
   },
 };

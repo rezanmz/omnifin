@@ -40,6 +40,7 @@ import {
 import styles from "./connector-control-room.module.css";
 import { connectorServicePresentation } from "./connector-presentation";
 import { ConnectorPageShell } from "./connector-page-shell";
+import { JellyfinProvisioningSettings } from "./jellyfin-provisioning-settings";
 
 const LazyConnectorForm = dynamic(
   () => import("./connector-form").then((module_) => module_.ConnectorForm),
@@ -166,6 +167,7 @@ function DetailWorkspace({
   onSetDeleteConfirmation,
   onToggle,
   recoveryOnly,
+  csrfToken,
 }: {
   busyAction: string | null;
   connector: ConnectorAdmin;
@@ -176,6 +178,7 @@ function DetailWorkspace({
   onSetDeleteConfirmation: (value: boolean) => void;
   onToggle: () => void;
   recoveryOnly: boolean;
+  csrfToken: string;
 }) {
   const presentation = connectorServicePresentation[connector.service];
   const Icon = presentation.icon;
@@ -363,6 +366,10 @@ function DetailWorkspace({
           </dl>
         </section>
       </div>
+
+      {connector.service === "jellyfin" ? (
+        <JellyfinProvisioningSettings connector={connector} csrfToken={csrfToken} />
+      ) : null}
 
       <section className={styles.dangerZone}>
         <div>
@@ -783,6 +790,7 @@ function ConnectorControlRoomContent({
               onSetDeleteConfirmation={setDeleteConfirmation}
               onToggle={toggleConnector}
               recoveryOnly={snapshot.recoveryOnly}
+              csrfToken={snapshot.csrfToken}
             />
           ) : null}
         </section>
