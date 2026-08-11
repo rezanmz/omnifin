@@ -1216,105 +1216,87 @@ function mergeRollbackInvitationFacts(sqlite: Database.Database, now: number) {
   `);
 }
 
-function mergeRollbackJellyfinProvisioningFacts(sqlite: Database.Database, rootKey?: Buffer) {
-  const candidates = sqlite
+function provisioningCipher(rootKey: Buffer | undefined) {
+  if (!rootKey || rootKey.length !== 32) throw new MaintenanceError("restore_sanitization_failed");
+  return new EnvelopeCipher(rootKey);
+}
+
+function parseProvisioningPayload(
+  cipher: EnvelopeCipher,
+  row: {
+    connectorId: string;
+    connectorRevision: string;
+    instanceGeneration: number;
+    identityHash: string | null;
+    encryptedConfiguration: string;
+  },
+) {
+  try {
+    return JSON.parse(
+      cipher.decrypt(
+        row.encryptedConfiguration,
+        `jellyfin_provisioning:${row.connectorId}:${row.connectorRevision}:${row.instanceGeneration}:${row.identityHash ?? "none"}`,
+      ),
+    ) as unknown;
+  } catch (error) {
+    throw new MaintenanceError("restore_sanitization_failed", { cause: error });
+  }
+}
+
+function isClearedProvisioningPayload(
+  value: unknown,
+): value is { schemaVersion: 2; state: "cleared" } {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value as Record<string, unknown>).schemaVersion === 2 &&
+    (value as Record<string, unknown>).state === "cleared" &&
+    Object.keys(value).length === 2
+  );
+}
+
+function mergeRollbackJellyfinProvisioningFactsSafe(sqlite: Database.Database, rootKey?: Buffer) {
+  const rows = sqlite
     .prepare(
       `select current.connector_id as connectorId,
               current.connector_revision as connectorRevision,
-              current.connector_instance_generation as provisioningInstanceGeneration,
-              current.connector_instance_identity_hash as provisioningIdentityHash,
+              current.connector_instance_generation as instanceGeneration,
+              current.connector_instance_identity_hash as identityHash,
               current.encrypted_configuration as encryptedConfiguration,
               current.revision as revision, current.created_at as createdAt,
-              current.updated_at as updatedAt,
-              restored.type as restoredType, restored.base_url as restoredBaseUrl,
-              restored.tls_policy as restoredTlsPolicy,
-              restored.insecure_http_approved as restoredInsecureHttpApproved,
-              restored.instance_identity_hash as restoredIdentityHash,
-              currentConnector.type as currentType, currentConnector.base_url as currentBaseUrl,
-              currentConnector.tls_policy as currentTlsPolicy,
-              currentConnector.insecure_http_approved as currentInsecureHttpApproved,
-              currentConnector.instance_identity_hash as currentIdentityHash
+              current.updated_at as updatedAt
        from rollback_timeline.jellyfin_provisioning_configs current
-       join rollback_timeline.connector_configs currentConnector
-         on currentConnector.id = current.connector_id
        join main.connector_configs restored on restored.id = current.connector_id`,
     )
     .all() as {
     connectorId: string;
     connectorRevision: string;
-    createdAt: number;
-    currentBaseUrl: string;
-    currentIdentityHash: string | null;
-    currentInsecureHttpApproved: number;
-    currentTlsPolicy: string;
-    currentType: string;
+    instanceGeneration: number;
+    identityHash: string | null;
     encryptedConfiguration: string;
-    provisioningIdentityHash: string | null;
-    provisioningInstanceGeneration: number;
     revision: number;
+    createdAt: number;
     updatedAt: number;
-    restoredBaseUrl: string;
-    restoredIdentityHash: string | null;
-    restoredInsecureHttpApproved: number;
-    restoredTlsPolicy: string;
-    restoredType: string;
   }[];
-  const equivalent = candidates.filter(
-    (row) =>
-      row.restoredType === row.currentType &&
-      row.restoredBaseUrl === row.currentBaseUrl &&
-      row.restoredTlsPolicy === row.currentTlsPolicy &&
-      row.restoredInsecureHttpApproved === row.currentInsecureHttpApproved &&
-      row.restoredIdentityHash !== null &&
-      row.restoredIdentityHash === row.currentIdentityHash,
-  );
-  if (equivalent.length > 0) {
-    if (!rootKey || rootKey.length !== 32) {
-      throw new MaintenanceError("restore_sanitization_failed");
-    }
-    const cipher = new EnvelopeCipher(rootKey);
-    for (const row of equivalent) {
-      try {
-        cipher.decrypt(
-          row.encryptedConfiguration,
-          `jellyfin_provisioning:${row.connectorId}:${row.connectorRevision}:${row.provisioningInstanceGeneration}:${row.provisioningIdentityHash ?? "none"}`,
-        );
-      } catch (error) {
-        throw new MaintenanceError("restore_sanitization_failed", { cause: error });
-      }
-    }
-  }
-
-  sqlite.exec(`
-    delete from main.jellyfin_provisioning_configs as restored
-    where not exists (
-      select 1 from rollback_timeline.jellyfin_provisioning_configs current
-      where current.connector_id = restored.connector_id
-    );
-  `);
-  const approvedIds = new Set(equivalent.map((row) => row.connectorId));
-  const restoredRows = sqlite
-    .prepare("select connector_id as connectorId from main.jellyfin_provisioning_configs")
-    .all() as { connectorId: string }[];
-  const remove = sqlite.prepare(
-    "delete from main.jellyfin_provisioning_configs where connector_id = ?",
-  );
-  for (const row of restoredRows) {
-    if (!approvedIds.has(row.connectorId)) remove.run(row.connectorId);
-  }
+  sqlite.exec("delete from main.jellyfin_provisioning_configs");
+  if (rows.length === 0) return;
+  const cipher = provisioningCipher(rootKey);
   const insert = sqlite.prepare(
-    `insert or replace into main.jellyfin_provisioning_configs (
+    `insert into main.jellyfin_provisioning_configs (
        connector_id, connector_revision, connector_instance_generation,
        connector_instance_identity_hash, encrypted_configuration, revision,
        created_at, updated_at
      ) values (?, ?, ?, ?, ?, ?, ?, ?)`,
   );
-  for (const row of equivalent) {
+  for (const row of rows) {
+    const payload = parseProvisioningPayload(cipher, row);
+    if (!isClearedProvisioningPayload(payload)) continue;
     insert.run(
       row.connectorId,
       row.connectorRevision,
-      row.provisioningInstanceGeneration,
-      row.provisioningIdentityHash,
+      row.instanceGeneration,
+      row.identityHash,
       row.encryptedConfiguration,
       row.revision,
       row.createdAt,
@@ -1323,74 +1305,69 @@ function mergeRollbackJellyfinProvisioningFacts(sqlite: Database.Database, rootK
   }
 }
 
-function rebindJellyfinProvisioningConfigs(sqlite: Database.Database, rootKey?: Buffer) {
+function sanitizeJellyfinProvisioningConfigs(sqlite: Database.Database, rootKey?: Buffer) {
   const rows = sqlite
     .prepare(
-      `select provisioning.connector_id as connectorId, connector.type,
-              connector.config_generation as configGeneration,
-              connector.instance_generation as instanceGeneration,
-              connector.instance_identity_hash as instanceIdentityHash,
+      `select provisioning.connector_id as connectorId,
               provisioning.connector_revision as connectorRevision,
-              provisioning.connector_instance_generation as provisioningInstanceGeneration,
-              provisioning.connector_instance_identity_hash as provisioningIdentityHash,
-              provisioning.encrypted_configuration as encryptedConfiguration
+              provisioning.connector_instance_generation as instanceGeneration,
+              provisioning.connector_instance_identity_hash as identityHash,
+              provisioning.encrypted_configuration as encryptedConfiguration,
+              provisioning.revision as revision,
+              connector.type as type, connector.config_generation as configGeneration,
+              connector.instance_generation as connectorInstanceGeneration,
+              connector.instance_identity_hash as connectorIdentityHash
        from main.jellyfin_provisioning_configs provisioning
        join main.connector_configs connector on connector.id = provisioning.connector_id`,
     )
     .all() as {
     connectorId: string;
-    configGeneration: number;
-    instanceGeneration: number;
-    instanceIdentityHash: string | null;
     connectorRevision: string;
+    instanceGeneration: number;
+    identityHash: string | null;
     encryptedConfiguration: string;
-    provisioningIdentityHash: string | null;
-    provisioningInstanceGeneration: number;
+    revision: number;
     type: string;
+    configGeneration: number;
+    connectorInstanceGeneration: number;
+    connectorIdentityHash: string | null;
   }[];
   if (rows.length === 0) return;
-  if (!rootKey || rootKey.length !== 32) {
-    throw new MaintenanceError("restore_sanitization_failed");
-  }
-  const cipher = new EnvelopeCipher(rootKey);
-  const rebound = rows.map((row) => {
-    try {
-      const plaintext = cipher.decrypt(
-        row.encryptedConfiguration,
-        `jellyfin_provisioning:${row.connectorId}:${row.connectorRevision}:${row.provisioningInstanceGeneration}:${row.provisioningIdentityHash ?? "none"}`,
-      );
-      const connectorRevision = createHash("sha256")
-        .update(`${row.type}\0${row.connectorId}\0${row.configGeneration}`, "utf8")
-        .digest("base64url");
-      return {
-        connectorId: row.connectorId,
-        connectorInstanceGeneration: row.instanceGeneration,
-        connectorInstanceIdentityHash: row.instanceIdentityHash,
-        connectorRevision,
-        encryptedConfiguration: cipher.encrypt(
-          plaintext,
-          `jellyfin_provisioning:${row.connectorId}:${connectorRevision}:${row.instanceGeneration}:${row.instanceIdentityHash ?? "none"}`,
-        ),
-      };
-    } catch (error) {
-      throw new MaintenanceError("restore_sanitization_failed", { cause: error });
-    }
-  });
+  const cipher = provisioningCipher(rootKey);
+  const remove = sqlite.prepare(
+    "delete from main.jellyfin_provisioning_configs where connector_id = ?",
+  );
   const update = sqlite.prepare(
     `update main.jellyfin_provisioning_configs
      set connector_revision = ?, connector_instance_generation = ?,
          connector_instance_identity_hash = ?, encrypted_configuration = ?
      where connector_id = ?`,
   );
-  for (const row of rebound) {
+  for (const row of rows) {
+    const payload = parseProvisioningPayload(cipher, row);
+    if (!isClearedProvisioningPayload(payload)) {
+      remove.run(row.connectorId);
+      continue;
+    }
+    const connectorRevision = createHash("sha256")
+      .update(`${row.type}\0${row.connectorId}\0${row.configGeneration}`, "utf8")
+      .digest("base64url");
+    const encryptedConfiguration = cipher.encrypt(
+      JSON.stringify({ schemaVersion: 2, state: "cleared" }),
+      `jellyfin_provisioning:${row.connectorId}:${connectorRevision}:${row.connectorInstanceGeneration}:${row.connectorIdentityHash ?? "none"}`,
+    );
     update.run(
-      row.connectorRevision,
+      connectorRevision,
       row.connectorInstanceGeneration,
-      row.connectorInstanceIdentityHash,
-      row.encryptedConfiguration,
+      row.connectorIdentityHash,
+      encryptedConfiguration,
       row.connectorId,
     );
   }
+}
+
+function mergeRollbackJellyfinProvisioningFacts(sqlite: Database.Database, rootKey?: Buffer) {
+  mergeRollbackJellyfinProvisioningFactsSafe(sqlite, rootKey);
 }
 
 function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number, rootKey?: Buffer) {
@@ -1422,8 +1399,8 @@ function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number, root
     .get();
   if (exhaustedConnectorGeneration) throw new MaintenanceError("restore_sanitization_failed");
 
-  // Decide whether a provisioning credential may cross the restore boundary before
-  // the connector security merge intentionally clears the restored identity.
+  // Preserve only the current timeline's negative provisioning authority. Credential-bearing
+  // configuration is intentionally never imported across the restore boundary.
   mergeRollbackJellyfinProvisioningFacts(sqlite, rootKey);
 
   sqlite.exec(`
@@ -1892,7 +1869,7 @@ export function sanitizeRestoredDatabase(
               updated_at = max(updated_at, ?)`,
         )
         .run(now, now);
-      if (options.rollbackDatabasePath) rebindJellyfinProvisioningConfigs(sqlite!, options.rootKey);
+      sanitizeJellyfinProvisioningConfigs(sqlite!, options.rootKey);
       sqlite!
         .prepare(
           `update oidc_providers

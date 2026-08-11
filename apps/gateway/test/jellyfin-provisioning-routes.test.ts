@@ -3,6 +3,7 @@ import {
   jellyfinProvisioningTemplatesResponseSchema,
 } from "@omnifin/contracts/connectors";
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 
 import { createApp } from "../src/app.js";
 import { JellyfinProvisioningService } from "../src/connectors/jellyfin-provisioning-service.js";
@@ -72,7 +73,20 @@ async function harness() {
     readTemplateUser: vi.fn(async ({ userId }: { userId: string }) => ({
       Id: userId,
       Name: "Template user",
-      Policy: { IsAdministrator: false, IsDisabled: false, EnableAllFolders: true },
+      Policy: {
+        AccessSchedules: [
+          {
+            DayOfWeek: "Weekday",
+            EndHour: 22,
+            Id: 7,
+            StartHour: 8,
+            UserId: "123e4567-e89b-12d3-a456-426614174000",
+          },
+        ],
+        IsAdministrator: false,
+        IsDisabled: false,
+        EnableAllFolders: true,
+      },
     })),
     validateAdministratorApiKey: vi.fn(async () => ({
       Id: "admin",
@@ -228,6 +242,17 @@ describe("Jellyfin provisioning configuration routes", () => {
         .get() as { value: string };
       expect(encrypted.value).not.toContain("private-password");
       expect(encrypted.value).not.toContain("validated-admin-access-token");
+      const stored = JSON.parse(
+        new EnvelopeCipher(config().encryptionKey).decrypt(
+          encrypted.value,
+          `jellyfin_provisioning:jellyfin-home:${createHash("sha256")
+            .update("jellyfin\0jellyfin-home\0" + "0", "utf8")
+            .digest("base64url")}:0:${"i".repeat(43)}`,
+        ),
+      ) as { template: { policy: { AccessSchedules: Array<Record<string, unknown>> } } };
+      expect(stored.template.policy.AccessSchedules).toEqual([
+        { DayOfWeek: "Weekday", EndHour: 22, StartHour: 8 },
+      ]);
       const audit = app.database.sqlite
         .prepare(
           "select metadata_json as metadata from audit_events where event_type = 'connector.jellyfin_provisioning.updated'",
@@ -304,7 +329,12 @@ describe("Jellyfin provisioning configuration routes", () => {
       fakeClient.readTemplateUser.mockResolvedValueOnce({
         Id: "administrator-template",
         Name: "Administrator template",
-        Policy: { IsAdministrator: true, IsDisabled: false, EnableAllFolders: true },
+        Policy: {
+          AccessSchedules: [],
+          IsAdministrator: true,
+          IsDisabled: false,
+          EnableAllFolders: true,
+        },
       });
       const adminTemplate = await app.inject({
         body: {
@@ -420,6 +450,44 @@ describe("Jellyfin provisioning configuration routes", () => {
       await expect(
         provisioning.listTemplates("jellyfin-home", { principal: session.principal }),
       ).rejects.toMatchObject({ reason: "connector_disabled" });
+      expect(fakeClient.listTemplateUsers).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("does not use a restored provisioning credential before the connector is probed", async () => {
+    const { app, fakeClient, session } = await harness();
+    try {
+      const url = "/v1/admin/connectors/jellyfin-home/jellyfin-provisioning";
+      const staged = await app.inject({
+        body: {
+          credential: { kind: "replace_api_key", apiKey: "restored-secret" },
+          enabled: false,
+          revision: 0,
+          templateUserId: null,
+        },
+        headers: headers(session),
+        method: "PUT",
+        url,
+      });
+      expect(staged.statusCode, staged.body).toBe(200);
+      const validationCalls = fakeClient.validateAdministratorCredential.mock.calls.length;
+      app.database.sqlite
+        .prepare("update connector_configs set instance_identity_hash = null where id = ?")
+        .run("jellyfin-home");
+      app.database.sqlite
+        .prepare(
+          "update jellyfin_provisioning_configs set connector_instance_identity_hash = null where connector_id = ?",
+        )
+        .run("jellyfin-home");
+
+      await expect(
+        new JellyfinProvisioningService(app.database, config(), {
+          createClient: () => fakeClient as unknown as JellyfinProvisioningAdminClient,
+        }).listTemplates("jellyfin-home", { principal: session.principal }),
+      ).rejects.toMatchObject({ reason: "connector_not_verified" });
+      expect(fakeClient.validateAdministratorCredential).toHaveBeenCalledTimes(validationCalls);
       expect(fakeClient.listTemplateUsers).not.toHaveBeenCalled();
     } finally {
       await app.close();

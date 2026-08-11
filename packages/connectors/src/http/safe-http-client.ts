@@ -39,6 +39,8 @@ export interface SafeRequestOptions {
   body?: string | URLSearchParams | Uint8Array;
   signal?: AbortSignal;
   acceptedStatuses?: readonly number[];
+  /** Require one exact response status, even when the response is otherwise successful. */
+  requiredStatus?: number;
 }
 
 export type ConnectorCancellationSource =
@@ -659,7 +661,10 @@ export class SafeHttpClient {
     }
 
     const acceptedStatuses = options.acceptedStatuses ?? [];
-    if (!response.ok && !acceptedStatuses.includes(response.status)) {
+    if (
+      (options.requiredStatus !== undefined && response.status !== options.requiredStatus) ||
+      (!response.ok && !acceptedStatuses.includes(response.status))
+    ) {
       await response.body?.cancel();
       throw safeStatusError(this.service, options.operation, response);
     }

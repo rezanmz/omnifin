@@ -261,6 +261,11 @@ preferences, audit history, durable lists, and media issues are preserved. A
 reports both the selected source digest and the final sanitized digest; verify and retain the latter as
 the actual published database identity.
 
+Provisioning administrator credentials are deliberately invalidated during every restore, including
+rollback restore. Provisioning configuration rows are removed (a cleared tombstone may be retained to
+preserve a negative authority decision), so reconfigure and revalidate the Jellyfin provisioning
+administrator credential after restore before using provisioning features.
+
 ### Invitation state after restore
 
 Restore deliberately invalidates invitation admission state. In both a replacement restore and an

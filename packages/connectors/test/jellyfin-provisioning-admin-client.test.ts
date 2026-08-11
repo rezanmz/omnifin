@@ -68,10 +68,10 @@ function policy(
 }
 
 describe("JellyfinProvisioningAdminClient", () => {
-  it("validates a 10.10.7 API key through common authenticated system info", async () => {
+  it("validates a 10.10.7 API key only through the privileged Auth/Keys read", async () => {
     const mock = createMockTransport([
       jsonResponse({ Id: "server-10-10", ServerName: "Home", Version: "10.10.7" }),
-      jsonResponse({ Id: "server-10-10", ServerName: "Home", Version: "10.10.7" }),
+      jsonResponse([]),
     ]);
     const client = new JellyfinProvisioningAdminClient(target(mock.transport));
 
@@ -80,21 +80,16 @@ describe("JellyfinProvisioningAdminClient", () => {
     ).resolves.toEqual({ protocolVersion: "10.10" });
     expect(mock.requests.map((request) => request.url.pathname)).toEqual([
       "/base/System/Info/Public",
-      "/base/System/Info",
+      "/base/Auth/Keys",
     ]);
     expect(mock.requests[1]?.init.headers.get("authorization")).toContain('Token="server-api-key"');
     expect(mock.requests.map((request) => request.url.pathname)).not.toContain("/base/Users/Me");
   });
 
-  it("validates a 10.11.11 access token against its administrator identity", async () => {
+  it("validates a 10.11.11 administrator access token through Auth/Keys", async () => {
     const mock = createMockTransport([
       jsonResponse({ Id: "server-10-11", ServerName: "Home", Version: "10.11.11" }),
-      jsonResponse({ Id: "server-10-11", ServerName: "Home", Version: "10.11.11" }),
-      jsonResponse({
-        Id: "administrator",
-        Name: "Administrator",
-        Policy: { IsAdministrator: true, IsDisabled: false },
-      }),
+      jsonResponse([]),
     ]);
     const client = new JellyfinProvisioningAdminClient(target(mock.transport));
 
@@ -107,8 +102,27 @@ describe("JellyfinProvisioningAdminClient", () => {
     ).resolves.toEqual({ protocolVersion: "10.11" });
     expect(mock.requests.map((request) => request.url.pathname)).toEqual([
       "/base/System/Info/Public",
-      "/base/System/Info",
-      "/base/Users/Me",
+      "/base/Auth/Keys",
+    ]);
+  });
+
+  it("rejects an ordinary user token submitted as an API key", async () => {
+    const mock = createMockTransport([
+      jsonResponse({ Id: "server-10-10", ServerName: "Home", Version: "10.10.7" }),
+      jsonResponse({ error: "forbidden" }, { status: 403 }),
+    ]);
+    const client = new JellyfinProvisioningAdminClient(target(mock.transport));
+
+    await expect(
+      client.validateAdministratorCredential({
+        accessToken: "ordinary-user-token",
+        credentialKind: "api_key",
+        deviceId: "device-1",
+      }),
+    ).rejects.toMatchObject({ code: "invalid_credentials", status: 403 });
+    expect(mock.requests.map((request) => request.url.pathname)).toEqual([
+      "/base/System/Info/Public",
+      "/base/Auth/Keys",
     ]);
   });
 
@@ -118,7 +132,15 @@ describe("JellyfinProvisioningAdminClient", () => {
         Id: "template-user",
         Name: "Template user",
         Policy: policy("10.10", {
-          AccessSchedules: [{ DayOfWeek: "Weekday", EndHour: 22.5, StartHour: 8 }],
+          AccessSchedules: [
+            {
+              DayOfWeek: "Weekday",
+              EndHour: 22.5,
+              Id: 17,
+              StartHour: 8,
+              UserId: "123e4567-e89b-12d3-a456-426614174000",
+            },
+          ],
           BlockUnratedItems: ["Movie", "Other"],
         }),
       }),

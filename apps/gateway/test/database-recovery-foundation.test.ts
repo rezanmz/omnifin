@@ -926,6 +926,8 @@ describe("restore sanitation and rollback", () => {
         expect(row).toBeUndefined();
       } else if (!equivalent) {
         expect(row).toBeUndefined();
+      } else if (state !== "cleared") {
+        expect(row).toBeUndefined();
       } else {
         expect(row).toMatchObject({
           connectorRevision: revision(5_001),

@@ -48,7 +48,9 @@ const accessScheduleSchema = z.strictObject({
     "Weekend",
   ]),
   EndHour: z.number().finite(),
+  Id: z.int(),
   StartHour: z.number().finite(),
+  UserId: z.uuid(),
 });
 
 const unratedItemSchema = z.enum([
@@ -134,12 +136,7 @@ const authenticationSchema = z.object({
 });
 
 const publicSystemInfoSchema = z.object({ Version: z.string().trim().min(1).max(128) });
-const authenticatedSystemInfoSchema = z.object({
-  Version: z.string().trim().min(1).max(128),
-});
-const currentUserSchema = z.object({
-  Policy: z.object({ IsAdministrator: z.boolean(), IsDisabled: z.boolean() }),
-});
+const authKeysResponseSchema = z.unknown();
 
 export type JellyfinProvisioningAdminUser = z.infer<typeof authenticationUserSchema>;
 export type JellyfinProvisioningAuthentication = z.infer<typeof authenticationSchema>;
@@ -279,23 +276,15 @@ export class JellyfinProvisioningAdminClient {
       },
     );
     const protocolVersion = protocolVersionFor(systemInfo.Version);
-    await this.#client.requestJson("System/Info", authenticatedSystemInfoSchema, {
+    await this.#client.requestJson("Auth/Keys", authKeysResponseSchema, {
       headers: {
         authorization,
       },
-      operation: "provisioning_admin_system_info_validation",
+      method: "GET",
+      operation: "provisioning_admin_auth_keys_validation",
+      requiredStatus: 200,
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     });
-    if (input.credentialKind === "access_token") {
-      const user = await this.#client.requestJson("Users/Me", currentUserSchema, {
-        headers: { authorization },
-        operation: "provisioning_admin_user_validation",
-        ...(input.signal === undefined ? {} : { signal: input.signal }),
-      });
-      if (!user.Policy.IsAdministrator || user.Policy.IsDisabled) {
-        throw this.#client.invalidResponse("provisioning_admin_user_validation");
-      }
-    }
     return { protocolVersion };
   }
 }

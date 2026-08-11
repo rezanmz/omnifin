@@ -71,6 +71,7 @@ export type JellyfinProvisioningErrorReason =
   | "connector_disabled"
   | "connector_not_found"
   | "connector_not_jellyfin"
+  | "connector_not_verified"
   | "credential_not_configured"
   | "permission_denied"
   | "revision_conflict"
@@ -199,6 +200,23 @@ function safeTemplate(user: JellyfinProvisioningAdminUser): JellyfinProvisioning
   return jellyfinProvisioningTemplateSummarySchema.parse({ displayName: user.Name, id: user.Id });
 }
 
+function templatePolicyWithoutOwnerFields(policy: Record<string, unknown>) {
+  const schedules = policy.AccessSchedules;
+  if (!Array.isArray(schedules)) return { ...policy };
+  return {
+    ...policy,
+    AccessSchedules: schedules.map((schedule) => {
+      if (schedule === null || typeof schedule !== "object" || Array.isArray(schedule)) {
+        return schedule;
+      }
+      const normalized = { ...(schedule as Record<string, unknown>) };
+      delete normalized.Id;
+      delete normalized.UserId;
+      return normalized;
+    }),
+  };
+}
+
 function isTombstone(value: StoredProvisioningState): value is StoredProvisioningTombstone {
   return "state" in value;
 }
@@ -251,6 +269,8 @@ export class JellyfinProvisioningService {
     if (!row) throw new JellyfinProvisioningError("credential_not_configured");
     if (!this.#bindingMatches(connector, row))
       throw new JellyfinProvisioningError("binding_invalid");
+    if (connector.instanceIdentityHash === null)
+      throw new JellyfinProvisioningError("connector_not_verified");
     const stored = this.#decrypt(connector, row);
     if (isTombstone(stored)) throw new JellyfinProvisioningError("credential_not_configured");
     let validation: { protocolVersion: JellyfinProvisioningProtocolVersion };
@@ -402,7 +422,11 @@ export class JellyfinProvisioningService {
           throw new JellyfinProvisioningError("template_invalid", { cause: error });
         }
         this.#assertTemplate(user);
-        template = { displayName: user.Name, id: user.Id, policy: user.Policy };
+        template = {
+          displayName: user.Name,
+          id: user.Id,
+          policy: templatePolicyWithoutOwnerFields(user.Policy),
+        };
       }
     }
     if (
