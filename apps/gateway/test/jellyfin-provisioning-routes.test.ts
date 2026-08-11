@@ -5,6 +5,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
+import { JellyfinProvisioningService } from "../src/connectors/jellyfin-provisioning-service.js";
 import { SESSION_COOKIE_NAME, SESSION_CSRF_HEADER } from "../src/auth/session-cookie.js";
 import type { JellyfinProvisioningAdminClient } from "@omnifin/connectors/auth/jellyfin-provisioning-admin-client";
 import type { AppConfig } from "../src/config.js";
@@ -40,6 +41,7 @@ async function harness() {
   let sessionId = 0;
   let sessionToken = 0;
   let auditId = 0;
+  let provisioningNow = now;
   const fakeClient = {
     authenticateAdministrator: vi.fn(async () => ({
       AccessToken: "validated-admin-access-token",
@@ -81,7 +83,7 @@ async function harness() {
   const app = await createApp({
     config: config(),
     jellyfinProvisioningDependencies: {
-      clock: () => new Date(now),
+      clock: () => new Date(provisioningNow),
       createClient: () => fakeClient as unknown as JellyfinProvisioningAdminClient,
       createId: () => `provisioning-audit-${++auditId}`,
     },
@@ -151,7 +153,12 @@ async function harness() {
       userId: "admin-user",
     },
   });
-  return { app, fakeClient, session };
+  return {
+    app,
+    fakeClient,
+    session,
+    setProvisioningNow: (value: Date) => (provisioningNow = value),
+  };
 }
 
 function headers(session: Awaited<ReturnType<typeof harness>>["session"]) {
@@ -165,7 +172,7 @@ function headers(session: Awaited<ReturnType<typeof harness>>["session"]) {
 
 describe("Jellyfin provisioning configuration routes", () => {
   it("validates admin credentials, stores no password, and exposes only safe configuration", async () => {
-    const { app, fakeClient, session } = await harness();
+    const { app, fakeClient, session, setProvisioningNow } = await harness();
     try {
       const initial = await app.inject({
         headers: headers(session),
@@ -230,6 +237,9 @@ describe("Jellyfin provisioning configuration routes", () => {
       expect(audit.metadata).not.toContain("template-user");
       expect(audit.metadata).not.toContain("EnableAllFolders");
 
+      const validatedAt = jellyfinProvisioningConfigSchema.parse(configured.json()).validatedAt;
+      const disabledAt = new Date(now.getTime() + 60_000);
+      setProvisioningNow(disabledAt);
       const disabled = await app.inject({
         body: {
           credential: { kind: "retain" },
@@ -246,6 +256,7 @@ describe("Jellyfin provisioning configuration routes", () => {
         credentialConfigured: true,
         enabled: false,
         revision: 2,
+        validatedAt,
       });
 
       const templates = await app.inject({
@@ -392,6 +403,24 @@ describe("Jellyfin provisioning configuration routes", () => {
         url,
       });
       expect(stale.statusCode).toBe(409);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects disabled connectors before decrypting provisioning credentials", async () => {
+    const { app, fakeClient, session } = await harness();
+    try {
+      app.database.sqlite
+        .prepare("update connector_configs set enabled = 0 where id = ?")
+        .run("jellyfin-home");
+      const provisioning = new JellyfinProvisioningService(app.database, config(), {
+        createClient: () => fakeClient as unknown as JellyfinProvisioningAdminClient,
+      });
+      await expect(
+        provisioning.listTemplates("jellyfin-home", { principal: session.principal }),
+      ).rejects.toMatchObject({ reason: "connector_disabled" });
+      expect(fakeClient.listTemplateUsers).not.toHaveBeenCalled();
     } finally {
       await app.close();
     }

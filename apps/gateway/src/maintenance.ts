@@ -4,6 +4,7 @@ import {
   createDatabaseBackup,
   createRetainedDatabaseBackup,
   MaintenanceError,
+  resolveRestoreRootKey,
   restoreDatabaseBackup,
   restoreDatabaseBackupIntoEmptyTarget,
   verifyDatabaseBackup,
@@ -118,37 +119,49 @@ async function run() {
   if (operation === "restore") {
     assertOnlyMaintenanceValues(arguments_, ["--input", "--rollback-output"]);
     assertOnlyMaintenanceFlags(arguments_, ["--confirm-gateway-stopped"]);
-    writeResult(
-      operation,
-      await restoreDatabaseBackup({
-        backupPath: requireMaintenanceValue(arguments_, "--input"),
-        confirmedGatewayStopped: arguments_.flags.has("--confirm-gateway-stopped"),
-        databasePath,
-        rollbackOutputPath: requireMaintenanceValue(arguments_, "--rollback-output"),
-        ...(process.env.OMNIFIN_GATEWAY_HEALTH_URL
-          ? { gatewayHealthUrl: process.env.OMNIFIN_GATEWAY_HEALTH_URL }
-          : {}),
-        ...(imageReference ? { imageReference } : {}),
-      }),
-    );
+    const rootKey = resolveRestoreRootKey();
+    try {
+      writeResult(
+        operation,
+        await restoreDatabaseBackup({
+          backupPath: requireMaintenanceValue(arguments_, "--input"),
+          confirmedGatewayStopped: arguments_.flags.has("--confirm-gateway-stopped"),
+          databasePath,
+          rollbackOutputPath: requireMaintenanceValue(arguments_, "--rollback-output"),
+          ...(process.env.OMNIFIN_GATEWAY_HEALTH_URL
+            ? { gatewayHealthUrl: process.env.OMNIFIN_GATEWAY_HEALTH_URL }
+            : {}),
+          ...(imageReference ? { imageReference } : {}),
+          ...(rootKey ? { rootKey } : {}),
+        }),
+      );
+    } finally {
+      rootKey?.fill(0);
+    }
     return;
   }
 
   if (operation === "restore-empty") {
     assertOnlyMaintenanceValues(arguments_, ["--input"]);
     assertOnlyMaintenanceFlags(arguments_, ["--confirm-empty-target", "--confirm-gateway-stopped"]);
-    writeResult(
-      operation,
-      await restoreDatabaseBackupIntoEmptyTarget({
-        backupPath: requireMaintenanceValue(arguments_, "--input"),
-        confirmedEmptyTarget: arguments_.flags.has("--confirm-empty-target"),
-        confirmedGatewayStopped: arguments_.flags.has("--confirm-gateway-stopped"),
-        databasePath,
-        ...(process.env.OMNIFIN_GATEWAY_HEALTH_URL
-          ? { gatewayHealthUrl: process.env.OMNIFIN_GATEWAY_HEALTH_URL }
-          : {}),
-      }),
-    );
+    const rootKey = resolveRestoreRootKey();
+    try {
+      writeResult(
+        operation,
+        await restoreDatabaseBackupIntoEmptyTarget({
+          backupPath: requireMaintenanceValue(arguments_, "--input"),
+          confirmedEmptyTarget: arguments_.flags.has("--confirm-empty-target"),
+          confirmedGatewayStopped: arguments_.flags.has("--confirm-gateway-stopped"),
+          databasePath,
+          ...(process.env.OMNIFIN_GATEWAY_HEALTH_URL
+            ? { gatewayHealthUrl: process.env.OMNIFIN_GATEWAY_HEALTH_URL }
+            : {}),
+          ...(rootKey ? { rootKey } : {}),
+        }),
+      );
+    } finally {
+      rootKey?.fill(0);
+    }
     return;
   }
 

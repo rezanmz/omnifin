@@ -129,52 +129,62 @@ function asHttpError(error: JellyfinProvisioningError) {
   const statusCode =
     error.reason === "connector_not_found"
       ? 404
-      : error.reason === "revision_conflict"
+      : ["connector_disabled", "binding_invalid"].includes(error.reason)
         ? 409
-        : error.reason === "permission_denied"
-          ? 403
-          : [
-                "configuration_invalid",
-                "connector_not_jellyfin",
-                "template_invalid",
-                "unsupported_version",
-              ].includes(error.reason)
-            ? 422
-            : ["upstream_validation_failed", "credential_not_configured"].includes(error.reason)
-              ? 409
-              : 503;
+        : error.reason === "revision_conflict"
+          ? 409
+          : error.reason === "permission_denied"
+            ? 403
+            : [
+                  "configuration_invalid",
+                  "connector_not_jellyfin",
+                  "template_invalid",
+                  "unsupported_version",
+                ].includes(error.reason)
+              ? 422
+              : ["upstream_validation_failed", "credential_not_configured"].includes(error.reason)
+                ? 409
+                : 503;
   const code =
     error.reason === "connector_not_found"
       ? "connector_not_found"
-      : error.reason === "revision_conflict"
-        ? "connector_jellyfin_provisioning_revision_conflict"
-        : error.reason === "configuration_invalid"
-          ? "jellyfin_provisioning_configuration_invalid"
-          : error.reason === "connector_not_jellyfin"
-            ? "jellyfin_provisioning_connector_invalid"
-            : error.reason === "template_invalid"
-              ? "jellyfin_provisioning_template_invalid"
-              : error.reason === "unsupported_version"
-                ? "jellyfin_provisioning_unsupported_version"
-                : error.reason === "credential_not_configured"
-                  ? "jellyfin_provisioning_credential_not_configured"
-                  : error.reason === "upstream_validation_failed"
-                    ? "jellyfin_provisioning_credential_invalid"
-                    : "jellyfin_provisioning_unavailable";
+      : error.reason === "connector_disabled"
+        ? "jellyfin_provisioning_connector_disabled"
+        : error.reason === "binding_invalid"
+          ? "jellyfin_provisioning_binding_invalid"
+          : error.reason === "revision_conflict"
+            ? "connector_jellyfin_provisioning_revision_conflict"
+            : error.reason === "configuration_invalid"
+              ? "jellyfin_provisioning_configuration_invalid"
+              : error.reason === "connector_not_jellyfin"
+                ? "jellyfin_provisioning_connector_invalid"
+                : error.reason === "template_invalid"
+                  ? "jellyfin_provisioning_template_invalid"
+                  : error.reason === "unsupported_version"
+                    ? "jellyfin_provisioning_unsupported_version"
+                    : error.reason === "credential_not_configured"
+                      ? "jellyfin_provisioning_credential_not_configured"
+                      : error.reason === "upstream_validation_failed"
+                        ? "jellyfin_provisioning_credential_invalid"
+                        : "jellyfin_provisioning_unavailable";
   const message =
-    error.reason === "revision_conflict"
-      ? "The provisioning configuration changed since it was loaded."
-      : error.reason === "configuration_invalid"
-        ? "The provisioning configuration is malformed or incomplete."
-        : error.reason === "connector_not_jellyfin"
-          ? "The selected connector is not Jellyfin."
-          : error.reason === "template_invalid"
-            ? "The selected Jellyfin template user is not usable."
-            : error.reason === "unsupported_version"
-              ? "This Jellyfin server version is not supported for provisioning."
-              : error.reason === "upstream_validation_failed"
-                ? "The Jellyfin administrator credential could not be validated."
-                : "Jellyfin provisioning configuration is temporarily unavailable.";
+    error.reason === "connector_disabled"
+      ? "The Jellyfin connector is disabled."
+      : error.reason === "binding_invalid"
+        ? "The provisioning configuration is no longer bound to the current connector target."
+        : error.reason === "revision_conflict"
+          ? "The provisioning configuration changed since it was loaded."
+          : error.reason === "configuration_invalid"
+            ? "The provisioning configuration is malformed or incomplete."
+            : error.reason === "connector_not_jellyfin"
+              ? "The selected connector is not Jellyfin."
+              : error.reason === "template_invalid"
+                ? "The selected Jellyfin template user is not usable."
+                : error.reason === "unsupported_version"
+                  ? "This Jellyfin server version is not supported for provisioning."
+                  : error.reason === "upstream_validation_failed"
+                    ? "The Jellyfin administrator credential could not be validated."
+                    : "Jellyfin provisioning configuration is temporarily unavailable.";
   return new SafeHttpError({ cause: error, code, message, statusCode });
 }
 

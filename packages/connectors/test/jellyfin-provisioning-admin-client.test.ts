@@ -22,7 +22,7 @@ function policy(
     AccessSchedules: [],
     AuthenticationProviderId: "Jellyfin.Server.Core",
     AllowedTags: [],
-    BlockUnratedItems: ["Movie", "Series"],
+    BlockUnratedItems: ["Movie", "Series", "Other"],
     BlockedChannels: [],
     BlockedMediaFolders: [],
     BlockedTags: [],
@@ -61,7 +61,7 @@ function policy(
     MaxParentalRating: null,
     PasswordResetProviderId: "Jellyfin.Server.Core",
     RemoteClientBitrateLimit: 0,
-    SyncPlayAccess: "CreateAndJoin",
+    SyncPlayAccess: "CreateAndJoinGroups",
     ...(version === "10.11" ? { MaxParentalSubRating: null } : {}),
     ...overrides,
   };
@@ -118,8 +118,8 @@ describe("JellyfinProvisioningAdminClient", () => {
         Id: "template-user",
         Name: "Template user",
         Policy: policy("10.10", {
-          AccessSchedules: [{ DayOfWeek: 1, EndHour: 22.5, StartHour: 8 }],
-          BlockUnratedItems: ["Movie", "Episode"],
+          AccessSchedules: [{ DayOfWeek: "Weekday", EndHour: 22.5, StartHour: 8 }],
+          BlockUnratedItems: ["Movie", "Other"],
         }),
       }),
     ]);
@@ -165,6 +165,29 @@ describe("JellyfinProvisioningAdminClient", () => {
         userId: "template-user",
       }),
     ).rejects.toMatchObject({ code: "response_invalid" });
+
+    for (const overrides of [
+      { SyncPlayAccess: "CreateAndJoin" },
+      { SyncPlayAccess: "JoinOnly" },
+      { BlockUnratedItems: ["Episode"] },
+      { AccessSchedules: [{ DayOfWeek: 1, EndHour: 22, StartHour: 8 }] },
+    ]) {
+      const invalidValues = createMockTransport([
+        jsonResponse({
+          Id: "template-user",
+          Name: "Template user",
+          Policy: policy("10.10", overrides),
+        }),
+      ]);
+      await expect(
+        new JellyfinProvisioningAdminClient(target(invalidValues.transport)).readTemplateUser({
+          accessToken: "server-api-key",
+          deviceId: "device-1",
+          protocolVersion: "10.10",
+          userId: "template-user",
+        }),
+      ).rejects.toMatchObject({ code: "response_invalid" });
+    }
 
     const versioned = createMockTransport([
       jsonResponse({ Id: "template-user", Name: "Template user", Policy: policy("10.11") }),

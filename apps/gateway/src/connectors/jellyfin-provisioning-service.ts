@@ -68,6 +68,7 @@ interface ConnectorRow {
 
 export type JellyfinProvisioningErrorReason =
   | "configuration_invalid"
+  | "connector_disabled"
   | "connector_not_found"
   | "connector_not_jellyfin"
   | "credential_not_configured"
@@ -76,7 +77,8 @@ export type JellyfinProvisioningErrorReason =
   | "storage_failure"
   | "template_invalid"
   | "upstream_validation_failed"
-  | "unsupported_version";
+  | "unsupported_version"
+  | "binding_invalid";
 
 export class JellyfinProvisioningError extends Error {
   public readonly reason: JellyfinProvisioningErrorReason;
@@ -245,9 +247,10 @@ export class JellyfinProvisioningService {
     this.#authorize(context);
     const connector = this.#connector(connectorId);
     const row = this.#row(connectorId);
-    if (!row || !this.#bindingMatches(connector, row)) {
-      throw new JellyfinProvisioningError("credential_not_configured");
-    }
+    if (connector.enabled !== 1) throw new JellyfinProvisioningError("connector_disabled");
+    if (!row) throw new JellyfinProvisioningError("credential_not_configured");
+    if (!this.#bindingMatches(connector, row))
+      throw new JellyfinProvisioningError("binding_invalid");
     const stored = this.#decrypt(connector, row);
     if (isTombstone(stored)) throw new JellyfinProvisioningError("credential_not_configured");
     let validation: { protocolVersion: JellyfinProvisioningProtocolVersion };
@@ -413,6 +416,7 @@ export class JellyfinProvisioningService {
       template = null;
     }
     const now = this.#now();
+    const validatedAt = localDisable ? existingConfiguration!.validatedAt : now.getTime();
     const connectorRevision = connectorAdminRevision(connector);
     const binding = {
       configGeneration: connector.configGeneration,
@@ -432,7 +436,7 @@ export class JellyfinProvisioningService {
             protocolVersion: protocolVersion!,
             schemaVersion: 2,
             template,
-            validatedAt: now.getTime(),
+            validatedAt,
           } satisfies StoredProvisioningConfiguration);
     try {
       this.#database.sqlite

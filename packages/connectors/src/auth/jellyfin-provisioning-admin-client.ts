@@ -35,7 +35,18 @@ const authenticationPolicySchema = z
   });
 
 const accessScheduleSchema = z.strictObject({
-  DayOfWeek: z.int().min(0).max(6),
+  DayOfWeek: z.enum([
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Everyday",
+    "Weekday",
+    "Weekend",
+  ]),
   EndHour: z.number().finite(),
   StartHour: z.number().finite(),
 });
@@ -43,11 +54,11 @@ const accessScheduleSchema = z.strictObject({
 const unratedItemSchema = z.enum([
   "Book",
   "ChannelContent",
-  "Episode",
   "LiveTvChannel",
   "LiveTvProgram",
   "Movie",
   "Music",
+  "Other",
   "Series",
   "Trailer",
 ]);
@@ -95,7 +106,7 @@ const userPolicyShape = {
   MaxParentalRating: z.int().nullable(),
   PasswordResetProviderId: z.string().trim().min(1),
   RemoteClientBitrateLimit: z.int(),
-  SyncPlayAccess: z.enum(["CreateAndJoin", "JoinGroups", "None"]),
+  SyncPlayAccess: z.enum(["CreateAndJoinGroups", "JoinGroups", "None"]),
 };
 
 const policySchemaForVersion = (protocolVersion: JellyfinProvisioningProtocolVersion) =>

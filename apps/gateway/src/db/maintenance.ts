@@ -939,6 +939,10 @@ function restoreRootKey(explicitRootKey: Buffer | undefined) {
   return decoded;
 }
 
+export function resolveRestoreRootKey() {
+  return restoreRootKey(undefined);
+}
+
 function initializeStagedKeyVerifier(sqlite: Database.Database, rootKey: Buffer) {
   const expected = databaseKeyVerifier(rootKey);
   sqlite.transaction(() => {
@@ -1210,26 +1214,111 @@ function mergeRollbackInvitationFacts(sqlite: Database.Database, now: number) {
   `);
 }
 
-function mergeRollbackJellyfinProvisioningFacts(sqlite: Database.Database) {
+function mergeRollbackJellyfinProvisioningFacts(sqlite: Database.Database, rootKey?: Buffer) {
+  const candidates = sqlite
+    .prepare(
+      `select current.connector_id as connectorId,
+              current.connector_revision as connectorRevision,
+              current.connector_instance_generation as provisioningInstanceGeneration,
+              current.connector_instance_identity_hash as provisioningIdentityHash,
+              current.encrypted_configuration as encryptedConfiguration,
+              current.revision as revision, current.created_at as createdAt,
+              current.updated_at as updatedAt,
+              restored.type as restoredType, restored.base_url as restoredBaseUrl,
+              restored.tls_policy as restoredTlsPolicy,
+              restored.insecure_http_approved as restoredInsecureHttpApproved,
+              restored.instance_identity_hash as restoredIdentityHash,
+              currentConnector.type as currentType, currentConnector.base_url as currentBaseUrl,
+              currentConnector.tls_policy as currentTlsPolicy,
+              currentConnector.insecure_http_approved as currentInsecureHttpApproved,
+              currentConnector.instance_identity_hash as currentIdentityHash
+       from rollback_timeline.jellyfin_provisioning_configs current
+       join rollback_timeline.connector_configs currentConnector
+         on currentConnector.id = current.connector_id
+       join main.connector_configs restored on restored.id = current.connector_id`,
+    )
+    .all() as {
+    connectorId: string;
+    connectorRevision: string;
+    createdAt: number;
+    currentBaseUrl: string;
+    currentIdentityHash: string | null;
+    currentInsecureHttpApproved: number;
+    currentTlsPolicy: string;
+    currentType: string;
+    encryptedConfiguration: string;
+    provisioningIdentityHash: string | null;
+    provisioningInstanceGeneration: number;
+    revision: number;
+    updatedAt: number;
+    restoredBaseUrl: string;
+    restoredIdentityHash: string | null;
+    restoredInsecureHttpApproved: number;
+    restoredTlsPolicy: string;
+    restoredType: string;
+  }[];
+  const equivalent = candidates.filter(
+    (row) =>
+      row.restoredType === row.currentType &&
+      row.restoredBaseUrl === row.currentBaseUrl &&
+      row.restoredTlsPolicy === row.currentTlsPolicy &&
+      row.restoredInsecureHttpApproved === row.currentInsecureHttpApproved &&
+      row.restoredIdentityHash !== null &&
+      row.restoredIdentityHash === row.currentIdentityHash,
+  );
+  if (equivalent.length > 0) {
+    if (!rootKey || rootKey.length !== 32) {
+      throw new MaintenanceError("restore_sanitization_failed");
+    }
+    const cipher = new EnvelopeCipher(rootKey);
+    for (const row of equivalent) {
+      try {
+        cipher.decrypt(
+          row.encryptedConfiguration,
+          `jellyfin_provisioning:${row.connectorId}:${row.connectorRevision}:${row.provisioningInstanceGeneration}:${row.provisioningIdentityHash ?? "none"}`,
+        );
+      } catch (error) {
+        throw new MaintenanceError("restore_sanitization_failed", { cause: error });
+      }
+    }
+  }
+
   sqlite.exec(`
     delete from main.jellyfin_provisioning_configs as restored
     where not exists (
       select 1 from rollback_timeline.jellyfin_provisioning_configs current
       where current.connector_id = restored.connector_id
     );
-
-    insert or replace into main.jellyfin_provisioning_configs (
-      connector_id, connector_revision, connector_instance_generation,
-      connector_instance_identity_hash, encrypted_configuration, revision,
-      created_at, updated_at
-    ) select
-      current.connector_id, current.connector_revision,
-      current.connector_instance_generation, current.connector_instance_identity_hash,
-      current.encrypted_configuration, current.revision, current.created_at,
-      current.updated_at
-    from rollback_timeline.jellyfin_provisioning_configs current
-    join main.connector_configs connector on connector.id = current.connector_id;
   `);
+  const approvedIds = new Set(equivalent.map((row) => row.connectorId));
+  const restoredRows = sqlite
+    .prepare("select connector_id as connectorId from main.jellyfin_provisioning_configs")
+    .all() as { connectorId: string }[];
+  const remove = sqlite.prepare(
+    "delete from main.jellyfin_provisioning_configs where connector_id = ?",
+  );
+  for (const row of restoredRows) {
+    if (!approvedIds.has(row.connectorId)) remove.run(row.connectorId);
+  }
+  const insert = sqlite.prepare(
+    `insert or replace into main.jellyfin_provisioning_configs (
+       connector_id, connector_revision, connector_instance_generation,
+       connector_instance_identity_hash, encrypted_configuration, revision,
+       created_at, updated_at
+     ) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const row of equivalent) {
+    insert.run(
+      row.connectorId,
+      row.connectorRevision,
+      row.provisioningInstanceGeneration,
+      row.provisioningIdentityHash,
+      row.encryptedConfiguration,
+      row.revision,
+      row.createdAt,
+      row.updatedAt,
+    );
+  }
 }
 
 function rebindJellyfinProvisioningConfigs(sqlite: Database.Database, rootKey?: Buffer) {
@@ -1257,44 +1346,52 @@ function rebindJellyfinProvisioningConfigs(sqlite: Database.Database, rootKey?: 
     provisioningInstanceGeneration: number;
     type: string;
   }[];
+  if (rows.length === 0) return;
+  if (!rootKey || rootKey.length !== 32) {
+    throw new MaintenanceError("restore_sanitization_failed");
+  }
+  const cipher = new EnvelopeCipher(rootKey);
+  const rebound = rows.map((row) => {
+    try {
+      const plaintext = cipher.decrypt(
+        row.encryptedConfiguration,
+        `jellyfin_provisioning:${row.connectorId}:${row.connectorRevision}:${row.provisioningInstanceGeneration}:${row.provisioningIdentityHash ?? "none"}`,
+      );
+      const connectorRevision = createHash("sha256")
+        .update(`${row.type}\0${row.connectorId}\0${row.configGeneration}`, "utf8")
+        .digest("base64url");
+      return {
+        connectorId: row.connectorId,
+        connectorInstanceGeneration: row.instanceGeneration,
+        connectorInstanceIdentityHash: row.instanceIdentityHash,
+        connectorRevision,
+        encryptedConfiguration: cipher.encrypt(
+          plaintext,
+          `jellyfin_provisioning:${row.connectorId}:${connectorRevision}:${row.instanceGeneration}:${row.instanceIdentityHash ?? "none"}`,
+        ),
+      };
+    } catch (error) {
+      throw new MaintenanceError("restore_sanitization_failed", { cause: error });
+    }
+  });
   const update = sqlite.prepare(
     `update main.jellyfin_provisioning_configs
      set connector_revision = ?, connector_instance_generation = ?,
          connector_instance_identity_hash = ?, encrypted_configuration = ?
      where connector_id = ?`,
   );
-  const cipher = rootKey === undefined ? undefined : new EnvelopeCipher(rootKey);
-  for (const row of rows) {
-    const connectorRevision = createHash("sha256")
-      .update(`${row.type}\0${row.connectorId}\0${row.configGeneration}`, "utf8")
-      .digest("base64url");
-    let encryptedConfiguration = row.encryptedConfiguration;
-    if (cipher) {
-      let plaintext: string;
-      try {
-        plaintext = cipher.decrypt(
-          row.encryptedConfiguration,
-          `jellyfin_provisioning:${row.connectorId}:${row.connectorRevision}:${row.provisioningInstanceGeneration}:${row.provisioningIdentityHash ?? "none"}`,
-        );
-        encryptedConfiguration = cipher.encrypt(
-          plaintext,
-          `jellyfin_provisioning:${row.connectorId}:${connectorRevision}:${row.instanceGeneration}:${row.instanceIdentityHash ?? "none"}`,
-        );
-      } catch (error) {
-        throw new MaintenanceError("restore_sanitization_failed", { cause: error });
-      }
-    }
+  for (const row of rebound) {
     update.run(
-      connectorRevision,
-      row.instanceGeneration,
-      row.instanceIdentityHash,
-      encryptedConfiguration,
+      row.connectorRevision,
+      row.connectorInstanceGeneration,
+      row.connectorInstanceIdentityHash,
+      row.encryptedConfiguration,
       row.connectorId,
     );
   }
 }
 
-function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number) {
+function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number, rootKey?: Buffer) {
   const exhaustedRevision = sqlite
     .prepare(
       `select 1 from main.service_identity_links restored
@@ -1322,6 +1419,10 @@ function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number) {
     )
     .get();
   if (exhaustedConnectorGeneration) throw new MaintenanceError("restore_sanitization_failed");
+
+  // Decide whether a provisioning credential may cross the restore boundary before
+  // the connector security merge intentionally clears the restored identity.
+  mergeRollbackJellyfinProvisioningFacts(sqlite, rootKey);
 
   sqlite.exec(`
     update main.users as restored
@@ -1515,7 +1616,6 @@ function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number) {
     ) select secret_hash, purpose, origin_session_id, reserved_at
       from rollback_timeline.session_secret_reservations;
   `);
-  mergeRollbackJellyfinProvisioningFacts(sqlite);
   mergeIdempotencyReceipts(sqlite);
   mergeRollbackExternalMutationFacts(sqlite);
   mergeRollbackInvitationFacts(sqlite, now);
@@ -1739,7 +1839,7 @@ export function sanitizeRestoredDatabase(
     }
     options.failpoint?.(sqlite);
     sqlite.transaction(() => {
-      if (options.rollbackDatabasePath) mergeRollbackSecurityFacts(sqlite!, now);
+      if (options.rollbackDatabasePath) mergeRollbackSecurityFacts(sqlite!, now, options.rootKey);
       else quarantineAuthorityWithoutCurrentTimeline(sqlite!, now);
       const exhaustedRevision = sqlite!
         .prepare("select 1 from service_identity_links where revision >= 2147483647 limit 1")
@@ -1909,27 +2009,33 @@ async function stageSelectedBackup(
   rootKey?: Buffer,
   dependencies: RestoreDependencies = {},
 ) {
-  await copyFile(backupPath, temporaryPath, constants.COPYFILE_EXCL);
-  await chmod(temporaryPath, 0o600);
-  const staged = inspectDatabase(temporaryPath);
-  const stagedSha256 = await sha256File(temporaryPath);
-  if (
-    stagedSha256 !== selected.manifest.databaseSha256 ||
-    staged.migrationCount !== selected.inspection.migrationCount ||
-    staged.schemaSha256 !== selected.inspection.schemaSha256
-  ) {
-    throw new MaintenanceError("backup_mismatch");
+  const resolvedRootKey = restoreRootKey(rootKey);
+  const ownsRootKey = resolvedRootKey !== rootKey;
+  try {
+    await copyFile(backupPath, temporaryPath, constants.COPYFILE_EXCL);
+    await chmod(temporaryPath, 0o600);
+    const staged = inspectDatabase(temporaryPath);
+    const stagedSha256 = await sha256File(temporaryPath);
+    if (
+      stagedSha256 !== selected.manifest.databaseSha256 ||
+      staged.migrationCount !== selected.inspection.migrationCount ||
+      staged.schemaSha256 !== selected.inspection.schemaSha256
+    ) {
+      throw new MaintenanceError("backup_mismatch");
+    }
+    migrateStagedRestoreDatabase(temporaryPath, staged.migrationCount, resolvedRootKey);
+    sanitizeRestoredDatabase(temporaryPath, {
+      ...(dependencies.sanitationFailpoint ? { failpoint: dependencies.sanitationFailpoint } : {}),
+      ...(now ? { now } : {}),
+      ...(rollbackDatabasePath ? { rollbackDatabasePath } : {}),
+      ...(resolvedRootKey ? { rootKey: resolvedRootKey } : {}),
+    });
+    inspectDatabase(temporaryPath);
+    await syncFile(temporaryPath);
+    return sha256File(temporaryPath);
+  } finally {
+    if (ownsRootKey) resolvedRootKey?.fill(0);
   }
-  migrateStagedRestoreDatabase(temporaryPath, staged.migrationCount, rootKey);
-  sanitizeRestoredDatabase(temporaryPath, {
-    ...(dependencies.sanitationFailpoint ? { failpoint: dependencies.sanitationFailpoint } : {}),
-    ...(now ? { now } : {}),
-    ...(rollbackDatabasePath ? { rollbackDatabasePath } : {}),
-    ...(rootKey ? { rootKey } : {}),
-  });
-  inspectDatabase(temporaryPath);
-  await syncFile(temporaryPath);
-  return sha256File(temporaryPath);
 }
 
 export async function restoreDatabaseBackup(

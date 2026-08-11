@@ -771,10 +771,13 @@ describe("restore sanitation and rollback", () => {
     { name: "a disabled configuration", state: "disabled" as const },
     { name: "a replaced credential", state: "replaced" as const },
     { name: "current-row absence", state: "absent" as const },
-  ])("uses the rollback timeline as authority over $name", async ({ state }) => {
+    { equivalent: false, name: "a mismatched target credential", state: "replaced" as const },
+  ])("uses the rollback timeline as authority over $name", async ({ equivalent = true, state }) => {
     const directory = await privateDirectory(`omnifin-provisioning-authority-${state}-`);
     const databasePath = path.join(directory, "restored.sqlite");
-    const rollbackPath = path.join(directory, "rollback.sqlite");
+    const rollbackPath = path.join(directory, "rollback-timeline.sqlite");
+    const selectedPath = path.join(directory, "selected.sqlite");
+    const rollbackOutputPath = path.join(directory, "pre-restore.sqlite");
     const cipher = new EnvelopeCipher(rootKey);
     const revision = (configGeneration: number) =>
       createHash("sha256")
@@ -856,7 +859,7 @@ describe("restore sanitation and rollback", () => {
         "{}",
         7,
         7,
-        "c".repeat(43),
+        (equivalent ? "b" : "c").repeat(43),
         1,
         7,
       );
@@ -877,8 +880,8 @@ describe("restore sanitation and rollback", () => {
           "authority-jellyfin",
           revision(7),
           7,
-          "c".repeat(43),
-          cipher.encrypt(payload, context(revision(7), 7, "c".repeat(43))),
+          (equivalent ? "b" : "c").repeat(43),
+          cipher.encrypt(payload, context(revision(7), 7, (equivalent ? "b" : "c").repeat(43))),
           9,
           2,
           2,
@@ -886,9 +889,16 @@ describe("restore sanitation and rollback", () => {
     }
     sqlite.close();
 
-    sanitizeRestoredDatabase(databasePath, {
+    await createDatabaseBackup({ databasePath, outputPath: selectedPath });
+    await copyFile(rollbackPath, databasePath);
+    await rm(`${databasePath}-wal`, { force: true });
+    await rm(`${databasePath}-shm`, { force: true });
+    await restoreDatabaseBackup({
+      backupPath: selectedPath,
+      confirmedGatewayStopped: true,
+      databasePath,
       now: new Date(5_000),
-      rollbackDatabasePath: rollbackPath,
+      rollbackOutputPath,
       rootKey,
     });
 
@@ -913,6 +923,8 @@ describe("restore sanitation and rollback", () => {
           }
         | undefined;
       if (state === "absent") {
+        expect(row).toBeUndefined();
+      } else if (!equivalent) {
         expect(row).toBeUndefined();
       } else {
         expect(row).toMatchObject({
