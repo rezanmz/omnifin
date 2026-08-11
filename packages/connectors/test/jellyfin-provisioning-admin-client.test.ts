@@ -66,11 +66,11 @@ function policy(
 }
 
 describe("JellyfinProvisioningAdminClient", () => {
-  it("validates a 10.10.7 API key only through the privileged Auth/Keys read", async () => {
+  it("validates a 10.10.7 API key by AccessToken despite Jellyfin's inactive flag", async () => {
     const mock = createMockTransport([
       jsonResponse({ Id: "server-10-10", ServerName: "Home", Version: "10.10.7" }),
       jsonResponse({
-        Items: [{ AccessToken: "server-api-key", IsActive: true }],
+        Items: [{ AccessToken: "server-api-key", IsActive: false }],
         StartIndex: 0,
         TotalRecordCount: 1,
       }),
@@ -132,7 +132,7 @@ describe("JellyfinProvisioningAdminClient", () => {
     const mock = createMockTransport([
       jsonResponse({ Id: "server-10-11", ServerName: "Home", Version: "10.11.11" }),
       jsonResponse({
-        Items: [{ AccessToken: "server-api-key", IsActive: true }],
+        Items: [{ AccessToken: "server-api-key", IsActive: false }],
         StartIndex: 0,
         TotalRecordCount: 1,
       }),

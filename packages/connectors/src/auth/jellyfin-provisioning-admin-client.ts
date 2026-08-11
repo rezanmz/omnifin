@@ -305,10 +305,8 @@ export class JellyfinProvisioningAdminClient {
     });
     if (
       input.credentialKind === "api_key" &&
-      !authKeys.Items.some(
-        (authenticationInfo) =>
-          authenticationInfo.IsActive !== false &&
-          tokensEqual(authenticationInfo.AccessToken, input.accessToken),
+      !authKeys.Items.some((authenticationInfo) =>
+        tokensEqual(authenticationInfo.AccessToken, input.accessToken),
       )
     ) {
       throw new SafeConnectorError({
