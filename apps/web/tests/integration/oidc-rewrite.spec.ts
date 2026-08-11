@@ -208,7 +208,7 @@ test("streams gateway responses before the upstream body completes", async ({
   expect(streamedBody).toBe("stream-open-stream-close");
 });
 
-test("preserves redirects and explicitly denies an uninvited OIDC callback", async ({
+test("preserves redirects and onboards an uninvited OIDC callback when JIT is enabled", async ({
   baseURL,
   request,
 }) => {
@@ -216,11 +216,17 @@ test("preserves redirects and explicitly denies an uninvited OIDC callback", asy
   const initialProviders = await request.get("/api/auth/providers", { maxRedirects: 0 });
   expect(initialProviders.status()).toBe(200);
   expectNoStore(initialProviders);
-  expect(await initialProviders.json()).toEqual({
+  const initialProviderPayload = (await initialProviders.json()) as {
+    providers: ReadonlyArray<{ state: string }>;
+  };
+  const initialProvider = initialProviderPayload.providers[0];
+  expect(initialProviderPayload).toEqual({
     providers: [
       {
         ...providerObject,
         state: expect.stringMatching(/^(?:available|unavailable)$/u),
+        supportsBackChannelLogout: initialProvider?.state === "available",
+        supportsFrontChannelLogout: initialProvider?.state === "available",
       },
     ],
   });
@@ -311,10 +317,10 @@ test("preserves redirects and explicitly denies an uninvited OIDC callback", asy
   expect(callback.status()).toBe(303);
   expectNoStore(callback);
   expect(callback.headers().pragma).toBe("no-cache");
-  expect(headerValues(callback, "location")).toEqual(["/login?authError=account_not_authorized"]);
+  expect(headerValues(callback, "location")).toEqual(["/link/jellyfin"]);
 
   const callbackCookies = headerValues(callback, "set-cookie");
-  expect(callbackCookies).toHaveLength(1);
+  expect(callbackCookies).toHaveLength(2);
   const transactionCookieName = setCookieName(transactionCookie!);
   const clearedTransaction = callbackCookies.find(
     (cookie) => setCookieName(cookie) === transactionCookieName,
@@ -323,9 +329,9 @@ test("preserves redirects and explicitly denies an uninvited OIDC callback", asy
   expect(clearedTransaction).toContain("HttpOnly");
   expect(clearedTransaction).toContain("Path=/");
   expect(clearedTransaction).toContain("SameSite=Lax");
-  expect(callbackCookies.find((cookie) => setCookieName(cookie) === "omnifin_local_session")).toBe(
-    undefined,
-  );
+  expect(
+    callbackCookies.find((cookie) => setCookieName(cookie) === "omnifin_local_session"),
+  ).toBeDefined();
   expect(callbackCookies.join("\n")).not.toContain("omnifin_local_oidc_binding=;");
 
   const finalCookies = (await request.storageState()).cookies;
@@ -333,12 +339,19 @@ test("preserves redirects and explicitly denies an uninvited OIDC callback", asy
     expect.objectContaining({ name: "omnifin_local_oidc_binding", value: browserBinding }),
   );
   expect(finalCookies.some((cookie) => cookie.name === transactionCookieName)).toBe(false);
-  expect(finalCookies.some((cookie) => cookie.name === "omnifin_local_session")).toBe(false);
+  expect(finalCookies.some((cookie) => cookie.name === "omnifin_local_session")).toBe(true);
 
   const session = await request.get("/api/auth/session", { maxRedirects: 0 });
   expect(session.status()).toBe(200);
   expectNoStore(session);
-  await expect(session.json()).resolves.toEqual({ csrfToken: null, principal: null });
+  await expect(session.json()).resolves.toMatchObject({
+    csrfToken: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u),
+    principal: {
+      accountState: "pending_link",
+      authenticationMethod: { kind: "oidc", providerId },
+      linkedServices: [],
+    },
+  });
 
   const frontchannelLogout = await request.get(
     `/api/auth/oidc/frontchannel/${providerId}?${new URLSearchParams({
@@ -383,12 +396,15 @@ test("preserves redirects and explicitly denies an uninvited OIDC callback", asy
     { maxRedirects: 0 },
   );
   expect(restartedCallback.status()).toBe(303);
-  expect(headerValues(restartedCallback, "location")).toEqual([
-    "/login?authError=account_not_authorized",
-  ]);
+  expect(headerValues(restartedCallback, "location")).toEqual(["/link/jellyfin"]);
   const restartedSession = await request.get("/api/auth/session", { maxRedirects: 0 });
   await expect(restartedSession.json()).resolves.toMatchObject({
-    principal: null,
+    csrfToken: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u),
+    principal: {
+      accountState: "pending_link",
+      authenticationMethod: { kind: "oidc", providerId },
+      linkedServices: [],
+    },
   });
 
   const providerLogout = await request.post(`/api/auth/oidc/backchannel/${providerId}`, {

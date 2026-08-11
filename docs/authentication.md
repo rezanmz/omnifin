@@ -302,8 +302,9 @@ implicit grant or resource-owner password grant.
    validates state, code exchange, signature, issuer, audience, expiry, and nonce.
 4. The external identity is keyed by `(issuer, sub)`. Email address and username are
    display claims, never identity keys.
-5. A new identity is provisioned only when JIT provisioning is enabled. Its default
-   role is `viewer` unless an explicit configured claim mapping grants another role.
+5. A new identity without a valid invitation is provisioned only when JIT provisioning is enabled;
+   a valid invitation may provision a new identity regardless of that setting. Its default role is
+   `viewer` unless an explicit configured claim mapping grants another role.
 6. Identity resolution, audit attribution, prior-session revocation, and new-session
    creation commit atomically before the browser receives the session cookie.
 
