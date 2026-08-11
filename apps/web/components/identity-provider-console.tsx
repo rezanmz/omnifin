@@ -7,7 +7,7 @@ import type {
   OidcProviderUpdateRequest,
   OidcRoleMappingCreateRequest,
   OidcRoleMappingUpdateRequest,
-  RoleMapping,
+  OidcRoleMappingAdmin,
 } from "@omnifin/contracts/auth";
 import {
   QueryClient,
@@ -88,7 +88,7 @@ export interface IdentityProviderConsoleProperties {
   client?: IdentityProviderAdminClient;
   displayProfile?: DisplayProfile;
   embedded?: boolean;
-  initialMappings?: Readonly<Record<string, readonly RoleMapping[]>> | undefined;
+  initialMappings?: Readonly<Record<string, readonly OidcRoleMappingAdmin[]>> | undefined;
   initialOutcome?: IdentityProviderAdminLoadOutcome | undefined;
   publicBaseUrl: string;
 }
@@ -104,7 +104,7 @@ interface ProviderFormProperties {
 
 interface MappingFormProperties {
   busy: boolean;
-  mapping?: RoleMapping | undefined;
+  mapping?: OidcRoleMappingAdmin | undefined;
   mode: "create" | "edit";
   onCancel: () => void;
   onSubmit: (input: OidcRoleMappingCreateRequest | OidcRoleMappingUpdateRequest) => Promise<void>;
@@ -598,21 +598,25 @@ function ProviderForm({
   );
 }
 
-function mappingValueType(values: RoleMapping["values"]): MappingValueType {
+function mappingValueType(values: OidcRoleMappingAdmin["values"]): MappingValueType {
   const types = new Set(values.map((value) => typeof value));
   return types.size === 1 ? ([...types][0] as Exclude<MappingValueType, "mixed">) : "mixed";
 }
 
-function formatMappingValues(values: RoleMapping["values"], type: MappingValueType) {
+function formatMappingValues(values: OidcRoleMappingAdmin["values"], type: MappingValueType) {
   return values
     .map((value) => (type === "mixed" ? `${typeof value}:${String(value)}` : String(value)))
     .join("\n");
 }
 
+function mappingIsRedacted(mapping: OidcRoleMappingAdmin) {
+  return "valuesRedacted" in mapping && mapping.valuesRedacted === true;
+}
+
 function parseMappingValues(
   values: string,
   type: MappingValueType,
-): { data: RoleMapping["values"]; success: true } | { message: string; success: false } {
+): { data: OidcRoleMappingAdmin["values"]; success: true } | { message: string; success: false } {
   const lines = values
     .split("\n")
     .map((value) => value.trim())
@@ -1060,7 +1064,7 @@ function IdentityProviderConsoleContent({
     if (!snapshot || !selected) return;
     await run("mapping-create", async () => {
       const result = await client.createRoleMapping(selected.id, input, snapshot.csrfToken);
-      queryClient.setQueryData<readonly RoleMapping[]>(
+      queryClient.setQueryData<readonly OidcRoleMappingAdmin[]>(
         ["oidc-role-mappings", selected.id],
         (current = []) =>
           [...current, result.mapping].sort(
@@ -1078,7 +1082,7 @@ function IdentityProviderConsoleContent({
     if (!snapshot || !selected) return;
     await run(`mapping-delete-${mappingId}`, async () => {
       const result = await client.deleteRoleMapping(selected.id, mappingId, snapshot.csrfToken);
-      queryClient.setQueryData<readonly RoleMapping[]>(
+      queryClient.setQueryData<readonly OidcRoleMappingAdmin[]>(
         ["oidc-role-mappings", selected.id],
         (current = []) => current.filter((mapping) => mapping.id !== result.deletedMappingId),
       );
@@ -1101,7 +1105,7 @@ function IdentityProviderConsoleContent({
         input,
         snapshot.csrfToken,
       );
-      queryClient.setQueryData<readonly RoleMapping[]>(
+      queryClient.setQueryData<readonly OidcRoleMappingAdmin[]>(
         ["oidc-role-mappings", selected.id],
         (current = []) =>
           current
@@ -1579,8 +1583,9 @@ function IdentityProviderConsoleContent({
                             <div>
                               <strong>{mapping.claimPath.join(".")}</strong>
                               <small>
-                                {mapping.operator.replaceAll("_", " ")} ·{" "}
-                                {mapping.values.map(String).join(", ")}
+                                {mappingIsRedacted(mapping)
+                                  ? "Subject value protected"
+                                  : `${mapping.operator.replaceAll("_", " ")} · ${mapping.values.map(String).join(", ")}`}
                               </small>
                             </div>
                             <span className={styles.roleBadge}>{mapping.role}</span>
@@ -1605,22 +1610,24 @@ function IdentityProviderConsoleContent({
                               </div>
                             ) : (
                               <div className={styles.mappingActions}>
+                                {!mappingIsRedacted(mapping) ? (
+                                  <button
+                                    className={styles.iconButton}
+                                    aria-label={`Edit ${mapping.claimPath.join(".")} mapping`}
+                                    disabled={busyAction !== null}
+                                    onClick={() => {
+                                      setEditingMappingId(mapping.id);
+                                      setMappingComposer(false);
+                                      setDeletingMappingId(null);
+                                    }}
+                                    type="button"
+                                  >
+                                    <Pencil aria-hidden="true" size={16} />
+                                  </button>
+                                ) : null}
                                 <button
                                   className={styles.iconButton}
-                                  aria-label={`Edit ${mapping.claimPath.join(".")} mapping`}
-                                  disabled={busyAction !== null}
-                                  onClick={() => {
-                                    setEditingMappingId(mapping.id);
-                                    setMappingComposer(false);
-                                    setDeletingMappingId(null);
-                                  }}
-                                  type="button"
-                                >
-                                  <Pencil aria-hidden="true" size={16} />
-                                </button>
-                                <button
-                                  className={styles.iconButton}
-                                  aria-label={`Remove ${mapping.claimPath.join(".")} mapping`}
+                                  aria-label={`Remove ${mappingIsRedacted(mapping) ? "protected subject" : mapping.claimPath.join(".")} mapping`}
                                   disabled={busyAction !== null}
                                   onClick={() => {
                                     setDeletingMappingId(mapping.id);

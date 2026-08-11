@@ -1,5 +1,7 @@
 import type {
   SessionPrincipal,
+  OidcRoleAssignmentRequest,
+  OidcRoleAssignmentResponse,
   UserAccessMutationRequest,
   UserAccessMutationResponse,
   UserAccessSummary,
@@ -191,6 +193,11 @@ export interface UserAccessAdminClient {
     input: UserAccessMutationRequest,
     csrfToken: string,
   ): Promise<UserAccessMutationResponse>;
+  assignOidcRole(
+    userId: string,
+    input: OidcRoleAssignmentRequest,
+    csrfToken: string,
+  ): Promise<OidcRoleAssignmentResponse>;
 }
 
 export const userAccessAdminClient: UserAccessAdminClient = {
@@ -205,5 +212,19 @@ export const userAccessAdminClient: UserAccessAdminClient = {
       method: "PATCH",
     });
     return parsedResponse(response, auth.userAccessMutationResponseSchema);
+  },
+
+  async assignOidcRole(userId, input, csrfToken) {
+    const { auth } = await contractSchemas();
+    const body = auth.oidcRoleAssignmentRequestSchema.parse(input);
+    const response = await fetchSameOrigin(
+      `/api/admin/users/${encodeURIComponent(userId)}/oidc-role-assignment`,
+      {
+        body: JSON.stringify(body),
+        headers: { "content-type": "application/json", [CSRF_HEADER]: csrfToken },
+        method: "POST",
+      },
+    );
+    return parsedResponse(response, auth.oidcRoleAssignmentResponseSchema);
   },
 };

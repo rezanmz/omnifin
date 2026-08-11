@@ -116,6 +116,7 @@ export default async function IdentityProvidersPage({
                       providerId: "oidc-authentik",
                       role: "operator",
                       values: ["media-operators"],
+                      valuesRedacted: false,
                     },
                   ],
                 }

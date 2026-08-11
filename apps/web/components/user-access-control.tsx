@@ -50,6 +50,7 @@ import {
 } from "../lib/invite-admin";
 import styles from "./user-access-control.module.css";
 import { UserAccessPageShell } from "./user-access-page-shell";
+import { UserRoleAssignmentWizard } from "./user-role-assignment-wizard";
 
 const administrationQueryKey = ["user-access-administration"] as const;
 const roles = ["viewer", "requester", "operator", "admin"] as const;
@@ -504,6 +505,7 @@ function UserAccessControlContent({
   const [draftEnabled, setDraftEnabled] = useState<boolean | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
+  const [assignmentOpen, setAssignmentOpen] = useState(false);
 
   if (outcomeQuery.isPending) {
     return (
@@ -546,7 +548,7 @@ function UserAccessControlContent({
   const stateChanged = selected !== null && nextEnabled !== currentEnabled;
   const hasDraft = roleChanged || stateChanged;
   const isSelf = selected?.id === snapshot.principal.userId;
-  const providerManaged = selected?.authenticationMethods.includes("oidc") ?? false;
+  const providerManaged = selected?.roleSource === "oidc_mapping";
   const statistics = {
     active: users.filter((user) => user.status === "active").length,
     administrators: users.filter((user) => user.role === "admin" && user.status === "active")
@@ -559,12 +561,52 @@ function UserAccessControlContent({
     setDraftRole(null);
     setDraftEnabled(null);
     setOperationError(null);
+    setAssignmentOpen(false);
   };
 
   const resetDraft = () => {
     setDraftRole(null);
     setDraftEnabled(null);
     setOperationError(null);
+  };
+
+  const assignOidcRole = async (role: Role) => {
+    if (!selected || mutation.isPending) return;
+    setOperationError(null);
+    setNotice(null);
+    try {
+      await mutation.mutateAsync(async () => {
+        const result = await client.assignOidcRole(
+          selected.id,
+          { expectedUpdatedAt: selected.updatedAt, role },
+          snapshot.csrfToken,
+        );
+        const refreshed = await client.load();
+        if (refreshed.status === "signed_out" || refreshed.status === "forbidden") {
+          queryClient.setQueryData(administrationQueryKey, refreshed);
+          return;
+        }
+        if (refreshed.status !== "ready") {
+          throw new UserAccessAdminClientError(
+            "unavailable",
+            "session_recheck_failed",
+            "The provider role was submitted, but the session could not be rechecked. Reload the directory before continuing.",
+          );
+        }
+        queryClient.setQueryData(administrationQueryKey, refreshed);
+        setAssignmentOpen(false);
+        setNotice(
+          `Provider role ${role} assigned for the next OIDC sign-in. ${result.revokedSessions} OIDC session${result.revokedSessions === 1 ? "" : "s"} closed.`,
+        );
+      });
+    } catch (error) {
+      setOperationError(userFacingError(error));
+      if (error instanceof UserAccessAdminClientError && error.kind === "session_changed") {
+        queryClient.setQueryData(administrationQueryKey, {
+          status: error.code === "session_signed_out" ? "signed_out" : "forbidden",
+        });
+      }
+    }
   };
 
   const apply = async () => {
@@ -776,9 +818,26 @@ function UserAccessControlContent({
                 <Sparkles aria-hidden="true" size={18} />
                 <p>
                   This role comes from an OIDC claim mapping. Change the provider mapping to keep
-                  identity policy deterministic; account suspension remains local.
+                  provider policy deterministic, or assign an individual provider fallback below.
                 </p>
+                <button
+                  className={styles.secondaryButton}
+                  disabled={isSelf || mutation.isPending}
+                  onClick={() => setAssignmentOpen(true)}
+                  type="button"
+                >
+                  Assign individual provider role
+                </button>
               </div>
+            ) : null}
+
+            {assignmentOpen && providerManaged ? (
+              <UserRoleAssignmentWizard
+                busy={mutation.isPending}
+                onCancel={() => setAssignmentOpen(false)}
+                onSubmit={assignOidcRole}
+                user={selected}
+              />
             ) : null}
 
             <fieldset className={styles.roleFieldset} disabled={isSelf || mutation.isPending}>

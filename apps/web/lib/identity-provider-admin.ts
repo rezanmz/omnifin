@@ -10,7 +10,7 @@ import type {
   OidcRoleMappingDeleteResponse,
   OidcRoleMappingMutationResponse,
   OidcRoleMappingUpdateRequest,
-  RoleMapping,
+  OidcRoleMappingAdmin,
   SessionPrincipal,
 } from "@omnifin/contracts/auth";
 
@@ -196,7 +196,7 @@ export interface IdentityProviderAdminClient {
     mappingId: string,
     csrfToken: string,
   ): Promise<OidcRoleMappingDeleteResponse>;
-  listRoleMappings(providerId: string): Promise<readonly RoleMapping[]>;
+  listRoleMappings(providerId: string): Promise<readonly OidcRoleMappingAdmin[]>;
   load(): Promise<IdentityProviderAdminLoadOutcome>;
   startAdministratorBootstrap(
     providerId: string,
