@@ -253,6 +253,13 @@
       "when": 1786213014793,
       "tag": "0035_invitations",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1786213014794,
+      "tag": "0036_jellyfin_provisioning",
+      "breakpoints": true
     }
   ]
 }

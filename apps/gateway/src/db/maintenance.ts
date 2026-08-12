@@ -25,7 +25,7 @@ import {
   preflightDatabase,
   readMigrationCatalog,
 } from "./migration-preflight.js";
-import { constantTimeTextEqual, databaseKeyVerifier } from "../security/crypto.js";
+import { constantTimeTextEqual, databaseKeyVerifier, EnvelopeCipher } from "../security/crypto.js";
 
 const BACKUP_FORMAT = "omnifin-sqlite-backup";
 const BACKUP_FORMAT_VERSION = 1;
@@ -939,6 +939,12 @@ function restoreRootKey(explicitRootKey: Buffer | undefined) {
   return decoded;
 }
 
+export function resolveRestoreRootKey() {
+  const rootKey = restoreRootKey(undefined);
+  if (!rootKey) throw new MaintenanceError("restore_sanitization_failed");
+  return rootKey;
+}
+
 function initializeStagedKeyVerifier(sqlite: Database.Database, rootKey: Buffer) {
   const expected = databaseKeyVerifier(rootKey);
   sqlite.transaction(() => {
@@ -1210,7 +1216,161 @@ function mergeRollbackInvitationFacts(sqlite: Database.Database, now: number) {
   `);
 }
 
-function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number) {
+function provisioningCipher(rootKey: Buffer | undefined) {
+  if (!rootKey || rootKey.length !== 32) throw new MaintenanceError("restore_sanitization_failed");
+  return new EnvelopeCipher(rootKey);
+}
+
+function parseProvisioningPayload(
+  cipher: EnvelopeCipher,
+  row: {
+    connectorId: string;
+    connectorRevision: string;
+    instanceGeneration: number;
+    identityHash: string | null;
+    encryptedConfiguration: string;
+  },
+) {
+  try {
+    return JSON.parse(
+      cipher.decrypt(
+        row.encryptedConfiguration,
+        `jellyfin_provisioning:${row.connectorId}:${row.connectorRevision}:${row.instanceGeneration}:${row.identityHash ?? "none"}`,
+      ),
+    ) as unknown;
+  } catch (error) {
+    throw new MaintenanceError("restore_sanitization_failed", { cause: error });
+  }
+}
+
+function isClearedProvisioningPayload(
+  value: unknown,
+): value is { schemaVersion: 2; state: "cleared" } {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value as Record<string, unknown>).schemaVersion === 2 &&
+    (value as Record<string, unknown>).state === "cleared" &&
+    Object.keys(value).length === 2
+  );
+}
+
+function mergeRollbackJellyfinProvisioningFactsSafe(sqlite: Database.Database, rootKey?: Buffer) {
+  const rows = sqlite
+    .prepare(
+      `select current.connector_id as connectorId,
+              current.connector_revision as connectorRevision,
+              current.connector_instance_generation as instanceGeneration,
+              current.connector_instance_identity_hash as identityHash,
+              current.encrypted_configuration as encryptedConfiguration,
+              current.revision as revision, current.created_at as createdAt,
+              current.updated_at as updatedAt
+       from rollback_timeline.jellyfin_provisioning_configs current
+       join main.connector_configs restored on restored.id = current.connector_id`,
+    )
+    .all() as {
+    connectorId: string;
+    connectorRevision: string;
+    instanceGeneration: number;
+    identityHash: string | null;
+    encryptedConfiguration: string;
+    revision: number;
+    createdAt: number;
+    updatedAt: number;
+  }[];
+  sqlite.exec("delete from main.jellyfin_provisioning_configs");
+  if (rows.length === 0) return;
+  const cipher = provisioningCipher(rootKey);
+  const insert = sqlite.prepare(
+    `insert into main.jellyfin_provisioning_configs (
+       connector_id, connector_revision, connector_instance_generation,
+       connector_instance_identity_hash, encrypted_configuration, revision,
+       created_at, updated_at
+     ) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const row of rows) {
+    const payload = parseProvisioningPayload(cipher, row);
+    if (!isClearedProvisioningPayload(payload)) continue;
+    insert.run(
+      row.connectorId,
+      row.connectorRevision,
+      row.instanceGeneration,
+      row.identityHash,
+      row.encryptedConfiguration,
+      row.revision,
+      row.createdAt,
+      row.updatedAt,
+    );
+  }
+}
+
+function sanitizeJellyfinProvisioningConfigs(sqlite: Database.Database, rootKey?: Buffer) {
+  const rows = sqlite
+    .prepare(
+      `select provisioning.connector_id as connectorId,
+              provisioning.connector_revision as connectorRevision,
+              provisioning.connector_instance_generation as instanceGeneration,
+              provisioning.connector_instance_identity_hash as identityHash,
+              provisioning.encrypted_configuration as encryptedConfiguration,
+              provisioning.revision as revision,
+              connector.type as type, connector.config_generation as configGeneration,
+              connector.instance_generation as connectorInstanceGeneration,
+              connector.instance_identity_hash as connectorIdentityHash
+       from main.jellyfin_provisioning_configs provisioning
+       join main.connector_configs connector on connector.id = provisioning.connector_id`,
+    )
+    .all() as {
+    connectorId: string;
+    connectorRevision: string;
+    instanceGeneration: number;
+    identityHash: string | null;
+    encryptedConfiguration: string;
+    revision: number;
+    type: string;
+    configGeneration: number;
+    connectorInstanceGeneration: number;
+    connectorIdentityHash: string | null;
+  }[];
+  if (rows.length === 0) return;
+  const cipher = provisioningCipher(rootKey);
+  const remove = sqlite.prepare(
+    "delete from main.jellyfin_provisioning_configs where connector_id = ?",
+  );
+  const update = sqlite.prepare(
+    `update main.jellyfin_provisioning_configs
+     set connector_revision = ?, connector_instance_generation = ?,
+         connector_instance_identity_hash = ?, encrypted_configuration = ?
+     where connector_id = ?`,
+  );
+  for (const row of rows) {
+    const payload = parseProvisioningPayload(cipher, row);
+    if (!isClearedProvisioningPayload(payload)) {
+      remove.run(row.connectorId);
+      continue;
+    }
+    const connectorRevision = createHash("sha256")
+      .update(`${row.type}\0${row.connectorId}\0${row.configGeneration}`, "utf8")
+      .digest("base64url");
+    const encryptedConfiguration = cipher.encrypt(
+      JSON.stringify({ schemaVersion: 2, state: "cleared" }),
+      `jellyfin_provisioning:${row.connectorId}:${connectorRevision}:${row.connectorInstanceGeneration}:${row.connectorIdentityHash ?? "none"}`,
+    );
+    update.run(
+      connectorRevision,
+      row.connectorInstanceGeneration,
+      row.connectorIdentityHash,
+      encryptedConfiguration,
+      row.connectorId,
+    );
+  }
+}
+
+function mergeRollbackJellyfinProvisioningFacts(sqlite: Database.Database, rootKey?: Buffer) {
+  mergeRollbackJellyfinProvisioningFactsSafe(sqlite, rootKey);
+}
+
+function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number, rootKey?: Buffer) {
   const exhaustedRevision = sqlite
     .prepare(
       `select 1 from main.service_identity_links restored
@@ -1238,6 +1398,10 @@ function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number) {
     )
     .get();
   if (exhaustedConnectorGeneration) throw new MaintenanceError("restore_sanitization_failed");
+
+  // Preserve only the current timeline's negative provisioning authority. Credential-bearing
+  // configuration is intentionally never imported across the restore boundary.
+  mergeRollbackJellyfinProvisioningFacts(sqlite, rootKey);
 
   sqlite.exec(`
     update main.users as restored
@@ -1622,6 +1786,7 @@ export function sanitizeRestoredDatabase(
     failpoint?: (sqlite: Database.Database) => void;
     now?: Date;
     rollbackDatabasePath?: string;
+    rootKey?: Buffer;
   } = {},
 ) {
   const now = safeRestoreTime(options.now);
@@ -1653,7 +1818,7 @@ export function sanitizeRestoredDatabase(
     }
     options.failpoint?.(sqlite);
     sqlite.transaction(() => {
-      if (options.rollbackDatabasePath) mergeRollbackSecurityFacts(sqlite!, now);
+      if (options.rollbackDatabasePath) mergeRollbackSecurityFacts(sqlite!, now, options.rootKey);
       else quarantineAuthorityWithoutCurrentTimeline(sqlite!, now);
       const exhaustedRevision = sqlite!
         .prepare("select 1 from service_identity_links where revision >= 2147483647 limit 1")
@@ -1704,6 +1869,7 @@ export function sanitizeRestoredDatabase(
               updated_at = max(updated_at, ?)`,
         )
         .run(now, now);
+      sanitizeJellyfinProvisioningConfigs(sqlite!, options.rootKey);
       sqlite!
         .prepare(
           `update oidc_providers
@@ -1822,26 +1988,33 @@ async function stageSelectedBackup(
   rootKey?: Buffer,
   dependencies: RestoreDependencies = {},
 ) {
-  await copyFile(backupPath, temporaryPath, constants.COPYFILE_EXCL);
-  await chmod(temporaryPath, 0o600);
-  const staged = inspectDatabase(temporaryPath);
-  const stagedSha256 = await sha256File(temporaryPath);
-  if (
-    stagedSha256 !== selected.manifest.databaseSha256 ||
-    staged.migrationCount !== selected.inspection.migrationCount ||
-    staged.schemaSha256 !== selected.inspection.schemaSha256
-  ) {
-    throw new MaintenanceError("backup_mismatch");
+  const resolvedRootKey = restoreRootKey(rootKey);
+  const ownsRootKey = resolvedRootKey !== rootKey;
+  try {
+    await copyFile(backupPath, temporaryPath, constants.COPYFILE_EXCL);
+    await chmod(temporaryPath, 0o600);
+    const staged = inspectDatabase(temporaryPath);
+    const stagedSha256 = await sha256File(temporaryPath);
+    if (
+      stagedSha256 !== selected.manifest.databaseSha256 ||
+      staged.migrationCount !== selected.inspection.migrationCount ||
+      staged.schemaSha256 !== selected.inspection.schemaSha256
+    ) {
+      throw new MaintenanceError("backup_mismatch");
+    }
+    migrateStagedRestoreDatabase(temporaryPath, staged.migrationCount, resolvedRootKey);
+    sanitizeRestoredDatabase(temporaryPath, {
+      ...(dependencies.sanitationFailpoint ? { failpoint: dependencies.sanitationFailpoint } : {}),
+      ...(now ? { now } : {}),
+      ...(rollbackDatabasePath ? { rollbackDatabasePath } : {}),
+      ...(resolvedRootKey ? { rootKey: resolvedRootKey } : {}),
+    });
+    inspectDatabase(temporaryPath);
+    await syncFile(temporaryPath);
+    return sha256File(temporaryPath);
+  } finally {
+    if (ownsRootKey) resolvedRootKey?.fill(0);
   }
-  migrateStagedRestoreDatabase(temporaryPath, staged.migrationCount, rootKey);
-  sanitizeRestoredDatabase(temporaryPath, {
-    ...(dependencies.sanitationFailpoint ? { failpoint: dependencies.sanitationFailpoint } : {}),
-    ...(now ? { now } : {}),
-    ...(rollbackDatabasePath ? { rollbackDatabasePath } : {}),
-  });
-  inspectDatabase(temporaryPath);
-  await syncFile(temporaryPath);
-  return sha256File(temporaryPath);
 }
 
 export async function restoreDatabaseBackup(

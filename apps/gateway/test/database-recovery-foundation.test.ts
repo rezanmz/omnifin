@@ -201,6 +201,8 @@ describe("migration and key preflight", () => {
         sqlite.exec(
           `create table "${table}" (
              id text primary key, type text, kind text, user_id text, playback_session_id text,
+             connector_id text, connector_revision text, connector_instance_generation integer,
+             connector_instance_identity_hash text,
              ${encryptedColumns.map((column) => `"${column}" text`).join(", ")}
            )`,
         );
@@ -208,9 +210,12 @@ describe("migration and key preflight", () => {
           sqlite
             .prepare(
               `insert into "${table}" (
-                 id, type, kind, user_id, playback_session_id, "${sample.column}"
-               ) values (?, 'jellyfin', 'playback.progress', 'encrypted-sample-user',
-                         'encrypted-sample-session', ?)`,
+                 id, type, kind, user_id, playback_session_id,
+                 connector_id, connector_revision, connector_instance_generation,
+                 connector_instance_identity_hash, "${sample.column}"
+                ) values (?, 'jellyfin', 'playback.progress', 'encrypted-sample-user',
+                          'encrypted-sample-session', 'encrypted-sample-connector',
+                          'encrypted-sample-revision', 0, null, ?)`,
             )
             .run(sample.id, cipher.encrypt(`plaintext:${sample.id}`, sample.context));
         }
@@ -761,6 +766,196 @@ describe("migration and key preflight", () => {
 });
 
 describe("restore sanitation and rollback", () => {
+  it.each([
+    { name: "a clear tombstone", state: "cleared" as const },
+    { name: "a disabled configuration", state: "disabled" as const },
+    { name: "a replaced credential", state: "replaced" as const },
+    { name: "current-row absence", state: "absent" as const },
+    { equivalent: false, name: "a mismatched target credential", state: "replaced" as const },
+  ])("uses the rollback timeline as authority over $name", async ({ equivalent = true, state }) => {
+    const directory = await privateDirectory(`omnifin-provisioning-authority-${state}-`);
+    const databasePath = path.join(directory, "restored.sqlite");
+    const rollbackPath = path.join(directory, "rollback-timeline.sqlite");
+    const selectedPath = path.join(directory, "selected.sqlite");
+    const rollbackOutputPath = path.join(directory, "pre-restore.sqlite");
+    const cipher = new EnvelopeCipher(rootKey);
+    const revision = (configGeneration: number) =>
+      createHash("sha256")
+        .update(`jellyfin\0authority-jellyfin\0${configGeneration}`, "utf8")
+        .digest("base64url");
+    const context = (connectorRevision: string, generation: number, identity: string | null) =>
+      `jellyfin_provisioning:authority-jellyfin:${connectorRevision}:${generation}:${identity ?? "none"}`;
+    const configuration = (credential: string, enabled: boolean) =>
+      JSON.stringify({
+        credential: { accessToken: credential, kind: "access_token" },
+        enabled,
+        protocolVersion: "10.11",
+        schemaVersion: 2,
+        template: null,
+        validatedAt: 1,
+      });
+    createCurrentDatabase(databasePath);
+    createCurrentDatabase(rollbackPath);
+    let sqlite = new Database(databasePath);
+    sqlite
+      .prepare(
+        `insert into connector_configs (
+           id, type, display_name, base_url, encrypted_credentials,
+           capability_snapshot_json, instance_generation, config_generation,
+           instance_identity_hash, created_at, updated_at
+         ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "authority-jellyfin",
+        "jellyfin",
+        "Jellyfin",
+        "https://example.test",
+        "connector-secret",
+        "{}",
+        0,
+        0,
+        "b".repeat(43),
+        1,
+        1,
+      );
+    sqlite
+      .prepare(
+        `insert into jellyfin_provisioning_configs (
+           connector_id, connector_revision, connector_instance_generation,
+           connector_instance_identity_hash, encrypted_configuration, revision,
+           created_at, updated_at
+         ) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "authority-jellyfin",
+        revision(0),
+        0,
+        "b".repeat(43),
+        cipher.encrypt(
+          configuration("backup-old-token", true),
+          context(revision(0), 0, "b".repeat(43)),
+        ),
+        2,
+        1,
+        1,
+      );
+    sqlite.close();
+
+    sqlite = new Database(rollbackPath);
+    sqlite
+      .prepare(
+        `insert into connector_configs (
+           id, type, display_name, base_url, encrypted_credentials,
+           capability_snapshot_json, instance_generation, config_generation,
+           instance_identity_hash, created_at, updated_at
+         ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "authority-jellyfin",
+        "jellyfin",
+        "Jellyfin",
+        "https://example.test",
+        "connector-secret",
+        "{}",
+        7,
+        7,
+        (equivalent ? "b" : "c").repeat(43),
+        1,
+        7,
+      );
+    if (state !== "absent") {
+      const payload =
+        state === "cleared"
+          ? JSON.stringify({ schemaVersion: 2, state: "cleared" })
+          : configuration("current-token", state !== "disabled");
+      sqlite
+        .prepare(
+          `insert into jellyfin_provisioning_configs (
+             connector_id, connector_revision, connector_instance_generation,
+             connector_instance_identity_hash, encrypted_configuration, revision,
+             created_at, updated_at
+           ) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "authority-jellyfin",
+          revision(7),
+          7,
+          (equivalent ? "b" : "c").repeat(43),
+          cipher.encrypt(payload, context(revision(7), 7, (equivalent ? "b" : "c").repeat(43))),
+          9,
+          2,
+          2,
+        );
+    }
+    sqlite.close();
+
+    await createDatabaseBackup({ databasePath, outputPath: selectedPath });
+    await copyFile(rollbackPath, databasePath);
+    await rm(`${databasePath}-wal`, { force: true });
+    await rm(`${databasePath}-shm`, { force: true });
+    await restoreDatabaseBackup({
+      backupPath: selectedPath,
+      confirmedGatewayStopped: true,
+      databasePath,
+      now: new Date(5_000),
+      rollbackOutputPath,
+      rootKey,
+    });
+
+    sqlite = new Database(databasePath, { readonly: true });
+    try {
+      const row = sqlite
+        .prepare(
+          `select connector_revision as connectorRevision,
+                  connector_instance_generation as instanceGeneration,
+                  connector_instance_identity_hash as identityHash,
+                  encrypted_configuration as encryptedConfiguration,
+                  revision
+           from jellyfin_provisioning_configs`,
+        )
+        .get() as
+        | {
+            connectorRevision: string;
+            encryptedConfiguration: string;
+            identityHash: string | null;
+            instanceGeneration: number;
+            revision: number;
+          }
+        | undefined;
+      if (state === "absent") {
+        expect(row).toBeUndefined();
+      } else if (!equivalent) {
+        expect(row).toBeUndefined();
+      } else if (state !== "cleared") {
+        expect(row).toBeUndefined();
+      } else {
+        expect(row).toMatchObject({
+          connectorRevision: revision(5_001),
+          identityHash: null,
+          instanceGeneration: 8,
+          revision: 9,
+        });
+        const restored = JSON.parse(
+          cipher.decrypt(row!.encryptedConfiguration, context(revision(5_001), 8, null)),
+        ) as Record<string, unknown>;
+        expect(restored).not.toHaveProperty("credential", {
+          accessToken: "backup-old-token",
+          kind: "access_token",
+        });
+        if (state === "cleared") {
+          expect(restored).toEqual({ schemaVersion: 2, state: "cleared" });
+        } else {
+          expect(restored).toMatchObject({
+            credential: { accessToken: "current-token", kind: "access_token" },
+            enabled: state !== "disabled",
+          });
+        }
+      }
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("maps restored dispatch boundaries without reclaiming or discarding uncertainty", async () => {
     const directory = await privateDirectory("omnifin-dispatch-restore-");
     const databasePath = path.join(directory, "omnifin.db");

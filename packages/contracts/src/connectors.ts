@@ -406,6 +406,69 @@ export type ConnectorListResponse = z.infer<typeof connectorListResponseSchema>;
 export const connectorMutationResponseSchema = z.strictObject({ connector: connectorAdminSchema });
 export type ConnectorMutationResponse = z.infer<typeof connectorMutationResponseSchema>;
 
+const jellyfinProvisioningUserIdSchema = z.string().trim().min(1).max(256);
+
+export const jellyfinProvisioningCredentialWriteSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("retain") }),
+  z.strictObject({
+    kind: z.literal("replace_password"),
+    username: z.string().trim().min(1).max(256),
+    password: z.string().min(1).max(4_096),
+  }),
+  z.strictObject({ kind: z.literal("replace_api_key"), apiKey: z.string().min(1).max(4_096) }),
+  z.strictObject({ kind: z.literal("clear") }),
+]);
+export type JellyfinProvisioningCredentialWrite = z.infer<
+  typeof jellyfinProvisioningCredentialWriteSchema
+>;
+
+export const jellyfinProvisioningReplaceRequestSchema = z
+  .strictObject({
+    credential: jellyfinProvisioningCredentialWriteSchema,
+    enabled: z.boolean(),
+    revision: z.int().min(0).max(2_147_483_647),
+    templateUserId: jellyfinProvisioningUserIdSchema.nullable(),
+  })
+  .superRefine((value, context) => {
+    if (value.credential.kind === "clear" && value.enabled) {
+      context.addIssue({
+        code: "custom",
+        path: ["enabled"],
+        message: "Clearing provisioning credentials cannot enable provisioning.",
+      });
+    }
+  });
+export type JellyfinProvisioningReplaceRequest = z.infer<
+  typeof jellyfinProvisioningReplaceRequestSchema
+>;
+
+export const jellyfinProvisioningTemplateSummarySchema = z.strictObject({
+  displayName: z.string().trim().min(1).max(160),
+  id: jellyfinProvisioningUserIdSchema,
+});
+export type JellyfinProvisioningTemplateSummary = z.infer<
+  typeof jellyfinProvisioningTemplateSummarySchema
+>;
+
+export const jellyfinProvisioningConfigSchema = z.strictObject({
+  connectorId: connectorIdentifierSchema,
+  credentialConfigured: z.boolean(),
+  credentialKind: z.enum(["access_token", "api_key"]).nullable(),
+  enabled: z.boolean(),
+  revision: z.int().min(0).max(2_147_483_647),
+  template: jellyfinProvisioningTemplateSummarySchema.nullable(),
+  validatedAt: z.iso.datetime({ offset: true }).nullable(),
+  validationState: z.enum(["unvalidated", "valid", "invalid"]),
+});
+export type JellyfinProvisioningConfig = z.infer<typeof jellyfinProvisioningConfigSchema>;
+
+export const jellyfinProvisioningTemplatesResponseSchema = z.strictObject({
+  templates: z.array(jellyfinProvisioningTemplateSummarySchema).max(1_000),
+});
+export type JellyfinProvisioningTemplatesResponse = z.infer<
+  typeof jellyfinProvisioningTemplatesResponseSchema
+>;
+
 export const connectorDeleteResponseSchema = z.strictObject({
   deletedConnectorId: connectorIdentifierSchema,
 });

@@ -8,6 +8,7 @@ import {
   clearDatabaseMaintenanceLock,
   createDatabaseBackup,
   createRetainedDatabaseBackup,
+  resolveRestoreRootKey,
   restoreDatabaseBackup,
   verifyDatabaseBackup,
 } from "../src/db/maintenance.js";
@@ -767,6 +768,29 @@ describe("database backup maintenance", () => {
 });
 
 describe("database restore maintenance", () => {
+  it("resolves the production restore key from an environment value or private file", async () => {
+    const directory = await fixtureDirectory();
+    const key = Buffer.alloc(32, 73);
+    const keyFile = path.join(directory, "restore-key");
+    const previousKey = process.env.OMNIFIN_ENCRYPTION_KEY;
+    const previousKeyFile = process.env.OMNIFIN_ENCRYPTION_KEY_FILE;
+    try {
+      process.env.OMNIFIN_ENCRYPTION_KEY = key.toString("base64");
+      delete process.env.OMNIFIN_ENCRYPTION_KEY_FILE;
+      expect(resolveRestoreRootKey()).toEqual(key);
+      delete process.env.OMNIFIN_ENCRYPTION_KEY;
+      await writeFile(keyFile, `${key.toString("base64")}\n`, { mode: 0o600 });
+      process.env.OMNIFIN_ENCRYPTION_KEY_FILE = keyFile;
+      expect(resolveRestoreRootKey()).toEqual(key);
+    } finally {
+      if (previousKey === undefined) delete process.env.OMNIFIN_ENCRYPTION_KEY;
+      else process.env.OMNIFIN_ENCRYPTION_KEY = previousKey;
+      if (previousKeyFile === undefined) delete process.env.OMNIFIN_ENCRYPTION_KEY_FILE;
+      else process.env.OMNIFIN_ENCRYPTION_KEY_FILE = previousKeyFile;
+      key.fill(0);
+    }
+  });
+
   it("restores a verified checkpoint and preserves the replaced database as a verified rollback", async () => {
     const directory = await fixtureDirectory();
     const databasePath = path.join(directory, "omnifin.db");

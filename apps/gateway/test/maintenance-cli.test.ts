@@ -32,6 +32,7 @@ async function cliFixture() {
 async function runMaintenance(
   arguments_: string[],
   fixture: Awaited<ReturnType<typeof cliFixture>>,
+  environment: Record<string, string | undefined> = {},
 ) {
   return executeFile(process.execPath, ["--import", "tsx", "src/maintenance.ts", ...arguments_], {
     cwd: gatewayDirectory,
@@ -41,6 +42,7 @@ async function runMaintenance(
       OMNIFIN_BACKUP_DIRECTORY: fixture.directory,
       OMNIFIN_DATABASE_URL: fixture.databasePath,
       OMNIFIN_IMAGE_REF: `ghcr.io/rezanmz/omnifin@sha256:${"a".repeat(64)}`,
+      ...environment,
     },
   });
 }
@@ -112,5 +114,33 @@ describe("maintenance CLI", () => {
     });
     expect(JSON.stringify(report)).not.toContain(fixture.directory);
     expect(JSON.stringify(report)).not.toContain(fixture.databasePath);
+  });
+
+  it.each([
+    { key: "", label: "missing" },
+    { key: "not-canonical-base64", label: "invalid" },
+  ])("fails closed for a $label restore key in the public CLI", async ({ key }) => {
+    const fixture = await cliFixture();
+    let failure: (ExecFileException & { stderr: string; stdout: string }) | undefined;
+    try {
+      await runMaintenance(
+        [
+          "restore-empty",
+          "--input",
+          path.join(fixture.directory, "selected.sqlite"),
+          "--confirm-gateway-stopped",
+          "--confirm-empty-target",
+        ],
+        fixture,
+        {
+          OMNIFIN_ENCRYPTION_KEY: key,
+          OMNIFIN_ENCRYPTION_KEY_FILE: undefined,
+        },
+      );
+    } catch (error) {
+      failure = error as ExecFileException & { stderr: string; stdout: string };
+    }
+    expect(failure?.code).toBe(70);
+    expect(failure?.stderr).toContain('"code":"restore_sanitization_failed"');
   });
 });

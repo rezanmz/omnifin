@@ -37,6 +37,10 @@
       "types": "./dist/auth/jellyfin-authentication-client.d.ts",
       "default": "./dist/auth/jellyfin-authentication-client.js"
     },
+    "./auth/jellyfin-provisioning-admin-client": {
+      "types": "./dist/auth/jellyfin-provisioning-admin-client.d.ts",
+      "default": "./dist/auth/jellyfin-provisioning-admin-client.js"
+    },
     "./media/jellyfin-user-media-client": {
       "types": "./dist/media/jellyfin-user-media-client.d.ts",
       "default": "./dist/media/jellyfin-user-media-client.js"

@@ -156,7 +156,9 @@ function healthIsFresh(health: ConnectorHealth | undefined, now: number) {
   );
 }
 
-function revisionFor(row: Pick<ConnectorRow, "configGeneration" | "id" | "type">) {
+export function connectorAdminRevision(
+  row: Pick<ConnectorRow, "configGeneration" | "id" | "type">,
+) {
   return createHash("sha256")
     .update(`${row.type}\0${row.id}\0${row.configGeneration}`, "utf8")
     .digest("base64url");
@@ -169,7 +171,7 @@ function legacyRevisionFor(row: Pick<ConnectorRow, "id" | "type" | "updatedAt">)
 }
 
 function revisionMatches(row: ConnectorRow, revision: string) {
-  if (revisionFor(row) === revision) return true;
+  if (connectorAdminRevision(row) === revision) return true;
   return (
     row.instanceGeneration === 0 &&
     row.configGeneration === 0 &&
@@ -1261,7 +1263,7 @@ export class ConnectorAdminService {
       enabled: row.enabled === 1,
       healthState: row.healthState,
       lastProbe: snapshot.health ?? null,
-      revision: revisionFor(row),
+      revision: connectorAdminRevision(row),
       createdAt: new Date(row.createdAt).toISOString(),
       updatedAt: new Date(row.updatedAt).toISOString(),
     });

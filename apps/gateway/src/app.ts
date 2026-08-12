@@ -74,6 +74,10 @@ import {
   type ConnectorAdminRoutesOptions,
 } from "./connectors/admin-routes.js";
 import {
+  jellyfinProvisioningRoutes,
+  type JellyfinProvisioningRoutesOptions,
+} from "./connectors/jellyfin-provisioning-routes.js";
+import {
   ConnectorHttpLaneRegistry,
   type ConnectorHttpLaneLifecycle,
 } from "./connectors/http-lane-registry.js";
@@ -178,6 +182,7 @@ export interface CreateAppOptions {
   jellyfinQuickConnectDependencies?: JellyfinQuickConnectServiceDependencies;
   identityLinkDependencies?: IdentityLinkRoutesOptions["dependencies"];
   connectorAdminDependencies?: ConnectorAdminRoutesOptions["dependencies"];
+  jellyfinProvisioningDependencies?: JellyfinProvisioningRoutesOptions["dependencies"];
   connectorHttpLaneRegistry?: ConnectorHttpLaneLifecycle;
   discoverySearchDependencies?: DiscoverySearchRoutesOptions["dependencies"];
   downloadQueueDependencies?: DownloadQueueRoutesOptions["dependencies"];
@@ -553,6 +558,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
       ...(options.connectorAdminDependencies === undefined
         ? {}
         : { dependencies: options.connectorAdminDependencies }),
+    });
+    await app.register(jellyfinProvisioningRoutes, {
+      ...(options.jellyfinProvisioningDependencies === undefined
+        ? {}
+        : { dependencies: options.jellyfinProvisioningDependencies }),
     });
     await app.register(discoverySearchRoutes, {
       ...(options.discoverySearchDependencies === undefined

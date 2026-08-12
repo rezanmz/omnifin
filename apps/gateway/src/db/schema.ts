@@ -392,6 +392,32 @@ export const connectorConfigs = sqliteTable(
   ],
 );
 
+export const jellyfinProvisioningConfigs = sqliteTable(
+  "jellyfin_provisioning_configs",
+  {
+    connectorId: text("connector_id")
+      .primaryKey()
+      .references(() => connectorConfigs.id, { onDelete: "cascade" }),
+    connectorRevision: text("connector_revision").notNull(),
+    connectorInstanceGeneration: integer("connector_instance_generation").notNull(),
+    connectorInstanceIdentityHash: text("connector_instance_identity_hash"),
+    encryptedConfiguration: text("encrypted_configuration").notNull(),
+    revision: integer("revision").notNull().default(0),
+    ...timestamps,
+  },
+  (table) => [
+    check(
+      "jellyfin_provisioning_connector_revision_check",
+      sql`length(${table.connectorRevision}) between 16 and 128 and ${table.connectorRevision} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "jellyfin_provisioning_instance_generation_check",
+      sql`${table.connectorInstanceGeneration} between 0 and 9007199254740991`,
+    ),
+    check("jellyfin_provisioning_revision_check", sql`${table.revision} between 0 and 2147483647`),
+  ],
+);
+
 export const mediaRequestProfilePreferences = sqliteTable(
   "media_request_profile_preferences",
   {
