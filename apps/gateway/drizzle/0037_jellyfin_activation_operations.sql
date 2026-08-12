@@ -31,7 +31,7 @@ CREATE TABLE `jellyfin_activation_operations` (
 	FOREIGN KEY (`external_identity_id`) REFERENCES `external_identities`(`id`) ON UPDATE no action ON DELETE restrict,
 	FOREIGN KEY (`connector_id`) REFERENCES `connector_configs`(`id`) ON UPDATE no action ON DELETE restrict,
 	FOREIGN KEY (`external_identity_id`,`user_id`) REFERENCES `external_identities`(`id`,`user_id`) ON UPDATE restrict ON DELETE restrict,
-	CONSTRAINT "jellyfin_activation_operations_id_check" CHECK(length("jellyfin_activation_operations"."id") between 8 and 128 and substr("jellyfin_activation_operations"."id", 1, 10) = 'jellyfin_' and substr("jellyfin_activation_operations"."id", 11) not glob '*[^A-Za-z0-9_-]*'),
+	CONSTRAINT "jellyfin_activation_operations_id_check" CHECK(length("jellyfin_activation_operations"."id") between 10 and 128 and substr("jellyfin_activation_operations"."id", 1, 9) = 'jellyfin_' and substr("jellyfin_activation_operations"."id", 10) not glob '*[^A-Za-z0-9_-]*'),
 	CONSTRAINT "jellyfin_activation_operations_generation_check" CHECK("jellyfin_activation_operations"."connector_config_generation" between 0 and 9007199254740991 and "jellyfin_activation_operations"."connector_instance_generation" between 0 and 9007199254740991),
 	CONSTRAINT "jellyfin_activation_operations_identity_hash_check" CHECK("jellyfin_activation_operations"."connector_instance_identity_hash" is null or (length("jellyfin_activation_operations"."connector_instance_identity_hash") between 16 and 128 and "jellyfin_activation_operations"."connector_instance_identity_hash" not glob '*[^A-Za-z0-9_-]*')),
 	CONSTRAINT "jellyfin_activation_operations_provisioning_revision_check" CHECK("jellyfin_activation_operations"."provisioning_revision" between 0 and 2147483647),

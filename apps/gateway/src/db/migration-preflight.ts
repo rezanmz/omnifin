@@ -556,6 +556,7 @@ export function legacyEncryptedSampleFixtures() {
       connectorRevision: "encrypted-sample-revision",
       instanceGeneration: "0",
       instanceIdentityHash: null,
+      artifactRevision: "1",
       id: `encrypted-sample-${index.toString().padStart(2, "0")}`,
       kind: "playback.progress",
       sessionId: "encrypted-sample-session",

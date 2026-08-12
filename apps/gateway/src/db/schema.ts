@@ -491,7 +491,7 @@ export const jellyfinActivationOperations = sqliteTable(
       .onUpdate("restrict"),
     check(
       "jellyfin_activation_operations_id_check",
-      sql`length(${table.id}) between 8 and 128 and substr(${table.id}, 1, 10) = 'jellyfin_' and substr(${table.id}, 11) not glob '*[^A-Za-z0-9_-]*'`,
+      sql`length(${table.id}) between 10 and 128 and substr(${table.id}, 1, 9) = 'jellyfin_' and substr(${table.id}, 10) not glob '*[^A-Za-z0-9_-]*'`,
     ),
     check(
       "jellyfin_activation_operations_generation_check",

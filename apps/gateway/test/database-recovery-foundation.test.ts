@@ -202,7 +202,7 @@ describe("migration and key preflight", () => {
           `create table "${table}" (
              id text primary key, type text, kind text, user_id text, playback_session_id text,
              connector_id text, connector_revision text, connector_instance_generation integer,
-             connector_instance_identity_hash text,
+             connector_instance_identity_hash text, artifact_revision integer default 1,
              ${encryptedColumns.map((column) => `"${column}" text`).join(", ")}
            )`,
         );
@@ -212,10 +212,10 @@ describe("migration and key preflight", () => {
               `insert into "${table}" (
                  id, type, kind, user_id, playback_session_id,
                  connector_id, connector_revision, connector_instance_generation,
-                 connector_instance_identity_hash, "${sample.column}"
+                 connector_instance_identity_hash, artifact_revision, "${sample.column}"
                 ) values (?, 'jellyfin', 'playback.progress', 'encrypted-sample-user',
                           'encrypted-sample-session', 'encrypted-sample-connector',
-                          'encrypted-sample-revision', 0, null, ?)`,
+                          'encrypted-sample-revision', 0, null, 1, ?)`,
             )
             .run(sample.id, cipher.encrypt(`plaintext:${sample.id}`, sample.context));
         }

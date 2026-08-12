@@ -149,7 +149,8 @@ function validGeneration(value: number) {
 }
 
 function text(value: string, pattern = ID) {
-  if (!pattern.test(value)) throw new JellyfinActivationOperationError("invalid_input");
+  if (value.length < 1 || value.length > 128 || !pattern.test(value))
+    throw new JellyfinActivationOperationError("invalid_input");
 }
 
 function transition(result: Database.RunResult) {
@@ -370,20 +371,57 @@ export class JellyfinActivationOperationRepository {
     if (!validTime(input.now) || !FAILURE_CODE.test(input.failureCode))
       throw new JellyfinActivationOperationError("invalid_input");
     text(input.id, ACTIVATION_ID);
-    const result = this.#sqlite
-      .prepare(
-        `update jellyfin_activation_operations set state = 'manual_required', encrypted_stage_artifact = case when cleanup_eligible = 1 and create_attempt_count = 1 then encrypted_stage_artifact else null end, artifact_revision = case when cleanup_eligible = 1 and create_attempt_count = 1 then artifact_revision else artifact_revision + 1 end, failure_code = ?, manual_required_at = ?, lease_owner = null, lease_expires_at = null, retry_count = retry_count + ?, revision = revision + 1, updated_at = max(updated_at, ?) where id = ? and state not in ('manual_required','tombstoned') and retry_count + ? <= 8`,
-      )
-      .run(
-        input.failureCode,
-        input.now,
-        input.incrementRetry === false ? 0 : 1,
-        input.now,
-        input.id,
-        input.incrementRetry === false ? 0 : 1,
-      );
-    transition(result);
-    return this.read(input.id)!;
+    return this.#sqlite.transaction(() => {
+      const row = this.#row(input.id);
+      if (!row || row.state === "manual_required" || row.state === "tombstoned") {
+        throw new JellyfinActivationOperationError("invalid_transition");
+      }
+      const retryIncrement = input.incrementRetry === false ? 0 : 1;
+      let artifact: string | null = null;
+      let artifactRevision = row.artifactRevision;
+      let cleanupEligible = 0;
+      if (row.cleanupEligible === 1 && row.encryptedStageArtifact !== null) {
+        try {
+          const parsed = JSON.parse(
+            this.#cipher.decrypt(
+              row.encryptedStageArtifact,
+              jellyfinActivationArtifactEncryptionContext(row.id, row.artifactRevision),
+            ),
+          ) as { createdId?: unknown };
+          if (typeof parsed.createdId !== "string" || !CREATED_ID.test(parsed.createdId)) {
+            throw new Error("created ID artifact is invalid");
+          }
+          artifactRevision += 1;
+          artifact = this.#cipher.encrypt(
+            JSON.stringify({ createdId: parsed.createdId }),
+            jellyfinActivationArtifactEncryptionContext(row.id, artifactRevision),
+          );
+          cleanupEligible = 1;
+        } catch (error) {
+          throw new JellyfinActivationOperationError("artifact_not_found", { cause: error });
+        }
+      } else {
+        artifactRevision += 1;
+      }
+      const result = this.#sqlite
+        .prepare(
+          `update jellyfin_activation_operations set state = 'manual_required', encrypted_stage_artifact = ?, cleanup_eligible = ?, artifact_revision = ?, failure_code = ?, manual_required_at = ?, lease_owner = null, lease_expires_at = null, retry_count = retry_count + ?, revision = revision + 1, updated_at = max(updated_at, ?) where id = ? and revision = ? and state not in ('manual_required','tombstoned') and retry_count + ? <= 8`,
+        )
+        .run(
+          artifact,
+          cleanupEligible,
+          artifactRevision,
+          input.failureCode,
+          input.now,
+          retryIncrement,
+          input.now,
+          input.id,
+          row.revision,
+          retryIncrement,
+        );
+      transition(result);
+      return this.read(input.id)!;
+    })();
   }
 
   public tombstone(id: string, now: number) {
