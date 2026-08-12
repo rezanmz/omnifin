@@ -151,6 +151,59 @@ function marker(databasePath: string, value?: string) {
   }
 }
 
+function seedActivationRestoreFixture(sqlite: Database.Database) {
+  sqlite.exec(`
+    insert into oidc_providers (id, slug, display_name, issuer, client_id)
+    values ('activation-provider', 'activation-provider', 'Activation provider',
+            'https://activation.example.test', 'client');
+    insert into users (id, display_name, status, created_at, updated_at) values
+      ('activation-user-selected', 'Selected user', 'active', 1, 1),
+      ('activation-user-current', 'Current user', 'active', 1, 1),
+      ('activation-user-orphan', 'Orphan user', 'active', 1, 1);
+    insert into connector_configs (
+      id, type, display_name, base_url, encrypted_credentials,
+      instance_generation, config_generation, created_at, updated_at
+    ) values
+      ('activation-connector-selected', 'jellyfin', 'Selected Jellyfin', 'https://selected.example.test', 'encrypted', 0, 0, 1, 1),
+      ('activation-connector-current', 'jellyfin', 'Current Jellyfin', 'https://current.example.test', 'encrypted', 0, 0, 1, 1),
+      ('activation-connector-orphan', 'jellyfin', 'Orphan Jellyfin', 'https://orphan.example.test', 'encrypted', 0, 0, 1, 1);
+    insert into invitations (id, token_hash, expires_at, created_at) values
+      ('invite_activation_selected', '${"s".repeat(43)}', 10000, 1),
+      ('invite_activation_current', '${"c".repeat(43)}', 10000, 1),
+      ('invite_activation_orphan', '${"o".repeat(43)}', 10000, 1);
+    insert into external_identities (
+      id, user_id, provider_id, issuer, subject, display_claims_json, last_login_at,
+      created_at, updated_at
+    ) values
+      ('activation-identity-selected', 'activation-user-selected', 'activation-provider', 'https://activation.example.test', 'selected', '{}', 1, 1, 1),
+      ('activation-identity-current', 'activation-user-current', 'activation-provider', 'https://activation.example.test', 'current', '{}', 1, 1, 1),
+      ('activation-identity-orphan', 'activation-user-orphan', 'activation-provider', 'https://activation.example.test', 'orphan', '{}', 1, 1, 1);
+  `);
+}
+
+function insertActivationRestoreOperation(
+  sqlite: Database.Database,
+  input: {
+    connectorId: string;
+    externalIdentityId: string;
+    id: string;
+    invitationId: string;
+    userId: string;
+  },
+) {
+  sqlite
+    .prepare(
+      `insert into jellyfin_activation_operations (
+         id, invitation_id, user_id, external_identity_id, connector_id,
+         connector_config_generation, connector_instance_generation, provisioning_revision,
+         state, revision, artifact_revision, cleanup_eligible, lease_owner, lease_expires_at,
+         create_attempt_count, retry_count, cleanup_attempt_count, reserved_at,
+         created_at, updated_at
+       ) values (?, ?, ?, ?, ?, 0, 0, 1, 'reserved', 0, 0, 0, 'worker', 2000, 0, 0, 0, 1000, 1000, 1000)`,
+    )
+    .run(input.id, input.invitationId, input.userId, input.externalIdentityId, input.connectorId);
+}
+
 describe("migration and key preflight", () => {
   it("accepts every exact released migration prefix from v0.12 through current", async () => {
     const catalog = readMigrationCatalog();
@@ -766,6 +819,155 @@ describe("migration and key preflight", () => {
 });
 
 describe("restore sanitation and rollback", () => {
+  it.each([
+    ["invitation", "invite_activation_current"],
+    ["user", "activation-user-current"],
+    ["external identity", "activation-identity-current"],
+  ])(
+    "preserves the current activation when timelines collide on the %s key",
+    async (_name, key) => {
+      const directory = await privateDirectory("omnifin-activation-partial-collision-");
+      const databasePath = path.join(directory, "omnifin.db");
+      const selectedPath = path.join(directory, "selected.sqlite");
+      const rollbackPath = path.join(directory, "rollback.sqlite");
+      createCurrentDatabase(databasePath);
+      createCurrentDatabase(rollbackPath);
+      let sqlite = new Database(databasePath);
+      seedActivationRestoreFixture(sqlite);
+      insertActivationRestoreOperation(sqlite, {
+        connectorId: "activation-connector-selected",
+        externalIdentityId:
+          key === "activation-identity-current" || key === "activation-user-current"
+            ? "activation-identity-current"
+            : "activation-identity-selected",
+        id: "jellyfin_activation_selected",
+        invitationId:
+          key === "invite_activation_current"
+            ? "invite_activation_current"
+            : "invite_activation_selected",
+        userId:
+          key === "activation-user-current" || key === "activation-identity-current"
+            ? "activation-user-current"
+            : "activation-user-selected",
+      });
+      sqlite.close();
+      await createDatabaseBackup({ databasePath, outputPath: selectedPath });
+
+      sqlite = new Database(rollbackPath);
+      seedActivationRestoreFixture(sqlite);
+      insertActivationRestoreOperation(sqlite, {
+        connectorId: "activation-connector-current",
+        externalIdentityId: "activation-identity-current",
+        id: "jellyfin_activation_current",
+        invitationId: "invite_activation_current",
+        userId: "activation-user-current",
+      });
+      sqlite.close();
+      await restoreDatabaseBackup({
+        backupPath: selectedPath,
+        confirmedGatewayStopped: true,
+        databasePath: rollbackPath,
+        now: new Date(5_000),
+        rollbackOutputPath: path.join(directory, "pre-restore.sqlite"),
+      });
+      sqlite = new Database(rollbackPath, { readonly: true });
+      expect(
+        sqlite
+          .prepare("select id, invitation_id as invitationId from jellyfin_activation_operations")
+          .all(),
+      ).toEqual([{ id: "jellyfin_activation_current", invitationId: "invite_activation_current" }]);
+      expect(sqlite.pragma("foreign_key_check")).toEqual([]);
+      sqlite.close();
+    },
+  );
+
+  it("lets the current timeline replace a same-ID selected activation with different bindings", async () => {
+    const directory = await privateDirectory("omnifin-activation-same-id-");
+    const databasePath = path.join(directory, "omnifin.db");
+    const selectedPath = path.join(directory, "selected.sqlite");
+    const rollbackPath = path.join(directory, "rollback.sqlite");
+    createCurrentDatabase(databasePath);
+    createCurrentDatabase(rollbackPath);
+    let sqlite = new Database(databasePath);
+    seedActivationRestoreFixture(sqlite);
+    insertActivationRestoreOperation(sqlite, {
+      connectorId: "activation-connector-selected",
+      externalIdentityId: "activation-identity-selected",
+      id: "jellyfin_activation_shared",
+      invitationId: "invite_activation_selected",
+      userId: "activation-user-selected",
+    });
+    sqlite.close();
+    await createDatabaseBackup({ databasePath, outputPath: selectedPath });
+    sqlite = new Database(rollbackPath);
+    seedActivationRestoreFixture(sqlite);
+    insertActivationRestoreOperation(sqlite, {
+      connectorId: "activation-connector-current",
+      externalIdentityId: "activation-identity-current",
+      id: "jellyfin_activation_shared",
+      invitationId: "invite_activation_current",
+      userId: "activation-user-current",
+    });
+    sqlite.close();
+    await restoreDatabaseBackup({
+      backupPath: selectedPath,
+      confirmedGatewayStopped: true,
+      databasePath: rollbackPath,
+      now: new Date(5_000),
+      rollbackOutputPath: path.join(directory, "pre-restore.sqlite"),
+    });
+    sqlite = new Database(rollbackPath, { readonly: true });
+    expect(
+      sqlite
+        .prepare(
+          "select user_id as userId, connector_id as connectorId, external_identity_id as externalIdentityId from jellyfin_activation_operations",
+        )
+        .get(),
+    ).toEqual({
+      connectorId: "activation-connector-current",
+      externalIdentityId: "activation-identity-current",
+      userId: "activation-user-current",
+    });
+    expect(sqlite.pragma("foreign_key_check")).toEqual([]);
+    sqlite.close();
+  });
+
+  it("sanitizes a selected activation whose external identity is absent from the current timeline", async () => {
+    const directory = await privateDirectory("omnifin-activation-missing-identity-");
+    const databasePath = path.join(directory, "omnifin.db");
+    const selectedPath = path.join(directory, "selected.sqlite");
+    const rollbackPath = path.join(directory, "rollback.sqlite");
+    createCurrentDatabase(databasePath);
+    createCurrentDatabase(rollbackPath);
+    let sqlite = new Database(databasePath);
+    seedActivationRestoreFixture(sqlite);
+    insertActivationRestoreOperation(sqlite, {
+      connectorId: "activation-connector-orphan",
+      externalIdentityId: "activation-identity-orphan",
+      id: "jellyfin_activation_orphan",
+      invitationId: "invite_activation_orphan",
+      userId: "activation-user-orphan",
+    });
+    sqlite.close();
+    await createDatabaseBackup({ databasePath, outputPath: selectedPath });
+    sqlite = new Database(rollbackPath);
+    seedActivationRestoreFixture(sqlite);
+    sqlite.prepare("delete from external_identities where id = 'activation-identity-orphan'").run();
+    sqlite.close();
+    await expect(
+      restoreDatabaseBackup({
+        backupPath: selectedPath,
+        confirmedGatewayStopped: true,
+        databasePath: rollbackPath,
+        now: new Date(5_000),
+        rollbackOutputPath: path.join(directory, "pre-restore.sqlite"),
+      }),
+    ).resolves.toBeDefined();
+    sqlite = new Database(rollbackPath, { readonly: true });
+    expect(sqlite.pragma("foreign_key_check")).toEqual([]);
+    sqlite.close();
+  });
+
   it.each([
     { name: "a clear tombstone", state: "cleared" as const },
     { name: "a disabled configuration", state: "disabled" as const },

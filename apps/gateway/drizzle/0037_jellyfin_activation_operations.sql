@@ -63,5 +63,18 @@ CREATE TRIGGER `service_identity_links_activation_marker_delete_guard`
 BEFORE DELETE ON `jellyfin_activation_operations`
 WHEN EXISTS (SELECT 1 FROM service_identity_links link WHERE link.provisioned_by_activation_id = OLD.id)
 BEGIN SELECT RAISE(ABORT, 'activation marker is still referenced'); END;--> statement-breakpoint
+CREATE TRIGGER `jellyfin_activation_operations_marker_update_guard`
+BEFORE UPDATE OF id, user_id, connector_id ON `jellyfin_activation_operations`
+WHEN EXISTS (
+  SELECT 1
+  FROM service_identity_links link
+  WHERE link.provisioned_by_activation_id = OLD.id
+    AND (
+      NEW.id <> OLD.id
+      OR NEW.user_id <> link.user_id
+      OR NEW.connector_id <> link.connector_id
+    )
+)
+BEGIN SELECT RAISE(ABORT, 'activation marker binding mismatch'); END;--> statement-breakpoint
 CREATE UNIQUE INDEX `service_identity_links_provisioned_by_activation_unique` ON `service_identity_links` (`provisioned_by_activation_id`) WHERE `service_identity_links`.`provisioned_by_activation_id` is not null;--> statement-breakpoint
 CREATE UNIQUE INDEX `external_identities_id_user_unique` ON `external_identities` (`id`,`user_id`);

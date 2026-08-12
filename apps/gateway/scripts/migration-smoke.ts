@@ -671,6 +671,7 @@ const requiredTriggers = [
   "external_issue_references_connector_generation_update_guard",
   "jellyfin_quick_connect_transactions_connector_generation_insert_guard",
   "jellyfin_quick_connect_transactions_connector_generation_update_guard",
+  "jellyfin_activation_operations_marker_update_guard",
   "media_request_profile_preferences_connector_generation_insert_guard",
   "media_request_profile_preferences_connector_generation_update_guard",
   "saved_catalog_media_reference_before_delete",
@@ -827,6 +828,17 @@ function writeHistoricalMigrationFixture() {
     historicalMigrationTimestamp: historicalEntries.at(-1)!.when,
   };
 }
+
+const activationMigrationSql = readFileSync(
+  path.join(currentMigrationDirectory, "0037_jellyfin_activation_operations.sql"),
+  "utf8",
+);
+assertCondition(
+  !/drop\s+table\s+[`"']?service_identity_links|create\s+table\s+[`"']?service_identity_links/iu.test(
+    activationMigrationSql,
+  ),
+  "Migration 0037 must preserve service_identity_links without a destructive table rebuild.",
+);
 
 function applyHistoricalMigrations(database: DatabaseHandle) {
   migrateWithDrizzle(database.db, {

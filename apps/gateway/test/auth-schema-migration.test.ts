@@ -1302,6 +1302,55 @@ describe("external mutation foundation upgrade", () => {
 });
 
 describe("authentication schema invariants", () => {
+  it("preserves legacy service links and dependent media references during the 0037 upgrade", () => {
+    const database = new Database(":memory:");
+    try {
+      for (const migration of migrationFilenames.filter((filename) => filename < "0037_")) {
+        applyMigration(database, migration);
+      }
+      database.exec(`
+        insert into oidc_providers (id, slug, display_name, issuer, client_id)
+        values ('upgrade-provider', 'upgrade-provider', 'Upgrade provider', 'https://upgrade.example', 'client');
+        insert into users (id, display_name, status, created_at, updated_at)
+        values ('upgrade-user', 'Upgrade user', 'active', 1, 1);
+        insert into connector_configs (id, type, display_name, base_url, encrypted_credentials, created_at, updated_at)
+        values ('upgrade-connector', 'jellyfin', 'Upgrade Jellyfin', 'https://upgrade.example', 'encrypted', 1, 1);
+        insert into invitations (id, token_hash, expires_at, created_at)
+        values ('invite_upgrade', '${"u".repeat(43)}', 10000, 1);
+        insert into external_identities (id, user_id, provider_id, issuer, subject, display_claims_json, last_login_at, created_at, updated_at)
+        values ('upgrade-identity', 'upgrade-user', 'upgrade-provider', 'https://upgrade.example', 'subject', '{}', 1, 1, 1);
+        insert into service_identity_links (
+          id, user_id, service, connector_id, external_server_id, external_user_id,
+          external_username, external_display_name, encrypted_access_token, device_id,
+          token_created_at, health_state, revision, created_at, updated_at
+        ) values (
+          'upgrade-link', 'upgrade-user', 'jellyfin', 'upgrade-connector', 'server',
+          'external-user', 'upgrade', 'Upgrade', 'encrypted-token', 'device', 1,
+          'linked', 0, 1, 1
+        );
+        insert into media_references (
+          id, user_id, service_identity_link_id, link_revision, item_digest,
+          encrypted_payload, last_used_at, expires_at, created_at, updated_at
+        ) values (
+          'media_abcdefghijklmnopqrstuv', 'upgrade-user', 'upgrade-link', 0,
+          'abcdefghijklmnopqrstuv', 'encrypted-media', 2, 10000, 1, 1
+        );
+      `);
+      applyMigration(database, "0037_jellyfin_activation_operations.sql");
+      expect(
+        database.prepare("select count(*) as count from service_identity_links").get(),
+      ).toEqual({
+        count: 1,
+      });
+      expect(database.prepare("select count(*) as count from media_references").get()).toEqual({
+        count: 1,
+      });
+      expect(database.pragma("foreign_key_check")).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
   it("loads the schema idempotently with connector-scoped links and logout replay receipts", () => {
     expect(authenticationSchema.connectorConfigs).toBeDefined();
     expect(authenticationSchema.auditBudgetEntries).toBeDefined();

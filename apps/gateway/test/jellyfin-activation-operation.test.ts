@@ -273,6 +273,59 @@ describe("Jellyfin activation operation repository", () => {
     expect(repository.read("jellyfin_activation_1")?.state).toBe("tombstoned");
   });
 
+  it("rejects generic tombstoning while confirmed cleanup remains eligible", () => {
+    const { repository } = fixture();
+    prepareCreated(repository);
+    repository.recordStageArtifact({
+      id: "jellyfin_activation_1",
+      state: "policy_pending",
+      now: 204,
+      artifact: { createdId: "upstream-1", password: "generated-password" },
+    });
+    repository.markManualRequired({
+      id: "jellyfin_activation_1",
+      failureCode: "manual_required",
+      now: 205,
+    });
+    expect(() => repository.tombstone("jellyfin_activation_1", 204)).toThrowError(
+      expect.objectContaining({ code: "invalid_transition" }),
+    );
+  });
+
+  it("atomically scrubs the full artifact and created ID on confirmed cleanup", () => {
+    const { repository, sqlite } = fixture();
+    prepareCreated(repository);
+    repository.recordStageArtifact({
+      id: "jellyfin_activation_1",
+      state: "auth_pending",
+      now: 204,
+      artifact: {
+        createdId: "upstream-1",
+        username: "generated-user",
+        password: "generated-password",
+        accessToken: "user-token",
+        policy: { IsAdministrator: false },
+      },
+    });
+    repository.markManualRequired({
+      id: "jellyfin_activation_1",
+      failureCode: "manual_required",
+      now: 205,
+    });
+    const result = repository.completeConfirmedCleanup("jellyfin_activation_1", 206);
+    expect(result.state).toBe("tombstoned");
+    expect(() => repository.readCreatedIdArtifact("jellyfin_activation_1")).toThrowError(
+      expect.objectContaining({ code: "artifact_not_found" }),
+    );
+    expect(
+      sqlite
+        .prepare(
+          "select state, encrypted_stage_artifact as artifact, cleanup_eligible as cleanupEligible from jellyfin_activation_operations",
+        )
+        .get(),
+    ).toEqual({ artifact: null, cleanupEligible: 0, state: "tombstoned" });
+  });
+
   it("enforces marker user and connector relationship", () => {
     const { repository, sqlite } = fixture();
     repository.reserve(reservation());
@@ -294,6 +347,39 @@ describe("Jellyfin activation operation repository", () => {
         `insert into service_identity_links (id,user_id,service,connector_id,connector_instance_generation,external_server_id,external_user_id,external_username,external_display_name,encrypted_access_token,provisioned_by_activation_id,device_id,token_created_at,health_state,revision,created_at,updated_at) values ('link-3','user-0001','jellyfin','connector-0002',0,'server','upstream-3','name','Name','token','jellyfin_activation_1','device',1,'linked',0,1,1)`,
       ),
     ).toThrow();
+  });
+
+  it("rejects activation-side marker binding and ID updates without damaging integrity", () => {
+    const { repository, sqlite } = fixture();
+    prepareCreated(repository);
+    sqlite.exec(`
+      insert into service_identity_links (
+        id, user_id, service, connector_id, connector_instance_generation,
+        external_server_id, external_user_id, external_username, external_display_name,
+        encrypted_access_token, provisioned_by_activation_id, device_id, token_created_at,
+        health_state, revision, created_at, updated_at
+      ) values (
+        'link-activation-update', 'user-0001', 'jellyfin', 'connector-0001', 0,
+        'server', 'upstream-1', 'name', 'Name', 'token', 'jellyfin_activation_1',
+        'device', 1, 'linked', 0, 1, 1
+      )
+    `);
+
+    for (const statement of [
+      "update jellyfin_activation_operations set user_id = 'user-0002' where id = 'jellyfin_activation_1'",
+      "update jellyfin_activation_operations set connector_id = 'connector-0002' where id = 'jellyfin_activation_1'",
+      "update jellyfin_activation_operations set id = 'jellyfin_activation_2' where id = 'jellyfin_activation_1'",
+    ]) {
+      expect(() => sqlite.exec(statement)).toThrow(/activation marker binding mismatch/u);
+    }
+    expect(
+      sqlite
+        .prepare(
+          "select id, user_id as userId, connector_id as connectorId from jellyfin_activation_operations",
+        )
+        .get(),
+    ).toEqual({ connectorId: "connector-0001", id: "jellyfin_activation_1", userId: "user-0001" });
+    expect(sqlite.pragma("foreign_key_check")).toEqual([]);
   });
 
   it("rejects malformed persisted state", () => {

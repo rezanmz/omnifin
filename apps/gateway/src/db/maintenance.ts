@@ -1249,15 +1249,25 @@ function mergeRollbackJellyfinActivationFacts(sqlite: Database.Database, now: nu
     .get();
   if (!exists || !rollbackExists) return;
   sqlite.exec(`
+    delete from main.jellyfin_activation_operations as collision
+    where exists (
+      select 1
+      from rollback_timeline.jellyfin_activation_operations current
+      where current.id = collision.id
+         or current.invitation_id = collision.invitation_id
+         or current.user_id = collision.user_id
+         or current.external_identity_id = collision.external_identity_id
+    )
+      and not exists (
+        select 1 from main.service_identity_links link
+        where link.provisioned_by_activation_id = collision.id
+      );
     delete from main.jellyfin_activation_operations as restored
     where not exists (select 1 from rollback_timeline.jellyfin_activation_operations current where current.id = restored.id)
       and not exists (select 1 from rollback_timeline.jellyfin_activation_operations current where current.invitation_id = restored.invitation_id)
       and not exists (select 1 from rollback_timeline.jellyfin_activation_operations current where current.user_id = restored.user_id)
       and not exists (select 1 from rollback_timeline.jellyfin_activation_operations current where current.external_identity_id = restored.external_identity_id)
       and not exists (select 1 from main.service_identity_links link where link.provisioned_by_activation_id = restored.id);
-    delete from main.jellyfin_activation_operations as collision
-    where exists (select 1 from rollback_timeline.jellyfin_activation_operations current where current.id <> collision.id and (current.invitation_id = collision.invitation_id or current.user_id = collision.user_id or current.external_identity_id = collision.external_identity_id))
-      and not exists (select 1 from main.service_identity_links link where link.provisioned_by_activation_id = collision.id);
     insert into main.jellyfin_activation_operations
       select * from rollback_timeline.jellyfin_activation_operations current
       where exists (select 1 from main.invitations where id = current.invitation_id)
