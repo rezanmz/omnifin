@@ -260,6 +260,13 @@
       "when": 1786213014794,
       "tag": "0036_jellyfin_provisioning",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "6",
+      "when": 1786540592984,
+      "tag": "0037_jellyfin_activation_operations",
+      "breakpoints": true
     }
   ]
 }

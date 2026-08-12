@@ -29,6 +29,7 @@ const requiredTables = [
   "external_mutation_dispatches",
   "external_mutation_target_locks",
   "invitations",
+  "jellyfin_activation_operations",
   "jellyfin_provisioning_configs",
   "jellyfin_quick_connect_transactions",
   "library_artwork_searches",
@@ -732,9 +733,10 @@ function writeHistoricalMigrationFixture() {
     [34, "0034_external_mutation_journal"],
     [35, "0035_invitations"],
     [36, "0036_jellyfin_provisioning"],
+    [37, "0037_jellyfin_activation_operations"],
   ];
   assertCondition(
-    JSON.stringify(journal.entries.slice(-9).map(({ idx, tag }) => [idx, tag])) ===
+    JSON.stringify(journal.entries.slice(-10).map(({ idx, tag }) => [idx, tag])) ===
       JSON.stringify(expectedTail),
     "Current migration journal must preserve the linear parent, saved-list, and playback-preference ancestry.",
   );
@@ -912,8 +914,9 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined && currentMigrationTag === "0036_jellyfin_provisioning",
-  "Current migration journal must end at migration 0036_jellyfin_provisioning.",
+  currentMigrationTimestamp !== undefined &&
+    currentMigrationTag === "0037_jellyfin_activation_operations",
+  "Current migration journal must end at migration 0037_jellyfin_activation_operations.",
 );
 
 try {
@@ -927,7 +930,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Fresh empty migration did not advance exactly through migration 0036.",
+      "Fresh empty migration did not advance exactly through migration 0037.",
     );
     assertInvitationMigration(database, "Fresh empty migration");
     const tables = database.sqlite

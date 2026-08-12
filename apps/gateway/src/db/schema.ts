@@ -268,6 +268,7 @@ export const externalIdentities = sqliteTable(
       table.userId,
       table.providerId,
     ),
+    uniqueIndex("external_identities_id_user_unique").on(table.id, table.userId),
     index("external_identities_user_idx").on(table.userId),
     foreignKey({
       columns: [table.providerId, table.issuer],
@@ -418,6 +419,115 @@ export const jellyfinProvisioningConfigs = sqliteTable(
   ],
 );
 
+export const jellyfinActivationOperations = sqliteTable(
+  "jellyfin_activation_operations",
+  {
+    id: text("id").primaryKey(),
+    invitationId: text("invitation_id")
+      .notNull()
+      .references(() => invitations.id, { onDelete: "restrict" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    externalIdentityId: text("external_identity_id")
+      .notNull()
+      .references(() => externalIdentities.id, { onDelete: "restrict" }),
+    connectorId: text("connector_id")
+      .notNull()
+      .references(() => connectorConfigs.id, { onDelete: "restrict" }),
+    connectorConfigGeneration: integer("connector_config_generation").notNull(),
+    connectorInstanceGeneration: integer("connector_instance_generation").notNull(),
+    connectorInstanceIdentityHash: text("connector_instance_identity_hash"),
+    provisioningRevision: integer("provisioning_revision").notNull(),
+    state: text("state", {
+      enum: [
+        "reserved",
+        "create_dispatched",
+        "created_id_recorded",
+        "manual_required",
+        "tombstoned",
+      ],
+    })
+      .notNull()
+      .default("reserved"),
+    revision: integer("revision").notNull().default(0),
+    encryptedStageArtifact: text("encrypted_stage_artifact"),
+    artifactRevision: integer("artifact_revision").notNull().default(0),
+    leaseOwner: text("lease_owner"),
+    leaseExpiresAt: integer("lease_expires_at", { mode: "timestamp_ms" }),
+    createAttemptCount: integer("create_attempt_count").notNull().default(0),
+    retryCount: integer("retry_count").notNull().default(0),
+    cleanupAttemptCount: integer("cleanup_attempt_count").notNull().default(0),
+    failureCode: text("failure_code"),
+    reservedAt: integer("reserved_at", { mode: "timestamp_ms" }).notNull(),
+    createDispatchedAt: integer("create_dispatched_at", { mode: "timestamp_ms" }),
+    createdIdRecordedAt: integer("created_id_recorded_at", { mode: "timestamp_ms" }),
+    manualRequiredAt: integer("manual_required_at", { mode: "timestamp_ms" }),
+    tombstonedAt: integer("tombstoned_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("jellyfin_activation_operations_invitation_user_identity_unique").on(
+      table.invitationId,
+      table.userId,
+      table.externalIdentityId,
+    ),
+    index("jellyfin_activation_operations_state_idx").on(table.state, table.updatedAt),
+    index("jellyfin_activation_operations_lease_idx").on(table.leaseExpiresAt),
+    foreignKey({
+      columns: [table.externalIdentityId, table.userId],
+      foreignColumns: [externalIdentities.id, externalIdentities.userId],
+      name: "jellyfin_activation_operations_identity_user_fk",
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    check(
+      "jellyfin_activation_operations_id_check",
+      sql`length(${table.id}) between 8 and 128 and substr(${table.id}, 1, 10) = 'jellyfin_' and substr(${table.id}, 11) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "jellyfin_activation_operations_generation_check",
+      sql`${table.connectorConfigGeneration} between 0 and 9007199254740991 and ${table.connectorInstanceGeneration} between 0 and 9007199254740991`,
+    ),
+    check(
+      "jellyfin_activation_operations_identity_hash_check",
+      sql`${table.connectorInstanceIdentityHash} is null or (length(${table.connectorInstanceIdentityHash}) between 16 and 128 and ${table.connectorInstanceIdentityHash} not glob '*[^A-Za-z0-9_-]*')`,
+    ),
+    check(
+      "jellyfin_activation_operations_provisioning_revision_check",
+      sql`${table.provisioningRevision} between 0 and 2147483647`,
+    ),
+    check(
+      "jellyfin_activation_operations_state_check",
+      sql`${table.state} in ('reserved', 'create_dispatched', 'created_id_recorded', 'manual_required', 'tombstoned')`,
+    ),
+    check(
+      "jellyfin_activation_operations_revision_check",
+      sql`${table.revision} between 0 and 2147483647 and ${table.artifactRevision} between 0 and 2147483647`,
+    ),
+    check(
+      "jellyfin_activation_operations_attempt_check",
+      sql`${table.createAttemptCount} between 0 and 1 and ${table.retryCount} between 0 and 8 and ${table.cleanupAttemptCount} between 0 and 8`,
+    ),
+    check(
+      "jellyfin_activation_operations_failure_code_check",
+      sql`${table.failureCode} is null or (length(${table.failureCode}) between 1 and 64 and ${table.failureCode} not glob '*[^a-z0-9_]*')`,
+    ),
+    check(
+      "jellyfin_activation_operations_lease_check",
+      sql`(${table.leaseOwner} is null and ${table.leaseExpiresAt} is null) or (${table.leaseOwner} is not null and ${table.leaseExpiresAt} is not null and length(${table.leaseOwner}) between 1 and 128 and ${table.leaseExpiresAt} >= 0)`,
+    ),
+    check(
+      "jellyfin_activation_operations_state_attribution_check",
+      sql`(${table.state} = 'reserved' and ${table.createAttemptCount} = 0 and ${table.createDispatchedAt} is null and ${table.createdIdRecordedAt} is null and ${table.manualRequiredAt} is null and ${table.tombstonedAt} is null and ${table.encryptedStageArtifact} is null) or (${table.state} = 'create_dispatched' and ${table.createAttemptCount} = 1 and ${table.createDispatchedAt} is not null and ${table.createdIdRecordedAt} is null and ${table.manualRequiredAt} is null and ${table.tombstonedAt} is null and ${table.encryptedStageArtifact} is null) or (${table.state} = 'created_id_recorded' and ${table.createAttemptCount} = 1 and ${table.createDispatchedAt} is not null and ${table.createdIdRecordedAt} is not null and ${table.manualRequiredAt} is null and ${table.tombstonedAt} is null and ${table.encryptedStageArtifact} is not null) or (${table.state} = 'manual_required' and ${table.manualRequiredAt} is not null and ${table.tombstonedAt} is null and ${table.encryptedStageArtifact} is null) or (${table.state} = 'tombstoned' and ${table.tombstonedAt} is not null and ${table.encryptedStageArtifact} is null)`,
+    ),
+    check(
+      "jellyfin_activation_operations_timestamp_order_check",
+      sql`${table.createdAt} >= 0 and ${table.createdAt} <= ${table.updatedAt} and ${table.reservedAt} >= ${table.createdAt} and (${table.createDispatchedAt} is null or ${table.createDispatchedAt} >= ${table.reservedAt}) and (${table.createdIdRecordedAt} is null or ${table.createDispatchedAt} is not null and ${table.createdIdRecordedAt} >= ${table.createDispatchedAt}) and (${table.manualRequiredAt} is null or ${table.manualRequiredAt} >= ${table.createdAt}) and (${table.tombstonedAt} is null or ${table.tombstonedAt} >= ${table.createdAt})`,
+    ),
+  ],
+);
+
 export const mediaRequestProfilePreferences = sqliteTable(
   "media_request_profile_preferences",
   {
@@ -467,6 +577,7 @@ export const serviceIdentityLinks = sqliteTable(
     externalUsername: text("external_username").notNull(),
     externalDisplayName: text("external_display_name").notNull(),
     encryptedAccessToken: text("encrypted_access_token"),
+    provisionedByActivationId: text("provisioned_by_activation_id"),
     deviceId: text("device_id").notNull(),
     tokenCreatedAt: integer("token_created_at", { mode: "timestamp_ms" }),
     healthState: text("health_state", {
@@ -487,11 +598,21 @@ export const serviceIdentityLinks = sqliteTable(
       table.externalServerId,
       table.externalUserId,
     ),
+    uniqueIndex("service_identity_links_provisioned_by_activation_unique")
+      .on(table.provisionedByActivationId)
+      .where(sql`${table.provisionedByActivationId} is not null`),
     index("service_identity_links_connector_idx").on(table.connectorId),
     foreignKey({
       columns: [table.connectorId, table.service],
       foreignColumns: [connectorConfigs.id, connectorConfigs.type],
       name: "service_identity_links_connector_type_fk",
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    foreignKey({
+      columns: [table.provisionedByActivationId],
+      foreignColumns: [jellyfinActivationOperations.id],
+      name: "service_identity_links_provisioned_by_activation_fk",
     })
       .onDelete("restrict")
       .onUpdate("restrict"),

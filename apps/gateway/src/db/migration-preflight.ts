@@ -337,6 +337,13 @@ interface EncryptedSample {
 
 const ENCRYPTED_SAMPLES: readonly EncryptedSample[] = [
   {
+    table: "jellyfin_activation_operations",
+    select: "id, artifact_revision as artifactRevision, encrypted_stage_artifact as encryptedValue",
+    orderBy: "id",
+    context: ({ id, artifactRevision }) =>
+      `omnifin:v1:jellyfin-activation:${id}:artifact:${artifactRevision}`,
+  },
+  {
     table: "oidc_providers",
     select: "id, encrypted_client_secret as encryptedValue",
     orderBy: "id",

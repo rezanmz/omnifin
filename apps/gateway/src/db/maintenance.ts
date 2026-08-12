@@ -1216,6 +1216,35 @@ function mergeRollbackInvitationFacts(sqlite: Database.Database, now: number) {
   `);
 }
 
+function sanitizeJellyfinActivationOperations(sqlite: Database.Database, now: number) {
+  sqlite.exec(`
+    update main.jellyfin_activation_operations
+    set state = case when state in ('manual_required', 'tombstoned') then state else 'manual_required' end,
+        encrypted_stage_artifact = null, artifact_revision = artifact_revision + 1,
+        lease_owner = null, lease_expires_at = null,
+        failure_code = case when state = 'tombstoned' then failure_code else 'restore_sanitized' end,
+        manual_required_at = case when state = 'tombstoned' then manual_required_at else max(created_at, ${now}) end,
+        tombstoned_at = case when state = 'tombstoned' then tombstoned_at else null end,
+        revision = revision + 1, updated_at = max(updated_at, created_at, ${now});
+  `);
+}
+
+function mergeRollbackJellyfinActivationFacts(sqlite: Database.Database, now: number) {
+  sqlite.exec(`
+    delete from main.jellyfin_activation_operations as restored
+    where exists (select 1 from rollback_timeline.jellyfin_activation_operations current
+      where current.id = restored.id or (current.invitation_id = restored.invitation_id
+        and current.user_id = restored.user_id and current.external_identity_id = restored.external_identity_id));
+    insert into main.jellyfin_activation_operations
+      select * from rollback_timeline.jellyfin_activation_operations current
+      where exists (select 1 from main.invitations where id = current.invitation_id)
+        and exists (select 1 from main.users where id = current.user_id)
+        and exists (select 1 from main.external_identities where id = current.external_identity_id and user_id = current.user_id)
+        and exists (select 1 from main.connector_configs where id = current.connector_id);
+  `);
+  sanitizeJellyfinActivationOperations(sqlite, now);
+}
+
 function provisioningCipher(rootKey: Buffer | undefined) {
   if (!rootKey || rootKey.length !== 32) throw new MaintenanceError("restore_sanitization_failed");
   return new EnvelopeCipher(rootKey);
@@ -1402,6 +1431,7 @@ function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number, root
   // Preserve only the current timeline's negative provisioning authority. Credential-bearing
   // configuration is intentionally never imported across the restore boundary.
   mergeRollbackJellyfinProvisioningFacts(sqlite, rootKey);
+  mergeRollbackJellyfinActivationFacts(sqlite, now);
 
   sqlite.exec(`
     update main.users as restored
@@ -1621,6 +1651,7 @@ function quarantineAuthorityWithoutCurrentTimeline(sqlite: Database.Database, no
         registration_handoff_expires_at = null
     where consumed_at is not null or revoked_at is not null;
   `);
+  sanitizeJellyfinActivationOperations(sqlite, now);
 }
 
 function sanitizePendingExternalParent(
