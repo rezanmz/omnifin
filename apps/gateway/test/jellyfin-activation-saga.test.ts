@@ -701,6 +701,7 @@ describe("JellyfinActivationSaga", () => {
       sagaInstance.createConfirmedCleanupCapability("jellyfin_phase_two"),
     );
     expect(stale.disposition).toBe("cleanup_rejected");
+    expect(stale).toMatchObject({ reason: "cleanup_uncertain" });
     expect(fake.deleteUser).not.toHaveBeenCalled();
     expect(repository.read("jellyfin_phase_two")?.failureCode).toBe("cleanup_uncertain");
     expect(
@@ -721,6 +722,26 @@ describe("JellyfinActivationSaga", () => {
         )
         .get(),
     ).toEqual({ event_type: "activation.cleanup.uncertain", outcome: "failure" });
+    const repeat = await sagaInstance.confirmedCleanup(
+      sagaInstance.createConfirmedCleanupCapability("jellyfin_phase_two"),
+    );
+    expect(repeat).toMatchObject({
+      disposition: "cleanup_rejected",
+      reason: "cleanup_uncertain",
+    });
+    expect(fake.deleteUser).not.toHaveBeenCalled();
+    expect(
+      database.sqlite
+        .prepare("select count(*) as count from jellyfin_activation_cleanup_reservations")
+        .get(),
+    ).toEqual({ count: 1 });
+    expect(
+      database.sqlite
+        .prepare(
+          "select state from jellyfin_activation_cleanup_reservations where operation_id = ?",
+        )
+        .get("jellyfin_phase_two"),
+    ).toEqual({ state: "uncertain" });
     expect(() => JSON.stringify(stale)).toThrow("internal-only");
     expect(() => JSON.stringify({ ...stale })).not.toThrow();
     expect(Object.keys({ ...stale })).not.toContain("createdId");

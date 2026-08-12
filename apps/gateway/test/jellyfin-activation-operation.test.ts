@@ -492,6 +492,33 @@ describe("Jellyfin activation operation repository", () => {
     }
   });
 
+  it("rejects cleanup-dispatch ID mutation without a managed link", () => {
+    const { repository, sqlite } = fixture();
+    prepareCreated(repository);
+    repository.recordStageArtifact({
+      id: "jellyfin_activation_1",
+      state: "policy_pending",
+      now: 204,
+      artifact: { createdId: "upstream-1" },
+    });
+    repository.markManualRequired({
+      id: "jellyfin_activation_1",
+      failureCode: "policy_failed",
+      now: 205,
+    });
+    repository.reserveCleanup({
+      id: "jellyfin_activation_1",
+      leaseOwner: "cleanup-owner",
+      leaseExpiresAt: 300,
+      now: 206,
+    });
+    expect(() =>
+      sqlite.exec(
+        "update jellyfin_activation_operations set id = 'jellyfin_activation_2' where id = 'jellyfin_activation_1'",
+      ),
+    ).toThrow(/activation cleanup binding is immutable/u);
+  });
+
   it("rejects unmarked same-binding links before cleanup reservation", () => {
     const { repository, sqlite } = fixture();
     prepareCreated(repository);

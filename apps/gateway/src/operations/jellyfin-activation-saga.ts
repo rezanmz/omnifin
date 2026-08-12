@@ -226,12 +226,14 @@ export class JellyfinActivationSaga {
       this.#encryptionKey,
     );
     const operation = repository.read(capability.operationId);
-    if (
-      !operation ||
-      operation.state !== "manual_required" ||
-      operation.failureCode === "cleanup_uncertain"
-    ) {
+    if (!operation || operation.state !== "manual_required") {
       return internalCleanupResult({ disposition: "cleanup_rejected", reason: "invalid_state" });
+    }
+    if (operation.failureCode === ("cleanup_uncertain" as never)) {
+      return internalCleanupResult({
+        disposition: "cleanup_rejected",
+        reason: "cleanup_uncertain",
+      });
     }
     const currentBindingRevision = operation.revision;
     let artifact: JellyfinActivationStageArtifact;
