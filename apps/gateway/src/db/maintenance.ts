@@ -1462,6 +1462,7 @@ function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number, root
   // Preserve only the current timeline's negative provisioning authority. Credential-bearing
   // configuration is intentionally never imported across the restore boundary.
   mergeRollbackJellyfinProvisioningFacts(sqlite, rootKey);
+  mergeRollbackJellyfinActivationFacts(sqlite, now);
 
   sqlite.exec(`
     update main.users as restored
@@ -1658,8 +1659,8 @@ function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number, root
   mergeIdempotencyReceipts(sqlite);
   mergeRollbackExternalMutationFacts(sqlite);
   mergeRollbackInvitationFacts(sqlite, now);
-  mergeRollbackJellyfinActivationFacts(sqlite, now);
-  sqlite.exec(`
+  if (markerColumn)
+    sqlite.exec(`
     update main.service_identity_links as restored
     set provisioned_by_activation_id = (
       select current.provisioned_by_activation_id

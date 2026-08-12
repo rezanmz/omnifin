@@ -391,11 +391,7 @@ export class JellyfinActivationOperationRepository {
           if (typeof parsed.createdId !== "string" || !CREATED_ID.test(parsed.createdId)) {
             throw new Error("created ID artifact is invalid");
           }
-          artifactRevision += 1;
-          artifact = this.#cipher.encrypt(
-            JSON.stringify({ createdId: parsed.createdId }),
-            jellyfinActivationArtifactEncryptionContext(row.id, artifactRevision),
-          );
+          artifact = row.encryptedStageArtifact;
           cleanupEligible = 1;
         } catch (error) {
           throw new JellyfinActivationOperationError("artifact_not_found", { cause: error });

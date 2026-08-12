@@ -240,11 +240,18 @@ describe("Jellyfin activation operation repository", () => {
       )
       .get() as { artifact: string; revision: number };
     expect(
-      new EnvelopeCipher(key).decrypt(
-        row.artifact,
-        jellyfinActivationArtifactEncryptionContext("jellyfin_activation_1", row.revision),
+      JSON.parse(
+        new EnvelopeCipher(key).decrypt(
+          row.artifact,
+          jellyfinActivationArtifactEncryptionContext("jellyfin_activation_1", row.revision),
+        ),
       ),
-    ).toBe(JSON.stringify({ createdId: "upstream-1" }));
+    ).toMatchObject({
+      createdId: "upstream-1",
+      username: "generated-user",
+      password: "generated-password",
+      accessToken: "user-token",
+    });
   });
 
   it("scrubs a no-created-ID manual failure and tombstones it", () => {

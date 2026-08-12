@@ -6601,15 +6601,6 @@
           "columnsTo": ["id", "type"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
-        },
-        "service_identity_links_provisioned_by_activation_fk": {
-          "name": "service_identity_links_provisioned_by_activation_fk",
-          "tableFrom": "service_identity_links",
-          "tableTo": "jellyfin_activation_operations",
-          "columnsFrom": ["provisioned_by_activation_id", "user_id", "connector_id"],
-          "columnsTo": ["id", "user_id", "connector_id"],
-          "onDelete": "restrict",
-          "onUpdate": "restrict"
         }
       },
       "compositePrimaryKeys": {},
