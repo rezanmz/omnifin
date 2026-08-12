@@ -551,6 +551,17 @@ export class JellyfinActivationOperationRepository {
     text(id, ACTIVATION_ID);
     const result = this.#sqlite
       .transaction(() => {
+        const reservationLease = this.#sqlite
+          .prepare(
+            `select operation_revision as operationRevision
+             from jellyfin_activation_cleanup_reservations
+             where operation_id = ? and state = 'dispatched'
+               and lease_owner = ? and operation_revision = ?`,
+          )
+          .get(id, leaseOwner, operationRevision) as { operationRevision: number } | undefined;
+        if (!reservationLease) throw new JellyfinActivationOperationError("invalid_transition");
+        const current = this.#row(id);
+        if (!current) throw new JellyfinActivationOperationError("operation_not_found");
         const updated = this.#sqlite
           .prepare(
             `update jellyfin_activation_operations
@@ -559,9 +570,9 @@ export class JellyfinActivationOperationRepository {
            where id = ? and state = 'manual_required' and cleanup_eligible = 1
              and lease_owner = ? and revision = ?`,
           )
-          .run(now, id, leaseOwner, operationRevision);
+          .run(now, id, leaseOwner, current.revision);
         if (updated.changes !== 1) throw new JellyfinActivationOperationError("invalid_transition");
-        const reservation = this.#sqlite
+        const reservationUpdate = this.#sqlite
           .prepare(
             `update jellyfin_activation_cleanup_reservations
            set state = 'uncertain', updated_at = ?
@@ -569,7 +580,7 @@ export class JellyfinActivationOperationRepository {
              and lease_owner = ? and operation_revision = ?`,
           )
           .run(now, id, leaseOwner, operationRevision);
-        if (reservation.changes !== 1)
+        if (reservationUpdate.changes !== 1)
           throw new JellyfinActivationOperationError("invalid_transition");
         return updated;
       })
