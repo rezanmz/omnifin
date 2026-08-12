@@ -148,6 +148,66 @@ describe("JellyfinProvisioningAdminClient", () => {
     ).rejects.toMatchObject({ code: "invalid_credentials" });
   });
 
+  it("uses bounded activation routes and exact response schemas", async () => {
+    const mock = createMockTransport([
+      jsonResponse({ Id: "server-10-11", Version: "10.11.11" }),
+      jsonResponse({ Id: "created-user" }),
+      new Response(null, { status: 204 }),
+      jsonResponse({
+        AccessToken: "created-token",
+        ServerId: "server-10-11",
+        User: { Id: "created-user" },
+      }),
+      new Response(null, { status: 204 }),
+    ]);
+    const client = new JellyfinProvisioningAdminClient(target(mock.transport));
+    await expect(client.readServerIdentity()).resolves.toBe("server-10-11");
+    await expect(
+      client.createUser({
+        accessToken: "admin-token",
+        deviceId: "device-1",
+        password: "secret",
+        username: "omnifin-user",
+      }),
+    ).resolves.toBe("created-user");
+    await expect(
+      client.applyUserPolicy({
+        accessToken: "admin-token",
+        deviceId: "device-1",
+        policy: { EnableAllFolders: true },
+        userId: "created-user",
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      client.authenticateCreatedUser({
+        deviceId: "device-1",
+        password: "secret",
+        username: "omnifin-user",
+      }),
+    ).resolves.toEqual({
+      accessToken: "created-token",
+      serverId: "server-10-11",
+      userId: "created-user",
+    });
+    await expect(
+      client.deleteUser({
+        accessToken: "admin-token",
+        deviceId: "device-1",
+        userId: "created-user",
+      }),
+    ).resolves.toBeUndefined();
+    expect(mock.requests.map(({ url, init }) => [url.pathname, init.method])).toEqual([
+      ["/base/System/Info/Public", "GET"],
+      ["/base/Users/New", "POST"],
+      ["/base/Users/created-user/Policy", "POST"],
+      ["/base/Users/AuthenticateByName", "POST"],
+      ["/base/Users/created-user", "DELETE"],
+    ]);
+    expect(new TextDecoder().decode(mock.requests[1]!.init.body)).toEqual(
+      JSON.stringify({ Name: "omnifin-user", Password: "secret" }),
+    );
+  });
+
   it("rejects a malformed API key inventory response", async () => {
     const mock = createMockTransport([
       jsonResponse({ Id: "server-10-10", ServerName: "Home", Version: "10.10.7" }),

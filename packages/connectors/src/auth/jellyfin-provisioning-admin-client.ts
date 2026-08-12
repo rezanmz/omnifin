@@ -139,7 +139,10 @@ const authenticationSchema = z.object({
   User: authenticationUserSchema,
 });
 
-const publicSystemInfoSchema = z.object({ Version: z.string().trim().min(1).max(128) });
+const publicSystemInfoSchema = z.object({
+  Id: z.string().trim().min(1).max(256),
+  Version: z.string().trim().min(1).max(128),
+});
 const authenticationInfoSchema = z.object({
   AccessToken: z.string().min(1).max(4_096),
   IsActive: z.boolean().optional(),
@@ -152,6 +155,19 @@ const authKeysResponseSchema = z.strictObject({
 
 export type JellyfinProvisioningAdminUser = z.infer<typeof authenticationUserSchema>;
 export type JellyfinProvisioningAuthentication = z.infer<typeof authenticationSchema>;
+
+const createdUserSchema = z.object({ Id: z.string().trim().min(1).max(256) });
+const activationAuthenticationSchema = z.object({
+  AccessToken: z.string().min(1).max(4_096),
+  ServerId: z.string().trim().min(1).max(256),
+  User: z.object({ Id: z.string().trim().min(1).max(256) }),
+});
+
+export interface JellyfinActivationAuthentication {
+  accessToken: string;
+  serverId: string;
+  userId: string;
+}
 
 function protocolVersionFor(version: string): JellyfinProvisioningProtocolVersion {
   const match = /^(\d+)\.(\d+)(?:\.|$)/u.exec(version);
@@ -203,6 +219,110 @@ export class JellyfinProvisioningAdminClient {
       operation: "provisioning_admin_password_authentication",
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     });
+  }
+
+  public readServerIdentity(input?: { signal?: AbortSignal }): Promise<string> {
+    return this.#client
+      .requestJson("System/Info/Public", publicSystemInfoSchema, {
+        operation: "provisioning_activation_server_identity",
+        ...(input?.signal === undefined ? {} : { signal: input.signal }),
+      })
+      .then((result) => result.Id);
+  }
+
+  public createUser(input: {
+    accessToken: string;
+    deviceId: string;
+    password: string;
+    username: string;
+    signal?: AbortSignal;
+  }): Promise<string> {
+    return this.#client
+      .requestJson("Users/New", createdUserSchema, {
+        body: JSON.stringify({ Name: input.username, Password: input.password }),
+        headers: {
+          authorization: jellyfinAuthorization({
+            accessToken: input.accessToken,
+            deviceId: input.deviceId,
+          }),
+          "content-type": "application/json",
+        },
+        method: "POST",
+        operation: "provisioning_activation_create",
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      })
+      .then((result) => result.Id);
+  }
+
+  public applyUserPolicy(input: {
+    accessToken: string;
+    deviceId: string;
+    policy: Record<string, unknown>;
+    userId: string;
+    signal?: AbortSignal;
+  }): Promise<void> {
+    return this.#client
+      .requestText(`Users/${encodeURIComponent(input.userId)}/Policy`, {
+        body: JSON.stringify(input.policy),
+        headers: {
+          authorization: jellyfinAuthorization({
+            accessToken: input.accessToken,
+            deviceId: input.deviceId,
+          }),
+          "content-type": "application/json",
+        },
+        method: "POST",
+        operation: "provisioning_activation_policy",
+        requiredStatus: 204,
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      })
+      .then(() => undefined);
+  }
+
+  public authenticateCreatedUser(input: {
+    deviceId: string;
+    password: string;
+    username: string;
+    signal?: AbortSignal;
+  }): Promise<JellyfinActivationAuthentication> {
+    return this.#client
+      .requestJson("Users/AuthenticateByName", activationAuthenticationSchema, {
+        body: JSON.stringify({ Pw: input.password, Username: input.username }),
+        headers: {
+          "content-type": "application/json",
+          authorization: jellyfinAuthorization({ deviceId: input.deviceId }),
+        },
+        method: "POST",
+        operation: "provisioning_activation_authentication",
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      })
+      .then((result) => ({
+        accessToken: result.AccessToken,
+        serverId: result.ServerId,
+        userId: result.User.Id,
+      }));
+  }
+
+  public deleteUser(input: {
+    accessToken: string;
+    deviceId: string;
+    userId: string;
+    signal?: AbortSignal;
+  }): Promise<void> {
+    return this.#client
+      .requestText(`Users/${encodeURIComponent(input.userId)}`, {
+        headers: {
+          authorization: jellyfinAuthorization({
+            accessToken: input.accessToken,
+            deviceId: input.deviceId,
+          }),
+        },
+        method: "DELETE",
+        operation: "provisioning_activation_cleanup",
+        requiredStatus: 204,
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      })
+      .then(() => undefined);
   }
 
   public validateAdministratorApiKey(input: {

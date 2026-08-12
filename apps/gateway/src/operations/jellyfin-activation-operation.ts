@@ -78,6 +78,8 @@ export interface JellyfinActivationStageArtifact {
   readonly policy?: Record<string, unknown>;
 }
 
+export type JellyfinActivationStoredArtifact = JellyfinActivationStageArtifact;
+
 export type JellyfinActivationOperationErrorCode =
   | "invalid_input"
   | "invalid_transition"
@@ -285,6 +287,41 @@ export class JellyfinActivationOperationRepository {
     return this.read(input.id)!;
   }
 
+  public acquireStageLease(input: {
+    id: string;
+    leaseOwner: string;
+    leaseExpiresAt: number;
+    now: number;
+  }) {
+    if (
+      !validTime(input.now) ||
+      !validTime(input.leaseExpiresAt) ||
+      input.leaseExpiresAt <= input.now
+    )
+      throw new JellyfinActivationOperationError("invalid_input");
+    text(input.id, ACTIVATION_ID);
+    text(input.leaseOwner);
+    const result = this.#sqlite
+      .prepare(
+        `update jellyfin_activation_operations
+         set lease_owner = ?, lease_expires_at = ?, revision = revision + 1,
+             updated_at = max(updated_at, ?)
+         where id = ?
+           and state in ('created', 'policy_pending')
+           and (lease_owner is null or lease_owner = ? or lease_expires_at < ?)`,
+      )
+      .run(
+        input.leaseOwner,
+        input.leaseExpiresAt,
+        input.now,
+        input.id,
+        input.leaseOwner,
+        input.now,
+      );
+    if (result.changes !== 1) throw new JellyfinActivationOperationError("invalid_transition");
+    return this.read(input.id)!;
+  }
+
   public dispatchCreate(input: { id: string; leaseOwner: string; now: number }) {
     if (!validTime(input.now)) throw new JellyfinActivationOperationError("invalid_input");
     text(input.id, ACTIVATION_ID);
@@ -477,6 +514,34 @@ export class JellyfinActivationOperationRepository {
       )
         throw new Error("invalid artifact");
       return (value as { createdId: string }).createdId;
+    } catch (error) {
+      throw new JellyfinActivationOperationError("artifact_not_found", { cause: error });
+    }
+  }
+
+  public readStageArtifact(id: string): JellyfinActivationStoredArtifact {
+    text(id, ACTIVATION_ID);
+    const row = this.#row(id);
+    if (!row?.encryptedStageArtifact || row.cleanupEligible !== 1) {
+      throw new JellyfinActivationOperationError("artifact_not_found");
+    }
+    try {
+      const value = JSON.parse(
+        this.#cipher.decrypt(
+          row.encryptedStageArtifact,
+          jellyfinActivationArtifactEncryptionContext(id, row.artifactRevision),
+        ),
+      ) as unknown;
+      if (
+        !value ||
+        typeof value !== "object" ||
+        Array.isArray(value) ||
+        typeof (value as Record<string, unknown>).createdId !== "string" ||
+        !CREATED_ID.test((value as Record<string, unknown>).createdId as string)
+      ) {
+        throw new Error("invalid artifact");
+      }
+      return Object.freeze(value as JellyfinActivationStoredArtifact);
     } catch (error) {
       throw new JellyfinActivationOperationError("artifact_not_found", { cause: error });
     }
