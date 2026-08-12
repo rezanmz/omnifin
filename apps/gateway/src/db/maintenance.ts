@@ -1230,9 +1230,7 @@ function sanitizeJellyfinActivationOperations(sqlite: Database.Database, now: nu
     .get();
   if (cleanupExists) {
     sqlite.exec(`
-      update main.jellyfin_activation_cleanup_reservations
-      set state = 'uncertain', updated_at = max(updated_at, ${now})
-      where state = 'dispatched';
+      delete from main.jellyfin_activation_cleanup_reservations;
     `);
   }
   sqlite.exec(`

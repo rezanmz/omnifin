@@ -351,4 +351,73 @@ describe("JellyfinActivationSaga", () => {
     expect(repository.read("jellyfin_phase_two")?.state).toBe("tombstoned");
     expect(() => JSON.stringify(capability)).toThrow("internal-only");
   });
+
+  it("cleans an exact known ID after invitation expiry without invitation preflight", async () => {
+    const { database, repository } = fixture();
+    const fake = client();
+    await saga(database, fake).run("jellyfin_phase_two");
+    repository.markManualRequired({
+      id: "jellyfin_phase_two",
+      failureCode: "invite_expired",
+      now: 400,
+    });
+    database.sqlite
+      .prepare("update invitations set expires_at = 200 where id = 'invite_phase_two'")
+      .run();
+
+    const result = await saga(database, fake).confirmedCleanup(
+      saga(database, fake).createConfirmedCleanupCapability("jellyfin_phase_two"),
+    );
+    expect(result.disposition).toBe("cleanup_confirmed");
+    expect(fake.deleteUser).toHaveBeenCalledTimes(1);
+    expect(fake.deleteUser).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "created-upstream-id" }),
+    );
+  });
+
+  it("does not let a fresh non-eligible operation bypass cleanup preconditions", async () => {
+    const { database } = fixture();
+    const fake = client();
+    const sagaInstance = saga(database, fake);
+    const result = await sagaInstance.confirmedCleanup(
+      sagaInstance.createConfirmedCleanupCapability("jellyfin_phase_two"),
+    );
+    expect(result.disposition).toBe("cleanup_rejected");
+    expect(fake.deleteUser).not.toHaveBeenCalled();
+  });
+
+  it("returns opaque in-progress and terminal uncertainty outcomes", async () => {
+    const { database, repository } = fixture();
+    const fake = client();
+    await saga(database, fake).run("jellyfin_phase_two");
+    repository.markManualRequired({
+      id: "jellyfin_phase_two",
+      failureCode: "policy_failed",
+      now: 400,
+    });
+    const owner = "live-cleanup";
+    const reserved = repository.reserveCleanup({
+      id: "jellyfin_phase_two",
+      leaseOwner: owner,
+      leaseExpiresAt: 500,
+      now: 400,
+    });
+    const sagaInstance = saga(database, fake);
+    const live = await sagaInstance.confirmedCleanup(
+      sagaInstance.createConfirmedCleanupCapability("jellyfin_phase_two"),
+    );
+    expect(live.disposition).toBe("cleanup_in_progress");
+    database.sqlite
+      .prepare(
+        "update jellyfin_activation_cleanup_reservations set lease_expires_at = 250 where operation_id = ?",
+      )
+      .run(reserved.id);
+    const stale = await sagaInstance.confirmedCleanup(
+      sagaInstance.createConfirmedCleanupCapability("jellyfin_phase_two"),
+    );
+    expect(stale.disposition).toBe("cleanup_rejected");
+    expect(fake.deleteUser).not.toHaveBeenCalled();
+    expect(() => JSON.stringify({ ...stale })).not.toThrow();
+    expect(Object.keys({ ...stale })).not.toContain("createdId");
+  });
 });

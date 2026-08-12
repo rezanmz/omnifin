@@ -233,6 +233,7 @@ export class JellyfinActivationSaga {
     ) {
       return internalCleanupResult({ disposition: "cleanup_rejected", reason: "invalid_state" });
     }
+    const currentBindingRevision = operation.revision;
     let artifact: JellyfinActivationStageArtifact;
     try {
       artifact = repository.readStageArtifact(operation.id);
@@ -265,7 +266,7 @@ export class JellyfinActivationSaga {
         });
       }
     }
-    const binding = await this.#binding(operation, true, false);
+    const binding = await this.#binding(operation, true, false, false);
     if ("reason" in binding)
       return internalCleanupResult({ disposition: "cleanup_rejected", reason: binding.reason });
     let reserved: JellyfinActivationOperation;
@@ -281,7 +282,7 @@ export class JellyfinActivationSaga {
     }
     const reservedRevision = reserved.revision;
     const owner = reserved.leaseOwner!;
-    const rebound = await this.#binding(reserved, true, false);
+    const rebound = await this.#binding(reserved, true, false, false);
     if ("reason" in rebound) {
       try {
         repository.markCleanupUncertain(reserved.id, this.#clock(), owner, reservedRevision);
@@ -297,6 +298,15 @@ export class JellyfinActivationSaga {
         deviceId: DEVICE_ID,
         userId: artifact.createdId,
       });
+      const latest = repository.read(reserved.id);
+      if (!latest || latest.revision !== currentBindingRevision + 1) {
+        repository.markCleanupUncertain(reserved.id, this.#clock(), owner, reservedRevision);
+        this.#auditCleanup(operation, "uncertain");
+        return internalCleanupResult({
+          disposition: "cleanup_uncertain",
+          reason: "cleanup_uncertain",
+        });
+      }
       repository.completeConfirmedCleanup(reserved.id, this.#clock(), owner, reservedRevision);
       this.#auditCleanup(operation, "confirmed");
       return internalCleanupResult({ disposition: "cleanup_confirmed" });
@@ -480,6 +490,7 @@ export class JellyfinActivationSaga {
     operation: JellyfinActivationOperation,
     verifyServerIdentity: boolean,
     checkLocalState = true,
+    checkInvitation = true,
   ): Promise<Binding | { reason: JellyfinActivationReason }> {
     const connector = this.#database.sqlite
       .prepare(
@@ -505,31 +516,26 @@ export class JellyfinActivationSaga {
       )
       .get(operation.externalIdentityId, operation.userId) as
       { identityUserId: string | null; linkExists: number; userStatus: string } | undefined;
-    const invitation = this.#database.sqlite
-      .prepare(
-        "select id, consumed_at as consumedAt, revoked_at as revokedAt from invitations where id = ?",
-      )
-      .get(operation.invitationId) as
-      { consumedAt: number | null; id: string; revokedAt: number | null } | undefined;
+    const invitation = checkInvitation
+      ? (this.#database.sqlite
+          .prepare(
+            "select id, consumed_at as consumedAt, revoked_at as revokedAt, expires_at as expiresAt from invitations where id = ?",
+          )
+          .get(operation.invitationId) as
+          | { consumedAt: number | null; expiresAt: number; id: string; revokedAt: number | null }
+          | undefined)
+      : undefined;
     if (checkLocalState && (!local || local.userStatus !== "pending_link"))
       return { reason: "user_not_pending" };
     if (checkLocalState && (local?.linkExists ?? 1) !== 0) return { reason: "link_exists" };
     if (
       (checkLocalState && (local?.identityUserId ?? null) !== operation.userId) ||
-      !invitation ||
-      invitation.consumedAt !== null ||
-      invitation.revokedAt !== null
+      (checkInvitation &&
+        (!invitation || invitation.consumedAt !== null || invitation.revokedAt !== null))
     ) {
       return { reason: "identity_invalid" };
     }
-    if (
-      this.#clock() >=
-      (
-        this.#database.sqlite
-          .prepare("select expires_at as expiresAt from invitations where id = ?")
-          .get(operation.invitationId) as { expiresAt: number }
-      ).expiresAt
-    ) {
+    if (checkInvitation && this.#clock() >= invitation!.expiresAt) {
       return { reason: "invite_expired" };
     }
     const provisioning = this.#database.sqlite

@@ -27,13 +27,21 @@ WHEN NEW.service = 'jellyfin' AND EXISTS (
 BEGIN SELECT RAISE(ABORT, 'activation cleanup is dispatched'); END;
 --> statement-breakpoint
 CREATE TRIGGER `jellyfin_activation_operations_cleanup_update_guard`
-BEFORE UPDATE OF id, user_id, connector_id ON `jellyfin_activation_operations`
+BEFORE UPDATE OF id, user_id, connector_id, connector_config_generation,
+  connector_instance_generation, connector_instance_identity_hash, provisioning_revision
+ON `jellyfin_activation_operations`
 WHEN EXISTS (
   SELECT 1
   FROM jellyfin_activation_cleanup_reservations cleanup
   WHERE cleanup.operation_id = OLD.id
     AND cleanup.state = 'dispatched'
-    AND (NEW.id <> OLD.id OR NEW.user_id <> OLD.user_id OR NEW.connector_id <> OLD.connector_id)
+    AND (
+      NEW.id <> OLD.id OR NEW.user_id <> OLD.user_id OR NEW.connector_id <> OLD.connector_id
+      OR NEW.connector_config_generation <> OLD.connector_config_generation
+      OR NEW.connector_instance_generation <> OLD.connector_instance_generation
+      OR coalesce(NEW.connector_instance_identity_hash, '') <> coalesce(OLD.connector_instance_identity_hash, '')
+      OR NEW.provisioning_revision <> OLD.provisioning_revision
+    )
 )
 BEGIN SELECT RAISE(ABORT, 'activation cleanup binding is immutable'); END;
 --> statement-breakpoint
