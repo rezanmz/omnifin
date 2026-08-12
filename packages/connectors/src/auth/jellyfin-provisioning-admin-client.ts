@@ -308,7 +308,7 @@ export class JellyfinProvisioningAdminClient {
     deviceId: string;
     userId: string;
     signal?: AbortSignal;
-  }): Promise<void> {
+  }): Promise<"deleted" | "not_found"> {
     return this.#client
       .requestText(`Users/${encodeURIComponent(input.userId)}`, {
         headers: {
@@ -319,10 +319,10 @@ export class JellyfinProvisioningAdminClient {
         },
         method: "DELETE",
         operation: "provisioning_activation_cleanup",
-        requiredStatus: 204,
+        acceptedStatuses: [404],
         ...(input.signal === undefined ? {} : { signal: input.signal }),
       })
-      .then(() => undefined);
+      .then((response) => (response.status === 404 ? "not_found" : "deleted"));
   }
 
   public validateAdministratorApiKey(input: {

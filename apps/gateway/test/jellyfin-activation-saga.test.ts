@@ -108,6 +108,7 @@ function client(overrides: Partial<Record<string, ReturnType<typeof vi.fn>>> = {
     })),
     applyUserPolicy: vi.fn(async () => undefined),
     createUser: vi.fn(async () => "created-upstream-id"),
+    deleteUser: vi.fn(async () => "deleted" as const),
     readServerIdentity: vi.fn(async () => serverId),
     ...overrides,
   } as unknown as JellyfinProvisioningAdminClient;
@@ -260,5 +261,94 @@ describe("JellyfinActivationSaga", () => {
       .all();
     expect(JSON.stringify(audit)).not.toContain("created-user-token");
     expect(JSON.stringify(audit)).not.toContain("admin-capability");
+  });
+
+  it("expires invitations before any external mutation and seals long upstream IDs", async () => {
+    const { database, repository } = fixture();
+    database.sqlite
+      .prepare("update invitations set expires_at = 200 where id = ?")
+      .run("invite_phase_two");
+    const fake = client();
+    const result = await new JellyfinActivationSaga(
+      database,
+      { encryptionKey: key },
+      {
+        clock: () => 300,
+        createClient: () => fake,
+        leaseOwner: "expired-invite-saga",
+      },
+    ).run("jellyfin_phase_two");
+    expect(result).toEqual({ disposition: "manual_pairing", reason: "invite_expired" });
+    expect(fake.createUser).not.toHaveBeenCalled();
+    expect(repository.read("jellyfin_phase_two")?.state).toBe("manual_required");
+
+    const longId = "u".repeat(200);
+    const longClient = client({
+      createUser: vi.fn(async () => longId),
+      authenticateCreatedUser: vi.fn(async () => ({
+        accessToken: "created-user-token",
+        serverId,
+        userId: longId,
+      })),
+    });
+    const longFixture = fixture();
+    const longResult = await saga(longFixture.database, longClient).run("jellyfin_phase_two");
+    expect(longResult.disposition).toBe("activated_ready");
+    expect(longFixture.repository.readStageArtifact("jellyfin_phase_two").createdId).toBe(longId);
+  });
+
+  it("terminalizes an expired create fence without calling the client", async () => {
+    const { database, repository } = fixture();
+    database.sqlite
+      .prepare(
+        "update jellyfin_activation_operations set state = 'create_dispatched', create_attempt_count = 1, create_dispatched_at = 150, lease_owner = 'crashed-worker', lease_expires_at = 200 where id = ?",
+      )
+      .run("jellyfin_phase_two");
+    const fake = client();
+    const sagaInstance = new JellyfinActivationSaga(
+      database,
+      { encryptionKey: key },
+      {
+        clock: () => 300,
+        createClient: () => fake,
+        leaseOwner: "restart-saga",
+      },
+    );
+    expect(await sagaInstance.run("jellyfin_phase_two")).toEqual({
+      disposition: "manual_pairing",
+      reason: "create_outcome_uncertain",
+    });
+    expect(await sagaInstance.run("jellyfin_phase_two")).toEqual({
+      disposition: "manual_pairing",
+      reason: "create_outcome_uncertain",
+    });
+    expect(fake.createUser).not.toHaveBeenCalled();
+    expect(repository.read("jellyfin_phase_two")?.state).toBe("manual_required");
+  });
+
+  it("requires trusted confirmation and exact binding for confirmed cleanup", async () => {
+    const { database, repository } = fixture();
+    const fake = client();
+    await saga(database, fake).run("jellyfin_phase_two");
+    repository.markManualRequired({
+      id: "jellyfin_phase_two",
+      failureCode: "manual_required",
+      now: 400,
+    });
+    const sagaInstance = saga(database, fake);
+    const rejected = await sagaInstance.confirmedCleanup(
+      {} as Parameters<typeof sagaInstance.confirmedCleanup>[0],
+    );
+    expect(rejected.disposition).toBe("cleanup_rejected");
+    expect(fake.deleteUser).not.toHaveBeenCalled();
+
+    const capability = sagaInstance.createConfirmedCleanupCapability("jellyfin_phase_two");
+    const cleaned = await sagaInstance.confirmedCleanup(capability);
+    expect(cleaned).toEqual({ disposition: "cleanup_confirmed" });
+    expect(fake.deleteUser).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "created-upstream-id" }),
+    );
+    expect(repository.read("jellyfin_phase_two")?.state).toBe("tombstoned");
+    expect(() => JSON.stringify(capability)).toThrow("internal-only");
   });
 });

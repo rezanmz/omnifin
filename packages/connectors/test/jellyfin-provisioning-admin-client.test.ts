@@ -195,7 +195,7 @@ describe("JellyfinProvisioningAdminClient", () => {
         deviceId: "device-1",
         userId: "created-user",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe("deleted");
     expect(mock.requests.map(({ url, init }) => [url.pathname, init.method])).toEqual([
       ["/base/System/Info/Public", "GET"],
       ["/base/Users/New", "POST"],
