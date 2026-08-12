@@ -662,7 +662,9 @@ export class SafeHttpClient {
 
     const acceptedStatuses = options.acceptedStatuses ?? [];
     if (
-      (options.requiredStatus !== undefined && response.status !== options.requiredStatus) ||
+      (options.requiredStatus !== undefined &&
+        response.status !== options.requiredStatus &&
+        !acceptedStatuses.includes(response.status)) ||
       (!response.ok && !acceptedStatuses.includes(response.status))
     ) {
       await response.body?.cancel();

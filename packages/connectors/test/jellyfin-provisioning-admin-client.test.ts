@@ -208,6 +208,18 @@ describe("JellyfinProvisioningAdminClient", () => {
     );
   });
 
+  it("rejects a successful but non-204 cleanup response", async () => {
+    const mock = createMockTransport([jsonResponse({}, { status: 200 })]);
+    const client = new JellyfinProvisioningAdminClient(target(mock.transport));
+    await expect(
+      client.deleteUser({
+        accessToken: "admin-token",
+        deviceId: "device-1",
+        userId: "created-user",
+      }),
+    ).rejects.toMatchObject({ code: "upstream_error", status: 200 });
+  });
+
   it("rejects a malformed API key inventory response", async () => {
     const mock = createMockTransport([
       jsonResponse({ Id: "server-10-10", ServerName: "Home", Version: "10.10.7" }),

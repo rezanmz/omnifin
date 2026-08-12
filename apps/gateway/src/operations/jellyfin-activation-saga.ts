@@ -239,18 +239,29 @@ export class JellyfinActivationSaga {
     if (link) return { disposition: "cleanup_rejected", reason: "link_exists" };
     const binding = await this.#binding(operation, true);
     if ("reason" in binding) return { disposition: "cleanup_rejected", reason: binding.reason };
+    let reserved: JellyfinActivationOperation;
+    try {
+      reserved = repository.reserveCleanup({
+        id: operation.id,
+        leaseOwner: `cleanup-${randomUUID()}`,
+        leaseExpiresAt: this.#clock() + LEASE_MS,
+        now: this.#clock(),
+      });
+    } catch {
+      return { disposition: "cleanup_rejected", reason: "invalid_state" };
+    }
     try {
       await binding.client.deleteUser({
         accessToken: binding.credential,
         deviceId: DEVICE_ID,
         userId: artifact.createdId,
       });
-      repository.completeConfirmedCleanup(operation.id, this.#clock());
+      repository.completeConfirmedCleanup(reserved.id, this.#clock());
       this.#audit(operation, "cleanup_uncertain");
       return { disposition: "cleanup_confirmed" };
     } catch {
       try {
-        repository.markCleanupUncertain(operation.id, this.#clock());
+        repository.markCleanupUncertain(reserved.id, this.#clock());
       } catch {
         // Another trusted cleanup caller may have recorded the uncertainty.
       }

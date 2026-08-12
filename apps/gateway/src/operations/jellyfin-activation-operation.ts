@@ -533,6 +533,34 @@ export class JellyfinActivationOperationRepository {
     return this.read(id)!;
   }
 
+  public reserveCleanup(input: {
+    id: string;
+    leaseOwner: string;
+    leaseExpiresAt: number;
+    now: number;
+  }) {
+    if (
+      !validTime(input.now) ||
+      !validTime(input.leaseExpiresAt) ||
+      input.leaseExpiresAt <= input.now
+    ) {
+      throw new JellyfinActivationOperationError("invalid_input");
+    }
+    text(input.id, ACTIVATION_ID);
+    text(input.leaseOwner);
+    const result = this.#sqlite
+      .prepare(
+        `update jellyfin_activation_operations
+         set lease_owner = ?, lease_expires_at = ?, revision = revision + 1,
+             updated_at = max(updated_at, ?)
+         where id = ? and state = 'manual_required' and cleanup_eligible = 1
+           and lease_owner is null and failure_code <> 'cleanup_uncertain'`,
+      )
+      .run(input.leaseOwner, input.leaseExpiresAt, input.now, input.id);
+    transition(result);
+    return this.read(input.id)!;
+  }
+
   public tombstone(id: string, now: number) {
     if (!validTime(now)) throw new JellyfinActivationOperationError("invalid_input");
     text(id, ACTIVATION_ID);

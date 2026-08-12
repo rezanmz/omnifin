@@ -320,6 +320,7 @@ export class JellyfinProvisioningAdminClient {
         method: "DELETE",
         operation: "provisioning_activation_cleanup",
         acceptedStatuses: [404],
+        requiredStatus: 204,
         ...(input.signal === undefined ? {} : { signal: input.signal }),
       })
       .then((response) => (response.status === 404 ? "not_found" : "deleted"));
