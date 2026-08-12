@@ -220,6 +220,34 @@ describe("JellyfinProvisioningAdminClient", () => {
     ).rejects.toMatchObject({ code: "upstream_error", status: 200 });
   });
 
+  it("treats a 404 cleanup response as already-absent confirmation", async () => {
+    const mock = createMockTransport([jsonResponse({}, { status: 404 })]);
+    const client = new JellyfinProvisioningAdminClient(target(mock.transport));
+    await expect(
+      client.deleteUser({
+        accessToken: "admin-token",
+        deviceId: "device-1",
+        userId: "created-user",
+      }),
+    ).resolves.toBe("not_found");
+    expect(mock.requests[0]?.url.pathname).toBe("/base/Users/created-user");
+  });
+
+  it.each([201, 202])(
+    "rejects cleanup response %s even though it is successful HTTP",
+    async (status) => {
+      const mock = createMockTransport([jsonResponse({}, { status })]);
+      const client = new JellyfinProvisioningAdminClient(target(mock.transport));
+      await expect(
+        client.deleteUser({
+          accessToken: "admin-token",
+          deviceId: "device-1",
+          userId: "created-user",
+        }),
+      ).rejects.toMatchObject({ code: "upstream_error", status });
+    },
+  );
+
   it("rejects a malformed API key inventory response", async () => {
     const mock = createMockTransport([
       jsonResponse({ Id: "server-10-10", ServerName: "Home", Version: "10.10.7" }),

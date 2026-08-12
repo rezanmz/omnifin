@@ -968,6 +968,88 @@ describe("restore sanitation and rollback", () => {
     sqlite.close();
   });
 
+  it("removes dispatched activation cleanup reservations during rollback and quarantine", async () => {
+    const directory = await privateDirectory("omnifin-activation-cleanup-restore-");
+    const databasePath = path.join(directory, "omnifin.db");
+    const selectedPath = path.join(directory, "selected.sqlite");
+    const rollbackPath = path.join(directory, "rollback.sqlite");
+    createCurrentDatabase(databasePath);
+    createCurrentDatabase(rollbackPath);
+    let sqlite = new Database(databasePath);
+    seedActivationRestoreFixture(sqlite);
+    insertActivationRestoreOperation(sqlite, {
+      connectorId: "activation-connector-selected",
+      externalIdentityId: "activation-identity-selected",
+      id: "jellyfin_activation_cleanup_selected",
+      invitationId: "invite_activation_selected",
+      userId: "activation-user-selected",
+    });
+    sqlite
+      .prepare(
+        "insert into jellyfin_activation_cleanup_reservations (operation_id, operation_revision, lease_owner, lease_expires_at, attempt_count, state, created_at, updated_at) values (?, 1, 'cleanup-owner', 6000, 1, 'dispatched', 1000, 1000)",
+      )
+      .run("jellyfin_activation_cleanup_selected");
+    sqlite.close();
+    await createDatabaseBackup({ databasePath, outputPath: selectedPath });
+    sqlite = new Database(rollbackPath);
+    seedActivationRestoreFixture(sqlite);
+    insertActivationRestoreOperation(sqlite, {
+      connectorId: "activation-connector-current",
+      externalIdentityId: "activation-identity-current",
+      id: "jellyfin_activation_cleanup_current",
+      invitationId: "invite_activation_current",
+      userId: "activation-user-current",
+    });
+    sqlite
+      .prepare(
+        "insert into jellyfin_activation_cleanup_reservations (operation_id, operation_revision, lease_owner, lease_expires_at, attempt_count, state, created_at, updated_at) values (?, 1, 'cleanup-owner', 6000, 1, 'dispatched', 1000, 1000)",
+      )
+      .run("jellyfin_activation_cleanup_current");
+    sqlite.close();
+    await restoreDatabaseBackup({
+      backupPath: selectedPath,
+      confirmedGatewayStopped: true,
+      databasePath: rollbackPath,
+      now: new Date(5000),
+      rollbackOutputPath: path.join(directory, "pre-restore.sqlite"),
+    });
+    sqlite = new Database(rollbackPath, { readonly: true });
+    expect(
+      sqlite
+        .prepare("select count(*) as count from jellyfin_activation_cleanup_reservations")
+        .get(),
+    ).toEqual({ count: 0 });
+    expect(sqlite.pragma("foreign_key_check")).toEqual([]);
+    sqlite.close();
+
+    const noCurrentPath = path.join(directory, "no-current.sqlite");
+    createCurrentDatabase(noCurrentPath);
+    sqlite = new Database(noCurrentPath);
+    seedActivationRestoreFixture(sqlite);
+    insertActivationRestoreOperation(sqlite, {
+      connectorId: "activation-connector-selected",
+      externalIdentityId: "activation-identity-selected",
+      id: "jellyfin_activation_cleanup_no_current",
+      invitationId: "invite_activation_selected",
+      userId: "activation-user-selected",
+    });
+    sqlite
+      .prepare(
+        "insert into jellyfin_activation_cleanup_reservations (operation_id, operation_revision, lease_owner, lease_expires_at, attempt_count, state, created_at, updated_at) values (?, 1, 'cleanup-owner', 6000, 1, 'dispatched', 1000, 1000)",
+      )
+      .run("jellyfin_activation_cleanup_no_current");
+    sqlite.close();
+    sanitizeRestoredDatabase(noCurrentPath, { now: new Date(5000) });
+    sqlite = new Database(noCurrentPath, { readonly: true });
+    expect(
+      sqlite
+        .prepare("select count(*) as count from jellyfin_activation_cleanup_reservations")
+        .get(),
+    ).toEqual({ count: 0 });
+    expect(sqlite.pragma("foreign_key_check")).toEqual([]);
+    sqlite.close();
+  });
+
   it.each([
     { name: "a clear tombstone", state: "cleared" as const },
     { name: "a disabled configuration", state: "disabled" as const },

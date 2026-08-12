@@ -375,6 +375,27 @@ describe("JellyfinActivationSaga", () => {
     );
   });
 
+  it.each([
+    ["revocation", "update invitations set revoked_at = 200 where id = 'invite_phase_two'"],
+    ["consumption", "update invitations set consumed_at = 200 where id = 'invite_phase_two'"],
+  ])("cleans an eligible exact ID after invitation %s", async (_name, update) => {
+    const { database, repository } = fixture();
+    const fake = client();
+    await saga(database, fake).run("jellyfin_phase_two");
+    repository.markManualRequired({
+      id: "jellyfin_phase_two",
+      failureCode: "manual_required",
+      now: 400,
+    });
+    database.sqlite.exec(update);
+    const sagaInstance = saga(database, fake);
+    const result = await sagaInstance.confirmedCleanup(
+      sagaInstance.createConfirmedCleanupCapability("jellyfin_phase_two"),
+    );
+    expect(result.disposition).toBe("cleanup_confirmed");
+    expect(fake.deleteUser).toHaveBeenCalledTimes(1);
+  });
+
   it("does not let a fresh non-eligible operation bypass cleanup preconditions", async () => {
     const { database } = fixture();
     const fake = client();
@@ -384,6 +405,215 @@ describe("JellyfinActivationSaga", () => {
     );
     expect(result.disposition).toBe("cleanup_rejected");
     expect(fake.deleteUser).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["204", "deleted" as const],
+    ["404", "not_found" as const],
+  ])("confirms exact-ID cleanup for upstream %s", async (_status, deleteResult) => {
+    const { database, repository } = fixture();
+    const fake = client({ deleteUser: vi.fn(async () => deleteResult) });
+    await saga(database, fake).run("jellyfin_phase_two");
+    repository.markManualRequired({
+      id: "jellyfin_phase_two",
+      failureCode: "policy_failed",
+      now: 400,
+    });
+    const sagaInstance = saga(database, fake);
+    const result = await sagaInstance.confirmedCleanup(
+      sagaInstance.createConfirmedCleanupCapability("jellyfin_phase_two"),
+    );
+    expect(result.disposition).toBe("cleanup_confirmed");
+    expect(repository.read("jellyfin_phase_two")?.state).toBe("tombstoned");
+    expect(
+      database.sqlite
+        .prepare(
+          "select outcome, event_type from audit_events where event_type = 'activation.cleanup.confirmed'",
+        )
+        .get(),
+    ).toEqual({ event_type: "activation.cleanup.confirmed", outcome: "success" });
+  });
+
+  it("turns ambiguous cleanup into uncertainty and never retries DELETE", async () => {
+    const { database, repository } = fixture();
+    const fake = client({
+      deleteUser: vi.fn(async () => {
+        throw Object.assign(new Error("timeout"), { cancellationSource: "timeout" });
+      }),
+    });
+    await saga(database, fake).run("jellyfin_phase_two");
+    repository.markManualRequired({
+      id: "jellyfin_phase_two",
+      failureCode: "alternate_reason",
+      now: 400,
+    });
+    const sagaInstance = saga(database, fake);
+    const capability = sagaInstance.createConfirmedCleanupCapability("jellyfin_phase_two");
+    const first = await sagaInstance.confirmedCleanup(capability);
+    const second = await sagaInstance.confirmedCleanup(capability);
+    expect(first.disposition).toBe("cleanup_uncertain");
+    expect(second.disposition).toBe("cleanup_rejected");
+    expect(fake.deleteUser).toHaveBeenCalledTimes(1);
+    expect(repository.read("jellyfin_phase_two")?.failureCode).toBe("cleanup_uncertain");
+    expect(
+      database.sqlite
+        .prepare(
+          "select outcome, event_type from audit_events where event_type = 'activation.cleanup.uncertain'",
+        )
+        .get(),
+    ).toEqual({ event_type: "activation.cleanup.uncertain", outcome: "failure" });
+  });
+
+  it("serializes concurrent cleanup callers and reports the live dispatch", async () => {
+    const { database, repository } = fixture();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fake = client({
+      deleteUser: vi.fn(async () => {
+        await gate;
+        return "deleted" as const;
+      }),
+    });
+    await saga(database, fake).run("jellyfin_phase_two");
+    repository.markManualRequired({
+      id: "jellyfin_phase_two",
+      failureCode: "policy_failed",
+      now: 400,
+    });
+    const first = saga(database, fake).confirmedCleanup(
+      saga(database, fake).createConfirmedCleanupCapability("jellyfin_phase_two"),
+    );
+    await Promise.resolve();
+    const second = await saga(database, fake).confirmedCleanup(
+      saga(database, fake).createConfirmedCleanupCapability("jellyfin_phase_two"),
+    );
+    expect(second.disposition).toBe("cleanup_in_progress");
+    expect(fake.deleteUser).toHaveBeenCalledTimes(1);
+    release();
+    expect((await first).disposition).toBe("cleanup_confirmed");
+  });
+
+  it("rejects cleanup for changed connector, provisioning, or server binding", async () => {
+    for (const mutation of [
+      (database: ReturnType<typeof fixture>["database"]) =>
+        database.sqlite.exec(
+          "update connector_configs set config_generation = 1 where id = 'phase-two-connector'",
+        ),
+      (database: ReturnType<typeof fixture>["database"]) =>
+        database.sqlite.exec(
+          "update jellyfin_provisioning_configs set revision = 2 where connector_id = 'phase-two-connector'",
+        ),
+    ]) {
+      const { database, repository } = fixture();
+      const fake = client();
+      await saga(database, fake).run("jellyfin_phase_two");
+      repository.markManualRequired({
+        id: "jellyfin_phase_two",
+        failureCode: "policy_failed",
+        now: 400,
+      });
+      mutation(database);
+      const result = await saga(database, fake).confirmedCleanup(
+        saga(database, fake).createConfirmedCleanupCapability("jellyfin_phase_two"),
+      );
+      expect(result.disposition).toBe("cleanup_rejected");
+      expect(fake.deleteUser).not.toHaveBeenCalled();
+    }
+    const { database, repository } = fixture();
+    const setupFake = client();
+    await saga(database, setupFake).run("jellyfin_phase_two");
+    repository.markManualRequired({
+      id: "jellyfin_phase_two",
+      failureCode: "policy_failed",
+      now: 400,
+    });
+    const fake = client({ readServerIdentity: vi.fn(async () => "other-server") });
+    const result = await saga(database, fake).confirmedCleanup(
+      saga(database, fake).createConfirmedCleanupCapability("jellyfin_phase_two"),
+    );
+    expect(result.disposition).toBe("cleanup_rejected");
+    expect(fake.deleteUser).not.toHaveBeenCalled();
+  });
+
+  it("cannot clean a missing ID, forged capability, or operation with an existing link", async () => {
+    const missing = fixture();
+    const missingFake = client();
+    const missingRepo = missing.repository;
+    await saga(missing.database, missingFake).run("jellyfin_phase_two");
+    missingRepo.markManualRequired({
+      id: "jellyfin_phase_two",
+      failureCode: "policy_failed",
+      now: 400,
+    });
+    missing.database.sqlite.exec(
+      "update jellyfin_activation_operations set encrypted_stage_artifact = null, cleanup_eligible = 0 where id = 'jellyfin_phase_two'",
+    );
+    const missingResult = await saga(missing.database, missingFake).confirmedCleanup(
+      saga(missing.database, missingFake).createConfirmedCleanupCapability("jellyfin_phase_two"),
+    );
+    expect(missingResult.disposition).toBe("cleanup_rejected");
+    expect(missingFake.deleteUser).not.toHaveBeenCalled();
+    const forged = fixture();
+    const forgedFake = client();
+    const forgedSaga = saga(forged.database, forgedFake);
+    expect(
+      (
+        await forgedSaga.confirmedCleanup(
+          forgedSaga.createConfirmedCleanupCapability("jellyfin_other"),
+        )
+      ).disposition,
+    ).toBe("cleanup_rejected");
+    expect(forgedFake.deleteUser).not.toHaveBeenCalled();
+    const linked = fixture();
+    const linkedFake = client();
+    await saga(linked.database, linkedFake).run("jellyfin_phase_two");
+    linked.repository.markManualRequired({
+      id: "jellyfin_phase_two",
+      failureCode: "policy_failed",
+      now: 400,
+    });
+    linked.database.sqlite.exec(
+      "insert into service_identity_links (id,user_id,service,connector_id,external_server_id,external_user_id,external_username,external_display_name,encrypted_access_token,device_id,token_created_at,health_state,revision,created_at,updated_at) values ('unmarked-after','phase-two-user','jellyfin','phase-two-connector','server','existing','name','Name','token','device',1,'linked',0,1,1)",
+    );
+    expect(
+      (
+        await saga(linked.database, linkedFake).confirmedCleanup(
+          saga(linked.database, linkedFake).createConfirmedCleanupCapability("jellyfin_phase_two"),
+        )
+      ).disposition,
+    ).toBe("cleanup_rejected");
+    expect(linkedFake.deleteUser).not.toHaveBeenCalled();
+  });
+
+  it("audit write failure cannot undo confirmed cleanup", async () => {
+    const { database, repository } = fixture();
+    const fake = client();
+    await saga(database, fake).run("jellyfin_phase_two");
+    repository.markManualRequired({
+      id: "jellyfin_phase_two",
+      failureCode: "policy_failed",
+      now: 400,
+    });
+    database.sqlite.exec(
+      "create trigger fail_cleanup_audit before insert on audit_events when new.event_type like 'activation.cleanup.%' begin select raise(abort, 'audit unavailable'); end",
+    );
+    const sagaInstance = saga(database, fake);
+    const result = await sagaInstance.confirmedCleanup(
+      sagaInstance.createConfirmedCleanupCapability("jellyfin_phase_two"),
+    );
+    expect(result.disposition).toBe("cleanup_confirmed");
+    expect(fake.deleteUser).toHaveBeenCalledTimes(1);
+    expect(repository.read("jellyfin_phase_two")?.state).toBe("tombstoned");
+    expect(
+      (
+        await sagaInstance.confirmedCleanup(
+          sagaInstance.createConfirmedCleanupCapability("jellyfin_phase_two"),
+        )
+      ).disposition,
+    ).toBe("cleanup_rejected");
+    expect(fake.deleteUser).toHaveBeenCalledTimes(1);
   });
 
   it("returns opaque in-progress and terminal uncertainty outcomes", async () => {
@@ -417,6 +647,7 @@ describe("JellyfinActivationSaga", () => {
     );
     expect(stale.disposition).toBe("cleanup_rejected");
     expect(fake.deleteUser).not.toHaveBeenCalled();
+    expect(() => JSON.stringify(stale)).toThrow("internal-only");
     expect(() => JSON.stringify({ ...stale })).not.toThrow();
     expect(Object.keys({ ...stale })).not.toContain("createdId");
   });

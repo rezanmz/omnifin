@@ -119,6 +119,71 @@ describe("Jellyfin activation operation repository", () => {
     ).toEqual({ count: 1 });
   });
 
+  it("rolls back the cleanup reservation when its operation CAS fails", () => {
+    const { repository, sqlite } = fixture();
+    prepareCreated(repository);
+    repository.recordStageArtifact({
+      id: "jellyfin_activation_1",
+      state: "policy_pending",
+      now: 204,
+      artifact: { createdId: "upstream-1" },
+    });
+    repository.markManualRequired({
+      id: "jellyfin_activation_1",
+      failureCode: "policy_failed",
+      now: 205,
+    });
+    sqlite.exec(
+      "create trigger force_cleanup_cas_failure before update on jellyfin_activation_operations when new.lease_owner is not null begin select raise(abort, 'forced CAS failure'); end",
+    );
+    expect(() =>
+      repository.reserveCleanup({
+        id: "jellyfin_activation_1",
+        leaseOwner: "cleanup-owner",
+        leaseExpiresAt: 300,
+        now: 206,
+      }),
+    ).toThrow();
+    expect(
+      sqlite
+        .prepare("select count(*) as count from jellyfin_activation_cleanup_reservations")
+        .get(),
+    ).toEqual({ count: 0 });
+  });
+
+  it("requires the current cleanup owner and operation revision for terminal transitions", () => {
+    const { repository } = fixture();
+    prepareCreated(repository);
+    repository.recordStageArtifact({
+      id: "jellyfin_activation_1",
+      state: "policy_pending",
+      now: 204,
+      artifact: { createdId: "upstream-1" },
+    });
+    repository.markManualRequired({
+      id: "jellyfin_activation_1",
+      failureCode: "policy_failed",
+      now: 205,
+    });
+    const reserved = repository.reserveCleanup({
+      id: "jellyfin_activation_1",
+      leaseOwner: "cleanup-owner",
+      leaseExpiresAt: 300,
+      now: 206,
+    });
+    expect(() =>
+      repository.completeConfirmedCleanup(reserved.id, 207, "wrong-owner", reserved.revision),
+    ).toThrowError(expect.objectContaining({ code: "invalid_transition" }));
+    expect(() =>
+      repository.markCleanupUncertain(
+        reserved.id,
+        207,
+        reserved.leaseOwner!,
+        reserved.revision - 1,
+      ),
+    ).toThrowError(expect.objectContaining({ code: "invalid_transition" }));
+  });
+
   it("claims an expired lease with revision CAS and permits only one create dispatch", () => {
     const { repository } = fixture();
     repository.reserve(reservation());
@@ -166,6 +231,7 @@ describe("Jellyfin activation operation repository", () => {
       sqlite.prepare("select encrypted_stage_artifact from jellyfin_activation_operations").get(),
     ).toMatchObject({ encrypted_stage_artifact: expect.any(String) });
     expect(() => JSON.stringify(view)).toThrow("internal-only");
+    expect(() => JSON.stringify({ ...view })).not.toThrow();
   });
 
   it("binds artifacts to operation and revision context and rejects foreign context", () => {
@@ -377,6 +443,7 @@ describe("Jellyfin activation operation repository", () => {
     `);
 
     for (const statement of [
+      "update jellyfin_activation_operations set id = 'jellyfin_activation_2' where id = 'jellyfin_activation_1'",
       "update jellyfin_activation_operations set user_id = 'user-0002' where id = 'jellyfin_activation_1'",
       "update jellyfin_activation_operations set connector_id = 'connector-0002' where id = 'jellyfin_activation_1'",
       "update jellyfin_activation_operations set id = 'jellyfin_activation_2' where id = 'jellyfin_activation_1'",
@@ -455,6 +522,41 @@ describe("Jellyfin activation operation repository", () => {
         .prepare("select count(*) as count from jellyfin_activation_cleanup_reservations")
         .get(),
     ).toEqual({ count: 0 });
+  });
+
+  it("blocks matching service-link inserts and updates while cleanup is dispatched", () => {
+    const { repository, sqlite } = fixture();
+    prepareCreated(repository);
+    repository.recordStageArtifact({
+      id: "jellyfin_activation_1",
+      state: "policy_pending",
+      now: 204,
+      artifact: { createdId: "upstream-1" },
+    });
+    repository.markManualRequired({
+      id: "jellyfin_activation_1",
+      failureCode: "policy_failed",
+      now: 205,
+    });
+    repository.reserveCleanup({
+      id: "jellyfin_activation_1",
+      leaseOwner: "cleanup-owner",
+      leaseExpiresAt: 300,
+      now: 206,
+    });
+    expect(() =>
+      sqlite.exec(
+        "insert into service_identity_links (id,user_id,service,connector_id,external_server_id,external_user_id,external_username,external_display_name,encrypted_access_token,device_id,token_created_at,health_state,revision,created_at,updated_at) values ('racing-link','user-0001','jellyfin','connector-0001','server','other','name','Name','token','device',1,'linked',0,1,1)",
+      ),
+    ).toThrow(/activation cleanup is dispatched/u);
+    sqlite.exec(
+      "insert into service_identity_links (id,user_id,service,connector_id,external_server_id,external_user_id,external_username,external_display_name,encrypted_access_token,device_id,token_created_at,health_state,revision,created_at,updated_at) values ('other-link','user-0002','jellyfin','connector-0002','server','other','name','Name','token','device',1,'linked',0,1,1)",
+    );
+    expect(() =>
+      sqlite.exec(
+        "update service_identity_links set user_id = 'user-0001', connector_id = 'connector-0001' where id = 'other-link'",
+      ),
+    ).toThrow(/activation cleanup is dispatched/u);
   });
 
   it("rejects malformed persisted state", () => {

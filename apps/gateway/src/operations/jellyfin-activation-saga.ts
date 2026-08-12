@@ -242,9 +242,9 @@ export class JellyfinActivationSaga {
     }
     const link = this.#database.sqlite
       .prepare(
-        "select 1 from service_identity_links where provisioned_by_activation_id = ? limit 1",
+        "select 1 from service_identity_links where user_id = ? and service = 'jellyfin' and connector_id = ? limit 1",
       )
-      .get(operation.id);
+      .get(operation.userId, operation.connectorId);
     if (link)
       return internalCleanupResult({ disposition: "cleanup_rejected", reason: "link_exists" });
     const existingReservation = repository.readCleanupReservation(operation.id);
