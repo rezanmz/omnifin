@@ -1217,6 +1217,12 @@ function mergeRollbackInvitationFacts(sqlite: Database.Database, now: number) {
 }
 
 function sanitizeJellyfinActivationOperations(sqlite: Database.Database, now: number) {
+  const exists = sqlite
+    .prepare(
+      "select 1 from main.sqlite_schema where type = 'table' and name = 'jellyfin_activation_operations'",
+    )
+    .get();
+  if (!exists) return;
   sqlite.exec(`
     update main.jellyfin_activation_operations
     set state = case when state in ('manual_required', 'tombstoned') then state else 'manual_required' end,
@@ -1231,17 +1237,34 @@ function sanitizeJellyfinActivationOperations(sqlite: Database.Database, now: nu
 }
 
 function mergeRollbackJellyfinActivationFacts(sqlite: Database.Database, now: number) {
+  const exists = sqlite
+    .prepare(
+      "select 1 from main.sqlite_schema where type = 'table' and name = 'jellyfin_activation_operations'",
+    )
+    .get();
+  const rollbackExists = sqlite
+    .prepare(
+      "select 1 from rollback_timeline.sqlite_schema where type = 'table' and name = 'jellyfin_activation_operations'",
+    )
+    .get();
+  if (!exists || !rollbackExists) return;
   sqlite.exec(`
     delete from main.jellyfin_activation_operations as restored
-    where exists (select 1 from rollback_timeline.jellyfin_activation_operations current
-      where current.id = restored.id or (current.invitation_id = restored.invitation_id
-        and current.user_id = restored.user_id and current.external_identity_id = restored.external_identity_id));
+    where not exists (select 1 from rollback_timeline.jellyfin_activation_operations current where current.id = restored.id)
+      and not exists (select 1 from rollback_timeline.jellyfin_activation_operations current where current.invitation_id = restored.invitation_id)
+      and not exists (select 1 from rollback_timeline.jellyfin_activation_operations current where current.user_id = restored.user_id)
+      and not exists (select 1 from rollback_timeline.jellyfin_activation_operations current where current.external_identity_id = restored.external_identity_id)
+      and not exists (select 1 from main.service_identity_links link where link.provisioned_by_activation_id = restored.id);
+    delete from main.jellyfin_activation_operations as collision
+    where exists (select 1 from rollback_timeline.jellyfin_activation_operations current where current.id <> collision.id and (current.invitation_id = collision.invitation_id or current.user_id = collision.user_id or current.external_identity_id = collision.external_identity_id))
+      and not exists (select 1 from main.service_identity_links link where link.provisioned_by_activation_id = collision.id);
     insert into main.jellyfin_activation_operations
       select * from rollback_timeline.jellyfin_activation_operations current
       where exists (select 1 from main.invitations where id = current.invitation_id)
         and exists (select 1 from main.users where id = current.user_id)
         and exists (select 1 from main.external_identities where id = current.external_identity_id and user_id = current.user_id)
-        and exists (select 1 from main.connector_configs where id = current.connector_id);
+        and exists (select 1 from main.connector_configs where id = current.connector_id)
+        and not exists (select 1 from main.jellyfin_activation_operations existing where existing.id = current.id or existing.invitation_id = current.invitation_id or existing.user_id = current.user_id or existing.external_identity_id = current.external_identity_id);
   `);
   sanitizeJellyfinActivationOperations(sqlite, now);
 }
@@ -1403,7 +1426,11 @@ function mergeRollbackJellyfinProvisioningFacts(sqlite: Database.Database, rootK
 function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number, rootKey?: Buffer) {
   // The marker is a dependent FK. Clear it before replacing rollback activation rows,
   // then restore only a marker authorized by the selected current timeline.
-  sqlite.exec("update main.service_identity_links set provisioned_by_activation_id = null");
+  const markerColumn = (
+    sqlite.pragma("table_info(service_identity_links)") as Array<{ name: string }>
+  ).some((column) => column.name === "provisioned_by_activation_id");
+  if (markerColumn)
+    sqlite.exec("update main.service_identity_links set provisioned_by_activation_id = null");
   const exhaustedRevision = sqlite
     .prepare(
       `select 1 from main.service_identity_links restored

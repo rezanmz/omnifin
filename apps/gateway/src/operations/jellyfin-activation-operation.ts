@@ -424,12 +424,24 @@ export class JellyfinActivationOperationRepository {
     })();
   }
 
+  public completeConfirmedCleanup(id: string, now: number) {
+    if (!validTime(now)) throw new JellyfinActivationOperationError("invalid_input");
+    text(id, ACTIVATION_ID);
+    const result = this.#sqlite
+      .prepare(
+        `update jellyfin_activation_operations set state = 'tombstoned', encrypted_stage_artifact = null, cleanup_eligible = 0, artifact_revision = artifact_revision + 1, lease_owner = null, lease_expires_at = null, tombstoned_at = ?, revision = revision + 1, updated_at = max(updated_at, ?) where id = ? and state = 'manual_required' and cleanup_eligible = 1`,
+      )
+      .run(now, now, id);
+    transition(result);
+    return this.read(id)!;
+  }
+
   public tombstone(id: string, now: number) {
     if (!validTime(now)) throw new JellyfinActivationOperationError("invalid_input");
     text(id, ACTIVATION_ID);
     const result = this.#sqlite
       .prepare(
-        `update jellyfin_activation_operations set state = 'tombstoned', encrypted_stage_artifact = null, cleanup_eligible = 0, artifact_revision = artifact_revision + 1, lease_owner = null, lease_expires_at = null, tombstoned_at = ?, revision = revision + 1, updated_at = max(updated_at, ?) where id = ? and state = 'manual_required'`,
+        `update jellyfin_activation_operations set state = 'tombstoned', encrypted_stage_artifact = null, cleanup_eligible = 0, artifact_revision = artifact_revision + 1, lease_owner = null, lease_expires_at = null, tombstoned_at = ?, revision = revision + 1, updated_at = max(updated_at, ?) where id = ? and state = 'manual_required' and cleanup_eligible = 0`,
       )
       .run(now, now, id);
     transition(result);

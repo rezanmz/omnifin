@@ -617,17 +617,6 @@ export const serviceIdentityLinks = sqliteTable(
     })
       .onDelete("restrict")
       .onUpdate("restrict"),
-    foreignKey({
-      columns: [table.provisionedByActivationId, table.userId, table.connectorId],
-      foreignColumns: [
-        jellyfinActivationOperations.id,
-        jellyfinActivationOperations.userId,
-        jellyfinActivationOperations.connectorId,
-      ],
-      name: "service_identity_links_provisioned_by_activation_fk",
-    })
-      .onDelete("restrict")
-      .onUpdate("restrict"),
     check("service_identity_links_service_check", sql`${table.service} = 'jellyfin'`),
     check(
       "service_identity_links_health_state_check",

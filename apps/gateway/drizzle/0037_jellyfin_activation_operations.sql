@@ -50,67 +50,18 @@ CREATE UNIQUE INDEX `jellyfin_activation_operations_external_identity_unique` ON
 CREATE UNIQUE INDEX `jellyfin_activation_operations_id_user_connector_unique` ON `jellyfin_activation_operations` (`id`,`user_id`,`connector_id`);--> statement-breakpoint
 CREATE INDEX `jellyfin_activation_operations_state_idx` ON `jellyfin_activation_operations` (`state`,`updated_at`);--> statement-breakpoint
 CREATE INDEX `jellyfin_activation_operations_lease_idx` ON `jellyfin_activation_operations` (`lease_expires_at`);--> statement-breakpoint
-PRAGMA foreign_keys=OFF;--> statement-breakpoint
-CREATE TABLE `__new_service_identity_links` (
-	`id` text PRIMARY KEY NOT NULL,
-	`user_id` text NOT NULL,
-	`service` text NOT NULL,
-	`connector_id` text,
-	`connector_instance_generation` integer DEFAULT 0 NOT NULL,
-	`external_server_id` text NOT NULL,
-	`external_user_id` text NOT NULL,
-	`external_username` text NOT NULL,
-	`external_display_name` text NOT NULL,
-	`encrypted_access_token` text,
-	`provisioned_by_activation_id` text,
-	`device_id` text NOT NULL,
-	`token_created_at` integer,
-	`health_state` text DEFAULT 'relink_required' NOT NULL,
-	`last_verified_at` integer,
-	`revoked_at` integer,
-	`revision` integer DEFAULT 0 NOT NULL,
-	`created_at` integer DEFAULT (unixepoch('subsec') * 1000) NOT NULL,
-	`updated_at` integer DEFAULT (unixepoch('subsec') * 1000) NOT NULL,
-	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade,
-	FOREIGN KEY (`connector_id`,`service`) REFERENCES `connector_configs`(`id`,`type`) ON UPDATE restrict ON DELETE restrict,
-	FOREIGN KEY (`provisioned_by_activation_id`,`user_id`,`connector_id`) REFERENCES `jellyfin_activation_operations`(`id`,`user_id`,`connector_id`) ON UPDATE restrict ON DELETE restrict,
-	CONSTRAINT "service_identity_links_service_check" CHECK("__new_service_identity_links"."service" = 'jellyfin'),
-	CONSTRAINT "service_identity_links_health_state_check" CHECK("__new_service_identity_links"."health_state" in ('linked', 'unavailable', 'relink_required', 'revoked')),
-	CONSTRAINT "service_identity_links_health_attribution_check" CHECK((
-          "__new_service_identity_links"."health_state" in ('linked', 'unavailable')
-          and "__new_service_identity_links"."connector_id" is not null
-          and "__new_service_identity_links"."encrypted_access_token" is not null
-          and "__new_service_identity_links"."token_created_at" is not null
-          and "__new_service_identity_links"."revoked_at" is null
-        ) or (
-          "__new_service_identity_links"."health_state" = 'relink_required'
-          and "__new_service_identity_links"."encrypted_access_token" is null
-          and "__new_service_identity_links"."token_created_at" is null
-          and "__new_service_identity_links"."revoked_at" is null
-        ) or (
-          "__new_service_identity_links"."health_state" = 'revoked'
-          and "__new_service_identity_links"."encrypted_access_token" is null
-          and "__new_service_identity_links"."revoked_at" is not null
-        )),
-	CONSTRAINT "service_identity_links_revision_check" CHECK("__new_service_identity_links"."revision" between 0 and 2147483647),
-	CONSTRAINT "service_identity_links_timestamp_order_check" CHECK("__new_service_identity_links"."revoked_at" is null or "__new_service_identity_links"."revoked_at" >= "__new_service_identity_links"."created_at")
-);
---> statement-breakpoint
-INSERT INTO `__new_service_identity_links`("id", "user_id", "service", "connector_id", "connector_instance_generation", "external_server_id", "external_user_id", "external_username", "external_display_name", "encrypted_access_token", "provisioned_by_activation_id", "device_id", "token_created_at", "health_state", "last_verified_at", "revoked_at", "revision", "created_at", "updated_at") SELECT "id", "user_id", "service", "connector_id", "connector_instance_generation", "external_server_id", "external_user_id", "external_username", "external_display_name", "encrypted_access_token", null, "device_id", "token_created_at", "health_state", "last_verified_at", "revoked_at", "revision", "created_at", "updated_at" FROM `service_identity_links`;--> statement-breakpoint
-DROP TABLE `service_identity_links`;--> statement-breakpoint
-ALTER TABLE `__new_service_identity_links` RENAME TO `service_identity_links`;--> statement-breakpoint
-PRAGMA foreign_keys=ON;--> statement-breakpoint
-CREATE TRIGGER `service_identity_links_connector_generation_insert_guard`
+ALTER TABLE `service_identity_links` ADD `provisioned_by_activation_id` text;--> statement-breakpoint
+CREATE TRIGGER `service_identity_links_activation_marker_insert_guard`
 BEFORE INSERT ON `service_identity_links`
-WHEN NEW.connector_id IS NOT NULL AND NEW.connector_instance_generation < (SELECT instance_generation FROM connector_configs WHERE id = NEW.connector_id)
-BEGIN SELECT RAISE(ABORT, 'service identity connector generation is stale'); END;--> statement-breakpoint
-CREATE TRIGGER `service_identity_links_connector_generation_update_guard`
-BEFORE UPDATE OF connector_id, connector_instance_generation ON `service_identity_links`
-WHEN NEW.connector_id IS NOT NULL AND NEW.connector_instance_generation < (SELECT instance_generation FROM connector_configs WHERE id = NEW.connector_id)
-BEGIN SELECT RAISE(ABORT, 'service identity connector generation is stale'); END;--> statement-breakpoint
-CREATE UNIQUE INDEX `service_identity_links_user_service_unique` ON `service_identity_links` (`user_id`,`service`);--> statement-breakpoint
-CREATE UNIQUE INDEX `service_identity_links_session_binding_unique` ON `service_identity_links` (`id`,`user_id`);--> statement-breakpoint
-CREATE UNIQUE INDEX `service_identity_links_external_unique` ON `service_identity_links` (`connector_id`,`external_server_id`,`external_user_id`);--> statement-breakpoint
-CREATE UNIQUE INDEX `service_identity_links_provisioned_by_activation_unique` ON `service_identity_links` (`provisioned_by_activation_id`) WHERE "service_identity_links"."provisioned_by_activation_id" is not null;--> statement-breakpoint
-CREATE INDEX `service_identity_links_connector_idx` ON `service_identity_links` (`connector_id`);--> statement-breakpoint
+WHEN NEW.provisioned_by_activation_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM jellyfin_activation_operations operation WHERE operation.id = NEW.provisioned_by_activation_id AND operation.user_id = NEW.user_id AND operation.connector_id = NEW.connector_id)
+BEGIN SELECT RAISE(ABORT, 'activation marker binding mismatch'); END;--> statement-breakpoint
+CREATE TRIGGER `service_identity_links_activation_marker_update_guard`
+BEFORE UPDATE OF provisioned_by_activation_id, user_id, connector_id ON `service_identity_links`
+WHEN NEW.provisioned_by_activation_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM jellyfin_activation_operations operation WHERE operation.id = NEW.provisioned_by_activation_id AND operation.user_id = NEW.user_id AND operation.connector_id = NEW.connector_id)
+BEGIN SELECT RAISE(ABORT, 'activation marker binding mismatch'); END;--> statement-breakpoint
+CREATE TRIGGER `service_identity_links_activation_marker_delete_guard`
+BEFORE DELETE ON `jellyfin_activation_operations`
+WHEN EXISTS (SELECT 1 FROM service_identity_links link WHERE link.provisioned_by_activation_id = OLD.id)
+BEGIN SELECT RAISE(ABORT, 'activation marker is still referenced'); END;--> statement-breakpoint
+CREATE UNIQUE INDEX `service_identity_links_provisioned_by_activation_unique` ON `service_identity_links` (`provisioned_by_activation_id`) WHERE `service_identity_links`.`provisioned_by_activation_id` is not null;--> statement-breakpoint
 CREATE UNIQUE INDEX `external_identities_id_user_unique` ON `external_identities` (`id`,`user_id`);
