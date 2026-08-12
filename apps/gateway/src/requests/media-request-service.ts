@@ -1096,7 +1096,6 @@ export class MediaRequestService {
     if (
       !principal.userId ||
       !link ||
-      !link.externalUserId ||
       !link.username ||
       !["linked", "unavailable"].includes(link.health)
     ) {
@@ -1116,11 +1115,7 @@ export class MediaRequestService {
            limit 1`,
         )
         .get(link.id, principal.userId) as IdentityLinkRow | undefined;
-      if (
-        !row ||
-        row.externalUserId !== link.externalUserId ||
-        row.externalUsername !== link.username
-      ) {
+      if (!row || row.externalUsername !== link.username) {
         throw new MediaRequestServiceError("identity_link_required");
       }
       return {

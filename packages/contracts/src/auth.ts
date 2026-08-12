@@ -469,9 +469,7 @@ export const sessionPrincipalSchema = z
     if (
       principal.accountState === "active" &&
       !principal.linkedServices.some(
-        (link) =>
-          link.externalUserId !== null &&
-          (link.health === "linked" || link.health === "unavailable"),
+        (link) => link.health === "linked" || link.health === "unavailable",
       )
     ) {
       context.addIssue({

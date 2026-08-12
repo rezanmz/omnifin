@@ -878,7 +878,7 @@ describe("authentication contracts", () => {
         ...activePrincipal,
         linkedServices: [{ ...jellyfinLink, externalUserId: null }],
       }).success,
-    ).toBe(false);
+    ).toBe(true);
     expect(
       sessionPrincipalSchema.safeParse({
         ...activePrincipal,

@@ -66,6 +66,12 @@ describe("buildSessionPrincipal", () => {
       permissions: ROLE_PERMISSIONS.viewer,
       linkedServices: [{ health: "linked", id: "link-1" }],
     });
+    const provisioned = oidcRecord();
+    provisioned.serviceLink!.provisionedByActivationId = "activation-1";
+    expect(buildSessionPrincipal(provisioned, now)?.linkedServices[0]).toMatchObject({
+      externalUserId: null,
+      health: "linked",
+    });
 
     const unavailable = oidcRecord();
     if (unavailable.serviceLink) unavailable.serviceLink.healthState = "unavailable";

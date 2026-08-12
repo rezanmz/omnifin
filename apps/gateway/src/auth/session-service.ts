@@ -203,6 +203,7 @@ interface SessionJoinedRow {
   joinedLinkHealthState: string | null;
   joinedLinkId: string | null;
   joinedLinkLastVerifiedAt: number | null;
+  joinedLinkProvisionedByActivationId: string | null;
   joinedLinkUserId: string | null;
   joinedProviderEnabled: number | null;
   joinedProviderId: string | null;
@@ -409,6 +410,7 @@ function mapPrincipalRecord(row: SessionJoinedRow): SessionPrincipalRecord | nul
             id: row.joinedLinkId,
             lastVerifiedAt:
               row.joinedLinkLastVerifiedAt === null ? null : new Date(row.joinedLinkLastVerifiedAt),
+            provisionedByActivationId: row.joinedLinkProvisionedByActivationId,
             userId: row.joinedLinkUserId,
           }
         : undefined;
@@ -2033,6 +2035,7 @@ export class SessionService {
       l.external_display_name as joinedLinkExternalDisplayName,
       l.health_state as joinedLinkHealthState,
       l.last_verified_at as joinedLinkLastVerifiedAt,
+      l.provisioned_by_activation_id as joinedLinkProvisionedByActivationId,
       l.created_at as joinedLinkCreatedAt,
       c.id as joinedConnectorId,
       c.type as joinedConnectorType,

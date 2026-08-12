@@ -20,6 +20,7 @@ interface IdentityLinkRow {
   healthState: "linked" | "relink_required" | "revoked" | "unavailable";
   id: string;
   lastVerifiedAt: number | null;
+  provisionedByActivationId?: string | null;
   revision: number;
   service: string;
   updatedAt: number;
@@ -261,6 +262,7 @@ export class IdentityLinkService {
           user_id as userId,
           service,
           external_user_id as externalUserId,
+          provisioned_by_activation_id as provisionedByActivationId,
           external_username as externalUsername,
           external_display_name as externalDisplayName,
           health_state as healthState,
@@ -282,6 +284,7 @@ export class IdentityLinkService {
           user_id as userId,
           service,
           external_user_id as externalUserId,
+          provisioned_by_activation_id as provisionedByActivationId,
           external_username as externalUsername,
           external_display_name as externalDisplayName,
           health_state as healthState,
@@ -317,7 +320,7 @@ export class IdentityLinkService {
     }
     const parsed = serviceIdentityLinkSchema.safeParse({
       displayName: row.externalDisplayName,
-      externalUserId: row.externalUserId,
+      externalUserId: row.provisionedByActivationId == null ? row.externalUserId : null,
       health: row.healthState,
       id: row.id,
       lastVerifiedAt:

@@ -208,7 +208,8 @@ export class VerifiedAvailabilityService {
     try {
       source = this.#source(linkedService.id, userId);
       if (
-        linkedService.externalUserId !== source.externalUserId ||
+        (linkedService.externalUserId !== null &&
+          linkedService.externalUserId !== source.externalUserId) ||
         linkedService.health !== "linked"
       ) {
         return unavailableEvidence(userId);

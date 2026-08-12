@@ -52,6 +52,7 @@ export interface SessionPrincipalRecord {
     healthState: LinkHealth;
     id: string;
     lastVerifiedAt: Date | null;
+    provisionedByActivationId?: string | null;
     userId: string;
   } | null;
   serviceConnector: {
@@ -144,7 +145,8 @@ function normalPrincipal(record: SessionPrincipalRecord): SessionPrincipal | nul
       ? [
           {
             displayName: serviceLink.externalDisplayName,
-            externalUserId: serviceLink.externalUserId,
+            externalUserId:
+              serviceLink.provisionedByActivationId == null ? serviceLink.externalUserId : null,
             health: serviceLink.healthState as "linked" | "unavailable",
             id: serviceLink.id,
             lastVerifiedAt: serviceLink.lastVerifiedAt?.toISOString() ?? null,
