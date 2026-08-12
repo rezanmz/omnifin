@@ -1072,6 +1072,40 @@ export class SessionService {
     });
   }
 
+  /** @internal Resumes the exact pending OIDC session for a retrying invite callback. */
+  public resumeValidatedOidcPairingSession(
+    sessionToken: unknown,
+    expectedUserId: string,
+    expectedExternalIdentityId: string,
+  ): ValidatedOidcPairingSession | null {
+    const operationTime = this.currentTime();
+    const row = this.loadSessionReplacementCandidate(sessionToken, operationTime)?.row;
+    const principalRecord = row && mapPrincipalRecord(row);
+    const principal = principalRecord && buildSessionPrincipal(principalRecord, operationTime);
+    if (
+      !row ||
+      !principal ||
+      !this.sessionLifecycleIsActive(row, operationTime) ||
+      row.authMethod !== "oidc" ||
+      row.sessionUserId !== expectedUserId ||
+      row.externalIdentityId !== expectedExternalIdentityId ||
+      row.serviceIdentityLinkId !== null ||
+      row.joinedUserStatus !== "pending_link" ||
+      principal.accountState !== "pending_link" ||
+      principal.linkedServices.length !== 0
+    )
+      return null;
+    return Object.freeze({
+      [VALIDATED_OIDC_PAIRING_SESSION_BRAND]: true as const,
+      externalIdentityId: row.externalIdentityId,
+      oidcProviderId: row.oidcProviderId!,
+      operationTime: operationTime.getTime(),
+      serviceIdentityLinkId: null,
+      sessionId: row.sessionId,
+      userId: row.sessionUserId,
+    });
+  }
+
   /** @internal Resolves only a live, CSRF-proven recovery session for first-admin bootstrap. */
   public beginValidatedRecoveryBootstrapSession(
     validatedSession: unknown,

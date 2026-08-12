@@ -63,6 +63,7 @@ import {
   OidcProviderRegistryError,
 } from "./provider-registry.js";
 import { OidcSignInService } from "./sign-in-service.js";
+import { InviteBackedOidcActivationService } from "../../operations/invite-backed-oidc-activation-service.js";
 import type { OidcBackchannelLogoutDependencies } from "./backchannel-logout.js";
 import {
   OidcFrontchannelLogoutError,
@@ -339,6 +340,7 @@ function callbackFailure(error: unknown): {
 }
 
 export interface OidcRoutesDependencies {
+  activation?: ConstructorParameters<typeof InviteBackedOidcActivationService>[2];
   authorizationTransaction?: OidcAuthorizationTransactionDependencies;
   backchannelLogout?: Omit<OidcBackchannelLogoutDependencies, "providerRegistry">;
   failureAudit?: OidcFailureAuditDependencies;
@@ -385,6 +387,15 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
     identity,
     app.sessionService,
     administratorRecovery,
+  );
+  const activation = new InviteBackedOidcActivationService(
+    app.database,
+    app.appConfig,
+    dependencies.activation ?? {},
+    identity,
+    invitations,
+    app.sessionService,
+    signIn,
   );
   const failureAudit = new OidcFailureAuditService(
     app.database,
@@ -1218,6 +1229,43 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
           );
           return reply.redirect(administratorReplacementLocation("replaced"), 303);
         }
+        if (transaction.purpose === "invitation_registration") {
+          const activationResult = await activation.complete({
+            grant,
+            handoffToken: registrationHandoffToken,
+            invitationId: transaction.invitationId!,
+            currentSessionToken: request.cookies[sessionCookieName(app.appConfig)],
+            ipAddress: request.ip,
+            requestId: request.id,
+            ...(request.headers["user-agent"] === undefined
+              ? {}
+              : { userAgent: request.headers["user-agent"] }),
+          });
+          if ("status" in activationResult && activationResult.status === "denied") {
+            recordFailure(
+              request,
+              "identity_rejected",
+              "denied",
+              activationResult.reason as OidcIdentityDenialReason,
+            );
+            return reply.redirect(failureLocation("account_not_authorized"), 303);
+          }
+          const activated = activationResult as Exclude<
+            typeof activationResult,
+            { status: "denied" }
+          >;
+          writeSessionCookie(
+            reply,
+            app.appConfig,
+            activated.session.sessionToken,
+            activated.session.absoluteExpiresAt,
+          );
+          clearRegistrationHandoffCookie(reply, app.appConfig);
+          return reply.redirect(
+            activated.disposition === "active" ? returnPath : "/link/jellyfin",
+            303,
+          );
+        }
         const result =
           transaction.purpose === "administrator_bootstrap" && transaction.recoverySessionId
             ? signIn.bootstrapAdministrator({
@@ -1235,9 +1283,6 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
           result.session.sessionToken,
           result.session.absoluteExpiresAt,
         );
-        if (transaction.purpose === "invitation_registration") {
-          clearRegistrationHandoffCookie(reply, app.appConfig);
-        }
         return reply.redirect(
           transaction.purpose === "administrator_bootstrap"
             ? "/settings?administrator=ready&jellyfin=pending"

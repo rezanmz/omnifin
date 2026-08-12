@@ -740,9 +740,10 @@ function writeHistoricalMigrationFixture() {
     [36, "0036_jellyfin_provisioning"],
     [37, "0037_jellyfin_activation_operations"],
     [38, "0038_charming_goblin_queen"],
+    [39, "0039_jellyfin_activation_completion"],
   ];
   assertCondition(
-    JSON.stringify(journal.entries.slice(-11).map(({ idx, tag }) => [idx, tag])) ===
+    JSON.stringify(journal.entries.slice(-12).map(({ idx, tag }) => [idx, tag])) ===
       JSON.stringify(expectedTail),
     "Current migration journal must preserve the linear parent, saved-list, and playback-preference ancestry.",
   );
@@ -931,8 +932,9 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined && currentMigrationTag === "0038_charming_goblin_queen",
-  "Current migration journal must end at migration 0038_charming_goblin_queen.",
+  currentMigrationTimestamp !== undefined &&
+    currentMigrationTag === "0039_jellyfin_activation_completion",
+  "Current migration journal must end at migration 0039_jellyfin_activation_completion.",
 );
 
 try {

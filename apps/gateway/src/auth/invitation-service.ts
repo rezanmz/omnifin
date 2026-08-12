@@ -455,7 +455,18 @@ export class InvitationService {
     if (!row || row.registrationHandoffExpiresAt === null) {
       throw new InvitationServiceError("registration_handoff_invalid");
     }
-    this.#assertExchangeable(row, now);
+    if (row.consumedAt !== null) {
+      const marked = this.#database.sqlite
+        .prepare(
+          `select 1 from invitations i join jellyfin_activation_operations o
+           on o.id = i.activation_operation_id and o.invitation_id = i.id
+           where i.id = ? and i.revoked_at is null`,
+        )
+        .get(row.id);
+      if (!marked) throw new InvitationServiceError("registration_handoff_invalid");
+    } else {
+      this.#assertExchangeable(row, now);
+    }
     if (row.registrationHandoffExpiresAt <= now) {
       throw new InvitationServiceError("registration_handoff_invalid");
     }

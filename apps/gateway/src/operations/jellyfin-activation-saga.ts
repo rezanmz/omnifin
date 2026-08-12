@@ -1,5 +1,8 @@
 import { createHmac, randomUUID } from "node:crypto";
-import type { JellyfinProvisioningAdminClient } from "@omnifin/connectors/auth/jellyfin-provisioning-admin-client";
+import {
+  JellyfinProvisioningAdminClient,
+  type JellyfinProvisioningAdminClient as JellyfinProvisioningAdminClientType,
+} from "@omnifin/connectors/auth/jellyfin-provisioning-admin-client";
 import type { ConnectorTargetConfig } from "@omnifin/connectors/types";
 import type { AppConfig } from "../config.js";
 import type { DatabaseHandle } from "../db/client.js";
@@ -61,7 +64,7 @@ export interface JellyfinActivationSagaResult {
 
 export interface JellyfinActivationSagaDependencies {
   clock?: () => number;
-  createClient?: (target: ConnectorTargetConfig) => JellyfinProvisioningAdminClient;
+  createClient?: (target: ConnectorTargetConfig) => JellyfinProvisioningAdminClientType;
   createId?: () => string;
   leaseOwner?: string;
 }
@@ -112,7 +115,7 @@ interface ProvisioningState {
 }
 
 interface Binding {
-  client: JellyfinProvisioningAdminClient;
+  client: JellyfinProvisioningAdminClientType;
   connector: ConnectorRow;
   credential: string;
   policy: Record<string, unknown>;
@@ -124,10 +127,14 @@ function internalResult(
   reason: JellyfinActivationReason | null = null,
 ): JellyfinActivationSagaResult {
   const result = { disposition, reason } satisfies JellyfinActivationSagaResult;
-  Object.defineProperty(result, "toJSON", {
-    enumerable: false,
-    value: () => {
-      throw new TypeError("Jellyfin activation saga results are internal-only");
+  Object.defineProperties(result, {
+    disposition: { enumerable: true, value: disposition },
+    reason: { enumerable: true, value: reason },
+    toJSON: {
+      enumerable: false,
+      value: () => {
+        throw new TypeError("Jellyfin activation saga results are internal-only");
+      },
     },
   });
   return Object.freeze(result);
@@ -151,7 +158,7 @@ function failureReason(error: unknown, createStage = false): JellyfinActivationR
 export class JellyfinActivationSaga {
   readonly #cipher: EnvelopeCipher;
   readonly #clock: () => number;
-  readonly #createClient: (target: ConnectorTargetConfig) => JellyfinProvisioningAdminClient;
+  readonly #createClient: (target: ConnectorTargetConfig) => JellyfinProvisioningAdminClientType;
   readonly #createId: () => string;
   readonly #database: DatabaseHandle;
   readonly #encryptionKey: Buffer;
@@ -169,10 +176,7 @@ export class JellyfinActivationSaga {
     this.#createId = dependencies.createId ?? randomUUID;
     this.#leaseOwner = dependencies.leaseOwner ?? `activation-${randomUUID()}`;
     this.#createClient =
-      dependencies.createClient ??
-      (() => {
-        throw new Error("Jellyfin activation client dependency is not configured");
-      });
+      dependencies.createClient ?? ((target) => new JellyfinProvisioningAdminClient(target));
   }
 
   public async run(operationId: string): Promise<JellyfinActivationSagaResult> {
@@ -333,23 +337,22 @@ export class JellyfinActivationSaga {
     const beforeFence = await this.#binding(operation, false);
     if ("reason" in beforeFence) return this.#manual(repository, operation, beforeFence.reason);
     const now = this.#clock();
-    if (
-      operation.leaseExpiresAt === null ||
-      operation.leaseOwner === null ||
-      operation.leaseExpiresAt >= now
-    ) {
+    if (operation.leaseExpiresAt === null || operation.leaseOwner === null) {
       return internalResult("in_progress");
     }
     let fenced: JellyfinActivationOperation;
     try {
-      fenced = repository.claimLease({
-        id: operation.id,
-        expectedOwner: operation.leaseOwner,
-        expectedExpiresAt: operation.leaseExpiresAt,
-        leaseOwner: this.#leaseOwner,
-        leaseExpiresAt: now + LEASE_MS,
-        now,
-      });
+      fenced =
+        operation.leaseOwner === this.#leaseOwner && operation.leaseExpiresAt >= now
+          ? operation
+          : repository.claimLease({
+              id: operation.id,
+              expectedOwner: operation.leaseOwner,
+              expectedExpiresAt: operation.leaseExpiresAt,
+              leaseOwner: this.#leaseOwner,
+              leaseExpiresAt: now + LEASE_MS,
+              now,
+            });
       repository.dispatchCreate({ id: fenced.id, leaseOwner: this.#leaseOwner, now });
     } catch {
       return internalResult("in_progress");
@@ -474,7 +477,12 @@ export class JellyfinActivationSaga {
         }
         repository.recordStageArtifact({
           id: current.id,
-          artifact: { ...artifact, accessToken: authentication.accessToken },
+          artifact: {
+            createdId: artifact.createdId,
+            ...(artifact.username === undefined ? {} : { username: artifact.username }),
+            accessToken: authentication.accessToken,
+            serverId: authentication.serverId,
+          },
           state: "auth_pending",
           now: this.#clock(),
         });
@@ -527,16 +535,29 @@ export class JellyfinActivationSaga {
           | { consumedAt: number | null; expiresAt: number; id: string; revokedAt: number | null }
           | undefined)
       : undefined;
+    const invitationOperationId = invitation
+      ? ((
+          this.#database.sqlite
+            .prepare("select activation_operation_id as operationId from invitations where id = ?")
+            .get(operation.invitationId) as { operationId: string | null } | undefined
+        )?.operationId ?? null)
+      : null;
     if (checkLocalState && (!local || local.userStatus !== "pending_link"))
       return { reason: "user_not_pending" };
     if (checkLocalState && (local?.linkExists ?? 1) !== 0) return { reason: "link_exists" };
-    if (
-      (checkLocalState && (local?.identityUserId ?? null) !== operation.userId) ||
-      (checkInvitation &&
-        (!invitation || invitation.consumedAt !== null || invitation.revokedAt !== null))
-    ) {
+    if (checkLocalState && (!local || local.userStatus !== "pending_link"))
+      return { reason: "user_not_pending" };
+    if (checkLocalState && (local?.linkExists ?? 1) !== 0) return { reason: "link_exists" };
+    if (checkLocalState && (local?.identityUserId ?? null) !== operation.userId)
       return { reason: "identity_invalid" };
-    }
+    if (
+      checkInvitation &&
+      (!invitation ||
+        invitation.revokedAt !== null ||
+        (invitation.consumedAt !== null && invitationOperationId !== operation.id) ||
+        (invitationOperationId !== null && invitation.consumedAt === null))
+    )
+      return { reason: "identity_invalid" };
     if (checkInvitation && this.#clock() >= invitation!.expiresAt) {
       return { reason: "invite_expired" };
     }

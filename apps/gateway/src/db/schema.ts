@@ -467,6 +467,11 @@ export const jellyfinActivationOperations = sqliteTable(
     createdIdRecordedAt: integer("created_id_recorded_at", { mode: "timestamp_ms" }),
     manualRequiredAt: integer("manual_required_at", { mode: "timestamp_ms" }),
     tombstonedAt: integer("tombstoned_at", { mode: "timestamp_ms" }),
+    activationStatus: text("activation_status", { enum: ["pending", "completed"] })
+      .notNull()
+      .default("pending"),
+    activationCompletedLinkId: text("activation_completed_link_id"),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
     ...timestamps,
   },
   (table) => [
@@ -482,6 +487,13 @@ export const jellyfinActivationOperations = sqliteTable(
     ),
     index("jellyfin_activation_operations_state_idx").on(table.state, table.updatedAt),
     index("jellyfin_activation_operations_lease_idx").on(table.leaseExpiresAt),
+    uniqueIndex("jellyfin_activation_operations_completed_link_unique")
+      .on(table.activationCompletedLinkId)
+      .where(sql`${table.activationCompletedLinkId} is not null`),
+    check(
+      "jellyfin_activation_operations_activation_status_check",
+      sql`${table.activationStatus} in ('pending', 'completed')`,
+    ),
     foreignKey({
       columns: [table.externalIdentityId, table.userId],
       foreignColumns: [externalIdentities.id, externalIdentities.userId],
@@ -2206,6 +2218,7 @@ export const invitations = sqliteTable(
     registrationHandoffExpiresAt: integer("registration_handoff_expires_at", {
       mode: "timestamp_ms",
     }),
+    activationOperationId: text("activation_operation_id"),
     createdAt: timestamps.createdAt,
   },
   (table) => [
@@ -2213,6 +2226,9 @@ export const invitations = sqliteTable(
     uniqueIndex("invitations_registration_handoff_hash_unique")
       .on(table.registrationHandoffHash)
       .where(sql`${table.registrationHandoffHash} is not null`),
+    uniqueIndex("invitations_activation_operation_unique")
+      .on(table.activationOperationId)
+      .where(sql`${table.activationOperationId} is not null`),
     index("invitations_created_idx").on(table.createdAt, table.id),
     index("invitations_expiry_idx").on(table.expiresAt),
     check(

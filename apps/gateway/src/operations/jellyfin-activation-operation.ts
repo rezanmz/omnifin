@@ -45,6 +45,8 @@ export interface ReserveJellyfinActivationInput extends JellyfinActivationBindin
 }
 
 export interface JellyfinActivationOperation {
+  readonly activationStatus: "pending" | "completed";
+  readonly activationCompletedLinkId: string | null;
   readonly artifactRevision: number;
   readonly connectorConfigGeneration: number;
   readonly connectorId: string;
@@ -70,10 +72,12 @@ export interface JellyfinActivationOperation {
   readonly userId: string;
   readonly createdAt: number;
   readonly updatedAt: number;
+  readonly completedAt: number | null;
 }
 
 export interface JellyfinActivationStageArtifact {
   readonly createdId: string;
+  readonly serverId?: string;
   readonly username?: string;
   readonly password?: string;
   readonly accessToken?: string;
@@ -100,6 +104,8 @@ export class JellyfinActivationOperationError extends Error {
 }
 
 interface ActivationRow {
+  activationStatus: "pending" | "completed";
+  activationCompletedLinkId: string | null;
   artifactRevision: number;
   connectorConfigGeneration: number;
   connectorId: string;
@@ -126,6 +132,7 @@ interface ActivationRow {
   state: JellyfinActivationState;
   tombstonedAt: number | null;
   updatedAt: number;
+  completedAt: number | null;
   userId: string;
 }
 
@@ -142,7 +149,9 @@ const SELECT = `select id, invitation_id as invitationId, user_id as userId,
  failure_code as failureCode, reserved_at as reservedAt,
  create_dispatched_at as createDispatchedAt, created_id_recorded_at as createdIdRecordedAt,
  manual_required_at as manualRequiredAt, tombstoned_at as tombstonedAt,
- created_at as createdAt, updated_at as updatedAt
+ created_at as createdAt, updated_at as updatedAt,
+ activation_status as activationStatus, activation_completed_link_id as activationCompletedLinkId,
+ completed_at as completedAt
  from jellyfin_activation_operations`;
 
 function validTime(value: number) {
@@ -239,6 +248,52 @@ export class JellyfinActivationOperationRepository {
             );
         })
         .immediate();
+    } catch (error) {
+      if ((error as { code?: unknown }).code === "SQLITE_CONSTRAINT_UNIQUE") {
+        throw new JellyfinActivationOperationError("reservation_conflict", { cause: error });
+      }
+      throw error;
+    }
+    return this.read(input.id)!;
+  }
+
+  public reserveInExistingTransaction(input: ReserveJellyfinActivationInput) {
+    assertReservation(input);
+    if (!this.#sqlite.inTransaction)
+      throw new JellyfinActivationOperationError("invalid_transition");
+    try {
+      this.#sqlite
+        .prepare(
+          `insert into jellyfin_activation_operations (
+            id, invitation_id, user_id, external_identity_id, connector_id,
+            connector_config_generation, connector_instance_generation,
+            connector_instance_identity_hash, provisioning_revision, state, revision,
+            artifact_revision, lease_owner, lease_expires_at, create_attempt_count,
+            retry_count, cleanup_attempt_count, reserved_at, created_at, updated_at
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', 0, 0, ?, ?, 0, 0, 0, ?, ?, ?)`,
+        )
+        .run(
+          input.id,
+          input.invitationId,
+          input.userId,
+          input.externalIdentityId,
+          input.connectorId,
+          input.connectorConfigGeneration,
+          input.connectorInstanceGeneration,
+          input.connectorInstanceIdentityHash,
+          input.provisioningRevision,
+          input.leaseOwner,
+          input.leaseExpiresAt,
+          input.now,
+          input.now,
+          input.now,
+        );
+      const marker = this.#sqlite
+        .prepare(
+          "update invitations set activation_operation_id = ? where id = ? and activation_operation_id is null",
+        )
+        .run(input.id, input.invitationId);
+      if (marker.changes !== 1) throw new JellyfinActivationOperationError("reservation_conflict");
     } catch (error) {
       if ((error as { code?: unknown }).code === "SQLITE_CONSTRAINT_UNIQUE") {
         throw new JellyfinActivationOperationError("reservation_conflict", { cause: error });
@@ -408,6 +463,31 @@ export class JellyfinActivationOperationRepository {
       transition(result);
       return this.read(input.id)!;
     })();
+  }
+
+  public completeActivation(input: {
+    id: string;
+    linkId: string;
+    now: number;
+    expectedRevision?: number;
+  }) {
+    if (!validTime(input.now)) throw new JellyfinActivationOperationError("invalid_input");
+    text(input.id, ACTIVATION_ID);
+    text(input.linkId);
+    const result = this.#sqlite
+      .prepare(
+        `update jellyfin_activation_operations
+         set state = 'tombstoned', activation_status = 'completed',
+             activation_completed_link_id = ?, encrypted_stage_artifact = null,
+             cleanup_eligible = 0, artifact_revision = artifact_revision + 1,
+             lease_owner = null, lease_expires_at = null, completed_at = ?,
+             tombstoned_at = ?, revision = revision + 1, updated_at = max(updated_at, ?)
+         where id = ? and state = 'auth_pending' and activation_status = 'pending'
+           and revision = coalesce(?, revision)`,
+      )
+      .run(input.linkId, input.now, input.now, input.now, input.id, input.expectedRevision ?? null);
+    transition(result);
+    return this.read(input.id)!;
   }
 
   public markManualRequired(input: {
@@ -818,6 +898,8 @@ export class JellyfinActivationOperationRepository {
     )
       throw new JellyfinActivationOperationError("invalid_input");
     const record: JellyfinActivationOperation = {
+      activationStatus: row.activationStatus,
+      activationCompletedLinkId: row.activationCompletedLinkId,
       artifactRevision: row.artifactRevision,
       connectorConfigGeneration: row.connectorConfigGeneration,
       connectorId: row.connectorId,
@@ -843,6 +925,7 @@ export class JellyfinActivationOperationRepository {
       userId: row.userId,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
+      completedAt: row.completedAt,
     };
     Object.defineProperty(record, "toJSON", {
       value: () => {
