@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "d5d4d78a-ee59-4dd2-b7d2-b262b670f54e",
+  "id": "7b44bacb-4c4e-4c86-8d43-dbc16c1cdcaa",
   "prevId": "811ec4f7-0291-4882-ab4b-d5a7a19be614",
   "tables": {
     "acquisition_grab_operations": {
@@ -2711,7 +2711,7 @@
       "checkConstraints": {
         "jellyfin_activation_operations_id_check": {
           "name": "jellyfin_activation_operations_id_check",
-          "value": "length(\"jellyfin_activation_operations\".\"id\") between 8 and 128 and substr(\"jellyfin_activation_operations\".\"id\", 1, 10) = 'jellyfin_' and substr(\"jellyfin_activation_operations\".\"id\", 11) not glob '*[^A-Za-z0-9_-]*'"
+          "value": "length(\"jellyfin_activation_operations\".\"id\") between 10 and 128 and substr(\"jellyfin_activation_operations\".\"id\", 1, 9) = 'jellyfin_' and substr(\"jellyfin_activation_operations\".\"id\", 10) not glob '*[^A-Za-z0-9_-]*'"
         },
         "jellyfin_activation_operations_generation_check": {
           "name": "jellyfin_activation_operations_generation_check",
