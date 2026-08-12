@@ -312,7 +312,18 @@ describe("Jellyfin activation operation repository", () => {
       failureCode: "manual_required",
       now: 205,
     });
-    const result = repository.completeConfirmedCleanup("jellyfin_activation_1", 206);
+    const reserved = repository.reserveCleanup({
+      id: "jellyfin_activation_1",
+      leaseOwner: "cleanup-owner",
+      leaseExpiresAt: 300,
+      now: 206,
+    });
+    const result = repository.completeConfirmedCleanup(
+      "jellyfin_activation_1",
+      207,
+      reserved.leaseOwner!,
+      reserved.revision,
+    );
     expect(result.state).toBe("tombstoned");
     expect(() => repository.readCreatedIdArtifact("jellyfin_activation_1")).toThrowError(
       expect.objectContaining({ code: "artifact_not_found" }),

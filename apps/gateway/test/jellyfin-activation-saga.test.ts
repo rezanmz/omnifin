@@ -344,7 +344,7 @@ describe("JellyfinActivationSaga", () => {
 
     const capability = sagaInstance.createConfirmedCleanupCapability("jellyfin_phase_two");
     const cleaned = await sagaInstance.confirmedCleanup(capability);
-    expect(cleaned).toEqual({ disposition: "cleanup_confirmed" });
+    expect(cleaned.disposition).toBe("cleanup_confirmed");
     expect(fake.deleteUser).toHaveBeenCalledWith(
       expect.objectContaining({ userId: "created-upstream-id" }),
     );

@@ -69,7 +69,18 @@ export interface JellyfinActivationSagaDependencies {
 export type JellyfinActivationCleanupResult =
   | { readonly disposition: "cleanup_confirmed" }
   | { readonly disposition: "cleanup_uncertain"; readonly reason: "cleanup_uncertain" }
+  | { readonly disposition: "cleanup_in_progress" }
   | { readonly disposition: "cleanup_rejected"; readonly reason: JellyfinActivationReason };
+
+function internalCleanupResult<T extends JellyfinActivationCleanupResult>(result: T): T {
+  Object.defineProperty(result, "toJSON", {
+    enumerable: false,
+    value: () => {
+      throw new TypeError("Jellyfin activation cleanup results are internal-only");
+    },
+  });
+  return Object.freeze(result);
+}
 
 interface ConnectorRow {
   baseUrl: string;
@@ -208,7 +219,7 @@ export class JellyfinActivationSaga {
       !(capability instanceof JellyfinActivationCleanupCapability) ||
       capability[CLEANUP_CAPABILITY] !== true
     ) {
-      return { disposition: "cleanup_rejected", reason: "invalid_state" };
+      return internalCleanupResult({ disposition: "cleanup_rejected", reason: "invalid_state" });
     }
     const repository = new JellyfinActivationOperationRepository(
       this.#database.sqlite,
@@ -220,25 +231,43 @@ export class JellyfinActivationSaga {
       operation.state !== "manual_required" ||
       operation.failureCode === "cleanup_uncertain"
     ) {
-      return { disposition: "cleanup_rejected", reason: "invalid_state" };
-    }
-    if (operation.failureCode !== "manual_required") {
-      return { disposition: "cleanup_rejected", reason: "invalid_state" };
+      return internalCleanupResult({ disposition: "cleanup_rejected", reason: "invalid_state" });
     }
     let artifact: JellyfinActivationStageArtifact;
     try {
       artifact = repository.readStageArtifact(operation.id);
     } catch {
-      return { disposition: "cleanup_rejected", reason: "invalid_state" };
+      return internalCleanupResult({ disposition: "cleanup_rejected", reason: "invalid_state" });
     }
     const link = this.#database.sqlite
       .prepare(
         "select 1 from service_identity_links where provisioned_by_activation_id = ? limit 1",
       )
       .get(operation.id);
-    if (link) return { disposition: "cleanup_rejected", reason: "link_exists" };
-    const binding = await this.#binding(operation, true);
-    if ("reason" in binding) return { disposition: "cleanup_rejected", reason: binding.reason };
+    if (link)
+      return internalCleanupResult({ disposition: "cleanup_rejected", reason: "link_exists" });
+    const existingReservation = repository.readCleanupReservation(operation.id);
+    if (existingReservation) {
+      if (existingReservation.state === "dispatched") {
+        if (existingReservation.leaseExpiresAt >= this.#clock()) {
+          return internalCleanupResult({ disposition: "cleanup_in_progress" });
+        }
+        repository.expireCleanupReservation(operation.id, this.#clock());
+        this.#auditCleanup(operation, "uncertain");
+        return internalCleanupResult({
+          disposition: "cleanup_rejected",
+          reason: "cleanup_uncertain",
+        });
+      } else {
+        return internalCleanupResult({
+          disposition: "cleanup_rejected",
+          reason: "cleanup_uncertain",
+        });
+      }
+    }
+    const binding = await this.#binding(operation, true, false);
+    if ("reason" in binding)
+      return internalCleanupResult({ disposition: "cleanup_rejected", reason: binding.reason });
     let reserved: JellyfinActivationOperation;
     try {
       reserved = repository.reserveCleanup({
@@ -248,25 +277,40 @@ export class JellyfinActivationSaga {
         now: this.#clock(),
       });
     } catch {
-      return { disposition: "cleanup_rejected", reason: "invalid_state" };
+      return internalCleanupResult({ disposition: "cleanup_in_progress" });
     }
-    try {
-      await binding.client.deleteUser({
-        accessToken: binding.credential,
-        deviceId: DEVICE_ID,
-        userId: artifact.createdId,
-      });
-      repository.completeConfirmedCleanup(reserved.id, this.#clock());
-      this.#audit(operation, "cleanup_uncertain");
-      return { disposition: "cleanup_confirmed" };
-    } catch {
+    const reservedRevision = reserved.revision;
+    const owner = reserved.leaseOwner!;
+    const rebound = await this.#binding(reserved, true, false);
+    if ("reason" in rebound) {
       try {
-        repository.markCleanupUncertain(reserved.id, this.#clock());
+        repository.markCleanupUncertain(reserved.id, this.#clock(), owner, reservedRevision);
       } catch {
         // Another trusted cleanup caller may have recorded the uncertainty.
       }
-      this.#audit(operation, "cleanup_uncertain");
-      return { disposition: "cleanup_uncertain", reason: "cleanup_uncertain" };
+      this.#auditCleanup(operation, "uncertain");
+      return internalCleanupResult({ disposition: "cleanup_rejected", reason: rebound.reason });
+    }
+    try {
+      await rebound.client.deleteUser({
+        accessToken: rebound.credential,
+        deviceId: DEVICE_ID,
+        userId: artifact.createdId,
+      });
+      repository.completeConfirmedCleanup(reserved.id, this.#clock(), owner, reservedRevision);
+      this.#auditCleanup(operation, "confirmed");
+      return internalCleanupResult({ disposition: "cleanup_confirmed" });
+    } catch {
+      try {
+        repository.markCleanupUncertain(reserved.id, this.#clock(), owner, reservedRevision);
+      } catch {
+        // Another trusted cleanup caller may have recorded the uncertainty.
+      }
+      this.#auditCleanup(operation, "uncertain");
+      return internalCleanupResult({
+        disposition: "cleanup_uncertain",
+        reason: "cleanup_uncertain",
+      });
     }
   }
 
@@ -435,6 +479,7 @@ export class JellyfinActivationSaga {
   async #binding(
     operation: JellyfinActivationOperation,
     verifyServerIdentity: boolean,
+    checkLocalState = true,
   ): Promise<Binding | { reason: JellyfinActivationReason }> {
     const connector = this.#database.sqlite
       .prepare(
@@ -466,10 +511,11 @@ export class JellyfinActivationSaga {
       )
       .get(operation.invitationId) as
       { consumedAt: number | null; id: string; revokedAt: number | null } | undefined;
-    if (!local || local.userStatus !== "pending_link") return { reason: "user_not_pending" };
-    if (local.linkExists !== 0) return { reason: "link_exists" };
+    if (checkLocalState && (!local || local.userStatus !== "pending_link"))
+      return { reason: "user_not_pending" };
+    if (checkLocalState && (local?.linkExists ?? 1) !== 0) return { reason: "link_exists" };
     if (
-      local.identityUserId !== operation.userId ||
+      (checkLocalState && (local?.identityUserId ?? null) !== operation.userId) ||
       !invitation ||
       invitation.consumedAt !== null ||
       invitation.revokedAt !== null
@@ -620,5 +666,25 @@ export class JellyfinActivationSaga {
         }),
         this.#clock(),
       );
+  }
+
+  #auditCleanup(operation: JellyfinActivationOperation, outcome: "confirmed" | "uncertain") {
+    try {
+      this.#database.sqlite
+        .prepare(
+          `insert into audit_events (id, event_type, outcome, target_type, target_id, metadata_json, created_at)
+           values (?, ?, ?, 'jellyfin_activation', ?, ?, ?)`,
+        )
+        .run(
+          this.#createId(),
+          `activation.cleanup.${outcome}`,
+          outcome === "confirmed" ? "success" : "failure",
+          operation.id,
+          JSON.stringify({ outcome, state: operation.state }),
+          this.#clock(),
+        );
+    } catch {
+      // The upstream outcome is authoritative; audit failure cannot trigger another DELETE.
+    }
   }
 }

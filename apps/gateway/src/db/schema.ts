@@ -536,6 +536,36 @@ export const jellyfinActivationOperations = sqliteTable(
   ],
 );
 
+export const jellyfinActivationCleanupReservations = sqliteTable(
+  "jellyfin_activation_cleanup_reservations",
+  {
+    operationId: text("operation_id")
+      .primaryKey()
+      .references(() => jellyfinActivationOperations.id, { onDelete: "restrict" }),
+    operationRevision: integer("operation_revision").notNull(),
+    leaseOwner: text("lease_owner").notNull(),
+    leaseExpiresAt: integer("lease_expires_at", { mode: "timestamp_ms" }).notNull(),
+    attemptCount: integer("attempt_count").notNull().default(1),
+    state: text("state", { enum: ["dispatched", "uncertain", "confirmed"] }).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    index("jellyfin_activation_cleanup_reservations_state_idx").on(
+      table.state,
+      table.leaseExpiresAt,
+    ),
+    check(
+      "jellyfin_activation_cleanup_reservations_attempt_check",
+      sql`${table.attemptCount} between 1 and 8`,
+    ),
+    check(
+      "jellyfin_activation_cleanup_reservations_state_check",
+      sql`${table.state} in ('dispatched', 'uncertain', 'confirmed')`,
+    ),
+  ],
+);
+
 export const mediaRequestProfilePreferences = sqliteTable(
   "media_request_profile_preferences",
   {

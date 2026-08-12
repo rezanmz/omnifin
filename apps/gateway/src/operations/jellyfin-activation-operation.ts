@@ -51,6 +51,7 @@ export interface JellyfinActivationOperation {
   readonly connectorInstanceGeneration: number;
   readonly connectorInstanceIdentityHash: string | null;
   readonly createAttemptCount: number;
+  readonly cleanupAttemptCount: number;
   readonly createDispatchedAt: number | null;
   readonly createdIdRecordedAt: number | null;
   readonly externalIdentityId: string;
@@ -105,6 +106,7 @@ interface ActivationRow {
   connectorInstanceGeneration: number;
   connectorInstanceIdentityHash: string | null;
   createAttemptCount: number;
+  cleanupAttemptCount: number;
   createDispatchedAt: number | null;
   createdAt: number;
   createdIdRecordedAt: number | null;
@@ -134,7 +136,7 @@ const SELECT = `select id, invitation_id as invitationId, user_id as userId,
  connector_instance_identity_hash as connectorInstanceIdentityHash,
  provisioning_revision as provisioningRevision, state, revision,
  encrypted_stage_artifact as encryptedStageArtifact, artifact_revision as artifactRevision,
- cleanup_eligible as cleanupEligible,
+ cleanup_eligible as cleanupEligible, cleanup_attempt_count as cleanupAttemptCount,
  lease_owner as leaseOwner, lease_expires_at as leaseExpiresAt,
  create_attempt_count as createAttemptCount, retry_count as retryCount,
  failure_code as failureCode, reserved_at as reservedAt,
@@ -466,14 +468,35 @@ export class JellyfinActivationOperationRepository {
     })();
   }
 
-  public completeConfirmedCleanup(id: string, now: number) {
+  public completeConfirmedCleanup(
+    id: string,
+    now: number,
+    leaseOwner: string,
+    operationRevision: number,
+  ) {
     if (!validTime(now)) throw new JellyfinActivationOperationError("invalid_input");
     text(id, ACTIVATION_ID);
     const result = this.#sqlite
-      .prepare(
-        `update jellyfin_activation_operations set state = 'tombstoned', encrypted_stage_artifact = null, cleanup_eligible = 0, artifact_revision = artifact_revision + 1, lease_owner = null, lease_expires_at = null, tombstoned_at = ?, revision = revision + 1, updated_at = max(updated_at, ?) where id = ? and state = 'manual_required' and cleanup_eligible = 1`,
-      )
-      .run(now, now, id);
+      .transaction(() => {
+        const updated = this.#sqlite
+          .prepare(
+            `update jellyfin_activation_operations set state = 'tombstoned', encrypted_stage_artifact = null, cleanup_eligible = 0, artifact_revision = artifact_revision + 1, lease_owner = null, lease_expires_at = null, tombstoned_at = ?, revision = revision + 1, updated_at = max(updated_at, ?) where id = ? and state = 'manual_required' and cleanup_eligible = 1 and lease_owner = ? and revision = ?`,
+          )
+          .run(now, now, id, leaseOwner, operationRevision);
+        if (updated.changes !== 1) throw new JellyfinActivationOperationError("invalid_transition");
+        const reservation = this.#sqlite
+          .prepare(
+            `update jellyfin_activation_cleanup_reservations
+             set state = 'confirmed', updated_at = ?
+             where operation_id = ? and state = 'dispatched'
+               and lease_owner = ? and operation_revision = ?`,
+          )
+          .run(now, id, leaseOwner, operationRevision);
+        if (reservation.changes !== 1)
+          throw new JellyfinActivationOperationError("invalid_transition");
+        return updated;
+      })
+      .immediate();
     transition(result);
     return this.read(id)!;
   }
@@ -518,17 +541,39 @@ export class JellyfinActivationOperationRepository {
     return this.read(input.id)!;
   }
 
-  public markCleanupUncertain(id: string, now: number) {
+  public markCleanupUncertain(
+    id: string,
+    now: number,
+    leaseOwner: string,
+    operationRevision: number,
+  ) {
     if (!validTime(now)) throw new JellyfinActivationOperationError("invalid_input");
     text(id, ACTIVATION_ID);
     const result = this.#sqlite
-      .prepare(
-        `update jellyfin_activation_operations
-         set failure_code = 'cleanup_uncertain', updated_at = max(updated_at, ?),
-             revision = revision + 1
-         where id = ? and state = 'manual_required' and cleanup_eligible = 1`,
-      )
-      .run(now, id);
+      .transaction(() => {
+        const updated = this.#sqlite
+          .prepare(
+            `update jellyfin_activation_operations
+           set failure_code = 'cleanup_uncertain', lease_owner = null, lease_expires_at = null,
+               updated_at = max(updated_at, ?), revision = revision + 1
+           where id = ? and state = 'manual_required' and cleanup_eligible = 1
+             and lease_owner = ? and revision = ?`,
+          )
+          .run(now, id, leaseOwner, operationRevision);
+        if (updated.changes !== 1) throw new JellyfinActivationOperationError("invalid_transition");
+        const reservation = this.#sqlite
+          .prepare(
+            `update jellyfin_activation_cleanup_reservations
+           set state = 'uncertain', updated_at = ?
+           where operation_id = ? and state = 'dispatched'
+             and lease_owner = ? and operation_revision = ?`,
+          )
+          .run(now, id, leaseOwner, operationRevision);
+        if (reservation.changes !== 1)
+          throw new JellyfinActivationOperationError("invalid_transition");
+        return updated;
+      })
+      .immediate();
     transition(result);
     return this.read(id)!;
   }
@@ -549,16 +594,116 @@ export class JellyfinActivationOperationRepository {
     text(input.id, ACTIVATION_ID);
     text(input.leaseOwner);
     const result = this.#sqlite
-      .prepare(
-        `update jellyfin_activation_operations
-         set lease_owner = ?, lease_expires_at = ?, revision = revision + 1,
-             updated_at = max(updated_at, ?)
-         where id = ? and state = 'manual_required' and cleanup_eligible = 1
-           and lease_owner is null and failure_code <> 'cleanup_uncertain'`,
-      )
-      .run(input.leaseOwner, input.leaseExpiresAt, input.now, input.id);
+      .transaction(() => {
+        const current = this.#row(input.id);
+        if (
+          !current ||
+          current.state !== "manual_required" ||
+          current.cleanupEligible !== 1 ||
+          current.encryptedStageArtifact === null ||
+          current.leaseOwner !== null ||
+          current.failureCode === "cleanup_uncertain"
+        ) {
+          throw new JellyfinActivationOperationError("invalid_transition");
+        }
+        const existing = this.#sqlite
+          .prepare(
+            "select state from jellyfin_activation_cleanup_reservations where operation_id = ?",
+          )
+          .get(input.id);
+        if (existing) throw new JellyfinActivationOperationError("invalid_transition");
+        const link = this.#sqlite
+          .prepare(
+            `select 1 from service_identity_links where user_id = ? and service = 'jellyfin'
+         and connector_id = ? limit 1`,
+          )
+          .get(current.userId, current.connectorId);
+        if (link) throw new JellyfinActivationOperationError("invalid_transition");
+        const updated = this.#sqlite
+          .prepare(
+            `update jellyfin_activation_operations
+         set lease_owner = ?, lease_expires_at = ?, cleanup_attempt_count = cleanup_attempt_count + 1,
+             revision = revision + 1, updated_at = max(updated_at, ?)
+         where id = ? and revision = ? and state = 'manual_required' and cleanup_eligible = 1
+           and cleanup_attempt_count < 8`,
+          )
+          .run(input.leaseOwner, input.leaseExpiresAt, input.now, input.id, current.revision);
+        if (updated.changes !== 1) throw new JellyfinActivationOperationError("invalid_transition");
+        this.#sqlite
+          .prepare(
+            `insert into jellyfin_activation_cleanup_reservations
+         (operation_id, operation_revision, lease_owner, lease_expires_at, attempt_count, state, created_at, updated_at)
+         values (?, ?, ?, ?, ?, 'dispatched', ?, ?)`,
+          )
+          .run(
+            input.id,
+            current.revision + 1,
+            input.leaseOwner,
+            input.leaseExpiresAt,
+            current.cleanupAttemptCount + 1,
+            input.now,
+            input.now,
+          );
+        return updated;
+      })
+      .immediate();
     transition(result);
     return this.read(input.id)!;
+  }
+
+  public readCleanupReservation(operationId: string) {
+    return this.#sqlite
+      .prepare(
+        `select operation_id as operationId, operation_revision as operationRevision,
+              lease_owner as leaseOwner, lease_expires_at as leaseExpiresAt,
+              attempt_count as attemptCount, state, created_at as createdAt, updated_at as updatedAt
+       from jellyfin_activation_cleanup_reservations where operation_id = ?`,
+      )
+      .get(operationId) as
+      | {
+          attemptCount: number;
+          leaseExpiresAt: number;
+          leaseOwner: string;
+          operationId: string;
+          operationRevision: number;
+          state: "confirmed" | "dispatched" | "uncertain";
+        }
+      | undefined;
+  }
+
+  public expireCleanupReservation(operationId: string, now: number) {
+    if (!validTime(now)) throw new JellyfinActivationOperationError("invalid_input");
+    text(operationId, ACTIVATION_ID);
+    this.#sqlite.transaction(() => {
+      const reservation = this.#sqlite
+        .prepare(
+          `select lease_owner as leaseOwner, operation_revision as operationRevision
+           from jellyfin_activation_cleanup_reservations
+           where operation_id = ? and state = 'dispatched' and lease_expires_at < ?`,
+        )
+        .get(operationId, now) as { leaseOwner: string; operationRevision: number } | undefined;
+      if (!reservation) return;
+      const result = this.#sqlite
+        .prepare(
+          `update jellyfin_activation_cleanup_reservations set state = 'uncertain', updated_at = ?
+           where operation_id = ? and state = 'dispatched' and lease_expires_at < ?
+             and lease_owner = ? and operation_revision = ?`,
+        )
+        .run(now, operationId, now, reservation.leaseOwner, reservation.operationRevision);
+      if (result.changes === 1) {
+        const operation = this.#sqlite
+          .prepare(
+            `update jellyfin_activation_operations set failure_code = 'cleanup_uncertain', lease_owner = null,
+             lease_expires_at = null, revision = revision + 1, updated_at = max(updated_at, ?)
+             where id = ? and state = 'manual_required' and cleanup_eligible = 1
+               and lease_owner = ? and revision = ?`,
+          )
+          .run(now, operationId, reservation.leaseOwner, reservation.operationRevision);
+        if (operation.changes !== 1)
+          throw new JellyfinActivationOperationError("invalid_transition");
+      }
+      return result;
+    })();
   }
 
   public tombstone(id: string, now: number) {
@@ -668,6 +813,7 @@ export class JellyfinActivationOperationRepository {
       connectorInstanceGeneration: row.connectorInstanceGeneration,
       connectorInstanceIdentityHash: row.connectorInstanceIdentityHash,
       createAttemptCount: row.createAttemptCount,
+      cleanupAttemptCount: row.cleanupAttemptCount,
       createDispatchedAt: row.createDispatchedAt,
       createdIdRecordedAt: row.createdIdRecordedAt,
       externalIdentityId: row.externalIdentityId,

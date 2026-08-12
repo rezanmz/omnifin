@@ -30,6 +30,7 @@ const requiredTables = [
   "external_mutation_target_locks",
   "invitations",
   "jellyfin_activation_operations",
+  "jellyfin_activation_cleanup_reservations",
   "jellyfin_provisioning_configs",
   "jellyfin_quick_connect_transactions",
   "library_artwork_searches",
@@ -672,6 +673,9 @@ const requiredTriggers = [
   "jellyfin_quick_connect_transactions_connector_generation_insert_guard",
   "jellyfin_quick_connect_transactions_connector_generation_update_guard",
   "jellyfin_activation_operations_marker_update_guard",
+  "service_identity_links_activation_cleanup_insert_guard",
+  "service_identity_links_activation_cleanup_update_guard",
+  "jellyfin_activation_operations_cleanup_update_guard",
   "media_request_profile_preferences_connector_generation_insert_guard",
   "media_request_profile_preferences_connector_generation_update_guard",
   "saved_catalog_media_reference_before_delete",
@@ -735,9 +739,10 @@ function writeHistoricalMigrationFixture() {
     [35, "0035_invitations"],
     [36, "0036_jellyfin_provisioning"],
     [37, "0037_jellyfin_activation_operations"],
+    [38, "0038_charming_goblin_queen"],
   ];
   assertCondition(
-    JSON.stringify(journal.entries.slice(-10).map(({ idx, tag }) => [idx, tag])) ===
+    JSON.stringify(journal.entries.slice(-11).map(({ idx, tag }) => [idx, tag])) ===
       JSON.stringify(expectedTail),
     "Current migration journal must preserve the linear parent, saved-list, and playback-preference ancestry.",
   );
@@ -926,9 +931,8 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined &&
-    currentMigrationTag === "0037_jellyfin_activation_operations",
-  "Current migration journal must end at migration 0037_jellyfin_activation_operations.",
+  currentMigrationTimestamp !== undefined && currentMigrationTag === "0038_charming_goblin_queen",
+  "Current migration journal must end at migration 0038_charming_goblin_queen.",
 );
 
 try {

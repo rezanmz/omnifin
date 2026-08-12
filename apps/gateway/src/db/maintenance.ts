@@ -1223,6 +1223,18 @@ function sanitizeJellyfinActivationOperations(sqlite: Database.Database, now: nu
     )
     .get();
   if (!exists) return;
+  const cleanupExists = sqlite
+    .prepare(
+      "select 1 from main.sqlite_schema where type = 'table' and name = 'jellyfin_activation_cleanup_reservations'",
+    )
+    .get();
+  if (cleanupExists) {
+    sqlite.exec(`
+      update main.jellyfin_activation_cleanup_reservations
+      set state = 'uncertain', updated_at = max(updated_at, ${now})
+      where state = 'dispatched';
+    `);
+  }
   sqlite.exec(`
     update main.jellyfin_activation_operations
     set state = case when state in ('manual_required', 'tombstoned') then state else 'manual_required' end,
@@ -1248,6 +1260,12 @@ function mergeRollbackJellyfinActivationFacts(sqlite: Database.Database, now: nu
     )
     .get();
   if (!exists || !rollbackExists) return;
+  const cleanupExists = sqlite
+    .prepare(
+      "select 1 from main.sqlite_schema where type = 'table' and name = 'jellyfin_activation_cleanup_reservations'",
+    )
+    .get();
+  if (cleanupExists) sqlite.exec("delete from main.jellyfin_activation_cleanup_reservations");
   sqlite.exec(`
     delete from main.jellyfin_activation_operations as collision
     where exists (
