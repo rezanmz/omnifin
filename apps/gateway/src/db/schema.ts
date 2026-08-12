@@ -443,7 +443,9 @@ export const jellyfinActivationOperations = sqliteTable(
       enum: [
         "reserved",
         "create_dispatched",
-        "created_id_recorded",
+        "created",
+        "policy_pending",
+        "auth_pending",
         "manual_required",
         "tombstoned",
       ],
@@ -453,6 +455,7 @@ export const jellyfinActivationOperations = sqliteTable(
     revision: integer("revision").notNull().default(0),
     encryptedStageArtifact: text("encrypted_stage_artifact"),
     artifactRevision: integer("artifact_revision").notNull().default(0),
+    cleanupEligible: integer("cleanup_eligible", { mode: "boolean" }).notNull().default(false),
     leaseOwner: text("lease_owner"),
     leaseExpiresAt: integer("lease_expires_at", { mode: "timestamp_ms" }),
     createAttemptCount: integer("create_attempt_count").notNull().default(0),
@@ -467,10 +470,15 @@ export const jellyfinActivationOperations = sqliteTable(
     ...timestamps,
   },
   (table) => [
-    uniqueIndex("jellyfin_activation_operations_invitation_user_identity_unique").on(
-      table.invitationId,
-      table.userId,
+    uniqueIndex("jellyfin_activation_operations_invitation_unique").on(table.invitationId),
+    uniqueIndex("jellyfin_activation_operations_user_unique").on(table.userId),
+    uniqueIndex("jellyfin_activation_operations_external_identity_unique").on(
       table.externalIdentityId,
+    ),
+    uniqueIndex("jellyfin_activation_operations_id_user_connector_unique").on(
+      table.id,
+      table.userId,
+      table.connectorId,
     ),
     index("jellyfin_activation_operations_state_idx").on(table.state, table.updatedAt),
     index("jellyfin_activation_operations_lease_idx").on(table.leaseExpiresAt),
@@ -499,7 +507,7 @@ export const jellyfinActivationOperations = sqliteTable(
     ),
     check(
       "jellyfin_activation_operations_state_check",
-      sql`${table.state} in ('reserved', 'create_dispatched', 'created_id_recorded', 'manual_required', 'tombstoned')`,
+      sql`${table.state} in ('reserved', 'create_dispatched', 'created', 'policy_pending', 'auth_pending', 'manual_required', 'tombstoned')`,
     ),
     check(
       "jellyfin_activation_operations_revision_check",
@@ -507,7 +515,7 @@ export const jellyfinActivationOperations = sqliteTable(
     ),
     check(
       "jellyfin_activation_operations_attempt_check",
-      sql`${table.createAttemptCount} between 0 and 1 and ${table.retryCount} between 0 and 8 and ${table.cleanupAttemptCount} between 0 and 8`,
+      sql`${table.createAttemptCount} between 0 and 1 and ${table.retryCount} between 0 and 8 and ${table.cleanupAttemptCount} between 0 and 8 and ${table.cleanupEligible} in (0, 1)`,
     ),
     check(
       "jellyfin_activation_operations_failure_code_check",
@@ -519,7 +527,7 @@ export const jellyfinActivationOperations = sqliteTable(
     ),
     check(
       "jellyfin_activation_operations_state_attribution_check",
-      sql`(${table.state} = 'reserved' and ${table.createAttemptCount} = 0 and ${table.createDispatchedAt} is null and ${table.createdIdRecordedAt} is null and ${table.manualRequiredAt} is null and ${table.tombstonedAt} is null and ${table.encryptedStageArtifact} is null) or (${table.state} = 'create_dispatched' and ${table.createAttemptCount} = 1 and ${table.createDispatchedAt} is not null and ${table.createdIdRecordedAt} is null and ${table.manualRequiredAt} is null and ${table.tombstonedAt} is null and ${table.encryptedStageArtifact} is null) or (${table.state} = 'created_id_recorded' and ${table.createAttemptCount} = 1 and ${table.createDispatchedAt} is not null and ${table.createdIdRecordedAt} is not null and ${table.manualRequiredAt} is null and ${table.tombstonedAt} is null and ${table.encryptedStageArtifact} is not null) or (${table.state} = 'manual_required' and ${table.manualRequiredAt} is not null and ${table.tombstonedAt} is null and ${table.encryptedStageArtifact} is null) or (${table.state} = 'tombstoned' and ${table.tombstonedAt} is not null and ${table.encryptedStageArtifact} is null)`,
+      sql`(${table.state} = 'reserved' and ${table.createAttemptCount} = 0 and ${table.createDispatchedAt} is null and ${table.createdIdRecordedAt} is null and ${table.manualRequiredAt} is null and ${table.tombstonedAt} is null and ${table.encryptedStageArtifact} is null and ${table.cleanupEligible} = 0) or (${table.state} = 'create_dispatched' and ${table.createAttemptCount} = 1 and ${table.createDispatchedAt} is not null and ${table.createdIdRecordedAt} is null and ${table.manualRequiredAt} is null and ${table.tombstonedAt} is null and ${table.encryptedStageArtifact} is null and ${table.cleanupEligible} = 0) or (${table.state} in ('created', 'policy_pending', 'auth_pending') and ${table.createAttemptCount} = 1 and ${table.createDispatchedAt} is not null and ${table.createdIdRecordedAt} is not null and ${table.manualRequiredAt} is null and ${table.tombstonedAt} is null and ${table.encryptedStageArtifact} is not null and ${table.cleanupEligible} = 1) or (${table.state} = 'manual_required' and ${table.manualRequiredAt} is not null and ${table.tombstonedAt} is null and ((${table.encryptedStageArtifact} is null and ${table.cleanupEligible} = 0) or (${table.encryptedStageArtifact} is not null and ${table.cleanupEligible} = 1))) or (${table.state} = 'tombstoned' and ${table.tombstonedAt} is not null and ${table.encryptedStageArtifact} is null and ${table.cleanupEligible} = 0)`,
     ),
     check(
       "jellyfin_activation_operations_timestamp_order_check",
@@ -610,8 +618,12 @@ export const serviceIdentityLinks = sqliteTable(
       .onDelete("restrict")
       .onUpdate("restrict"),
     foreignKey({
-      columns: [table.provisionedByActivationId],
-      foreignColumns: [jellyfinActivationOperations.id],
+      columns: [table.provisionedByActivationId, table.userId, table.connectorId],
+      foreignColumns: [
+        jellyfinActivationOperations.id,
+        jellyfinActivationOperations.userId,
+        jellyfinActivationOperations.connectorId,
+      ],
       name: "service_identity_links_provisioned_by_activation_fk",
     })
       .onDelete("restrict")

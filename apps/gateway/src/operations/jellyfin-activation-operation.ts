@@ -9,7 +9,13 @@ const FAILURE_CODE = /^[a-z0-9_]{1,64}$/u;
 const CREATED_ID = /^[A-Za-z0-9_-]{1,128}$/u;
 
 export type JellyfinActivationState =
-  "reserved" | "create_dispatched" | "created_id_recorded" | "manual_required" | "tombstoned";
+  | "reserved"
+  | "create_dispatched"
+  | "created"
+  | "policy_pending"
+  | "auth_pending"
+  | "manual_required"
+  | "tombstoned";
 
 export type JellyfinActivationFailureCode =
   | "binding_mismatch"
@@ -64,6 +70,14 @@ export interface JellyfinActivationOperation {
   readonly updatedAt: number;
 }
 
+export interface JellyfinActivationStageArtifact {
+  readonly createdId: string;
+  readonly username?: string;
+  readonly password?: string;
+  readonly accessToken?: string;
+  readonly policy?: Record<string, unknown>;
+}
+
 export type JellyfinActivationOperationErrorCode =
   | "invalid_input"
   | "invalid_transition"
@@ -92,6 +106,7 @@ interface ActivationRow {
   createdAt: number;
   createdIdRecordedAt: number | null;
   encryptedStageArtifact: string | null;
+  cleanupEligible: number;
   externalIdentityId: string;
   failureCode: string | null;
   id: string;
@@ -116,6 +131,7 @@ const SELECT = `select id, invitation_id as invitationId, user_id as userId,
  connector_instance_identity_hash as connectorInstanceIdentityHash,
  provisioning_revision as provisioningRevision, state, revision,
  encrypted_stage_artifact as encryptedStageArtifact, artifact_revision as artifactRevision,
+ cleanup_eligible as cleanupEligible,
  lease_owner as leaseOwner, lease_expires_at as leaseExpiresAt,
  create_attempt_count as createAttemptCount, retry_count as retryCount,
  failure_code as failureCode, reserved_at as reservedAt,
@@ -253,7 +269,7 @@ export class JellyfinActivationOperationRepository {
     text(input.leaseOwner);
     const result = this.#sqlite
       .prepare(
-        `update jellyfin_activation_operations set lease_owner = ?, lease_expires_at = ?, revision = revision + 1, updated_at = max(updated_at, ?) where id = ? and lease_owner = ? and lease_expires_at = ? and lease_expires_at < ? and state in ('reserved','create_dispatched','created_id_recorded')`,
+        `update jellyfin_activation_operations set lease_owner = ?, lease_expires_at = ?, revision = revision + 1, updated_at = max(updated_at, ?) where id = ? and lease_owner = ? and lease_expires_at = ? and lease_expires_at < ? and state in ('reserved','create_dispatched','created','policy_pending','auth_pending')`,
       )
       .run(
         input.leaseOwner,
@@ -296,14 +312,50 @@ export class JellyfinActivationOperationRepository {
         throw new JellyfinActivationOperationError("invalid_transition");
       const artifactRevision = row.artifactRevision + 1;
       const encrypted = this.#cipher.encrypt(
-        JSON.stringify({ kind: "created_id", createdId: input.createdId }),
+        JSON.stringify({ createdId: input.createdId }),
         jellyfinActivationArtifactEncryptionContext(input.id, artifactRevision),
       );
       const result = this.#sqlite
         .prepare(
-          `update jellyfin_activation_operations set state = 'created_id_recorded', encrypted_stage_artifact = ?, artifact_revision = ?, created_id_recorded_at = ?, revision = revision + 1, updated_at = max(updated_at, ?) where id = ? and state = 'create_dispatched' and revision = ?`,
+          `update jellyfin_activation_operations set state = 'created', encrypted_stage_artifact = ?, artifact_revision = ?, cleanup_eligible = 1, created_id_recorded_at = ?, revision = revision + 1, updated_at = max(updated_at, ?) where id = ? and state = 'create_dispatched' and revision = ?`,
         )
         .run(encrypted, artifactRevision, input.now, input.now, input.id, row.revision);
+      transition(result);
+      return this.read(input.id)!;
+    })();
+  }
+
+  public recordStageArtifact(input: {
+    id: string;
+    artifact: JellyfinActivationStageArtifact;
+    state: "created" | "policy_pending" | "auth_pending";
+    now: number;
+  }) {
+    if (!validTime(input.now) || !CREATED_ID.test(input.artifact.createdId))
+      throw new JellyfinActivationOperationError("invalid_input");
+    for (const value of [
+      input.artifact.username,
+      input.artifact.password,
+      input.artifact.accessToken,
+    ]) {
+      if (value !== undefined && (value.length < 1 || value.length > 4096))
+        throw new JellyfinActivationOperationError("invalid_input");
+    }
+    text(input.id, ACTIVATION_ID);
+    return this.#sqlite.transaction(() => {
+      const row = this.#row(input.id);
+      if (!row || !["created", "policy_pending", "auth_pending"].includes(row.state))
+        throw new JellyfinActivationOperationError("invalid_transition");
+      const artifactRevision = row.artifactRevision + 1;
+      const encrypted = this.#cipher.encrypt(
+        JSON.stringify(input.artifact),
+        jellyfinActivationArtifactEncryptionContext(input.id, artifactRevision),
+      );
+      const result = this.#sqlite
+        .prepare(
+          `update jellyfin_activation_operations set state = ?, encrypted_stage_artifact = ?, artifact_revision = ?, cleanup_eligible = 1, revision = revision + 1, updated_at = max(updated_at, ?) where id = ? and revision = ? and state in ('created','policy_pending','auth_pending')`,
+        )
+        .run(input.state, encrypted, artifactRevision, input.now, input.id, row.revision);
       transition(result);
       return this.read(input.id)!;
     })();
@@ -320,7 +372,7 @@ export class JellyfinActivationOperationRepository {
     text(input.id, ACTIVATION_ID);
     const result = this.#sqlite
       .prepare(
-        `update jellyfin_activation_operations set state = 'manual_required', encrypted_stage_artifact = null, artifact_revision = artifact_revision + 1, failure_code = ?, manual_required_at = ?, lease_owner = null, lease_expires_at = null, retry_count = retry_count + ?, revision = revision + 1, updated_at = max(updated_at, ?) where id = ? and state not in ('manual_required','tombstoned') and retry_count + ? <= 8`,
+        `update jellyfin_activation_operations set state = 'manual_required', encrypted_stage_artifact = case when cleanup_eligible = 1 and create_attempt_count = 1 then encrypted_stage_artifact else null end, artifact_revision = case when cleanup_eligible = 1 and create_attempt_count = 1 then artifact_revision else artifact_revision + 1 end, failure_code = ?, manual_required_at = ?, lease_owner = null, lease_expires_at = null, retry_count = retry_count + ?, revision = revision + 1, updated_at = max(updated_at, ?) where id = ? and state not in ('manual_required','tombstoned') and retry_count + ? <= 8`,
       )
       .run(
         input.failureCode,
@@ -339,7 +391,7 @@ export class JellyfinActivationOperationRepository {
     text(id, ACTIVATION_ID);
     const result = this.#sqlite
       .prepare(
-        `update jellyfin_activation_operations set state = 'tombstoned', encrypted_stage_artifact = null, artifact_revision = artifact_revision + 1, lease_owner = null, lease_expires_at = null, tombstoned_at = ?, revision = revision + 1, updated_at = max(updated_at, ?) where id = ? and state in ('manual_required','created_id_recorded')`,
+        `update jellyfin_activation_operations set state = 'tombstoned', encrypted_stage_artifact = null, cleanup_eligible = 0, artifact_revision = artifact_revision + 1, lease_owner = null, lease_expires_at = null, tombstoned_at = ?, revision = revision + 1, updated_at = max(updated_at, ?) where id = ? and state = 'manual_required'`,
       )
       .run(now, now, id);
     transition(result);
@@ -350,7 +402,7 @@ export class JellyfinActivationOperationRepository {
     if (!validTime(now)) throw new JellyfinActivationOperationError("invalid_input");
     this.#sqlite
       .prepare(
-        `update jellyfin_activation_operations set state = 'manual_required', encrypted_stage_artifact = null, artifact_revision = artifact_revision + 1, failure_code = 'restore_sanitized', lease_owner = null, lease_expires_at = null, manual_required_at = max(created_at, ?), revision = revision + 1, updated_at = max(updated_at, created_at, ?) where state not in ('manual_required','tombstoned')`,
+        `update jellyfin_activation_operations set state = 'manual_required', encrypted_stage_artifact = null, cleanup_eligible = 0, artifact_revision = artifact_revision + 1, failure_code = 'restore_sanitized', lease_owner = null, lease_expires_at = null, manual_required_at = max(created_at, ?), revision = revision + 1, updated_at = max(updated_at, created_at, ?) where state not in ('manual_required','tombstoned')`,
       )
       .run(now, now);
   }
@@ -358,7 +410,7 @@ export class JellyfinActivationOperationRepository {
   public readCreatedIdArtifact(id: string) {
     text(id, ACTIVATION_ID);
     const row = this.#row(id);
-    if (!row?.encryptedStageArtifact)
+    if (!row?.encryptedStageArtifact || row.cleanupEligible !== 1)
       throw new JellyfinActivationOperationError("artifact_not_found");
     try {
       const value = JSON.parse(
@@ -374,7 +426,6 @@ export class JellyfinActivationOperationRepository {
       if (
         !value ||
         typeof value !== "object" ||
-        (value as Record<string, unknown>).kind !== "created_id" ||
         typeof createdId !== "string" ||
         !CREATED_ID.test(createdId)
       )
@@ -395,7 +446,9 @@ export class JellyfinActivationOperationRepository {
       ![
         "reserved",
         "create_dispatched",
-        "created_id_recorded",
+        "created",
+        "policy_pending",
+        "auth_pending",
         "manual_required",
         "tombstoned",
       ].includes(row.state) ||
@@ -406,8 +459,30 @@ export class JellyfinActivationOperationRepository {
     )
       throw new JellyfinActivationOperationError("invalid_input");
     const record: JellyfinActivationOperation = {
-      ...row,
+      artifactRevision: row.artifactRevision,
+      connectorConfigGeneration: row.connectorConfigGeneration,
+      connectorId: row.connectorId,
+      connectorInstanceGeneration: row.connectorInstanceGeneration,
+      connectorInstanceIdentityHash: row.connectorInstanceIdentityHash,
+      createAttemptCount: row.createAttemptCount,
+      createDispatchedAt: row.createDispatchedAt,
+      createdIdRecordedAt: row.createdIdRecordedAt,
+      externalIdentityId: row.externalIdentityId,
       failureCode: parseFailureCode(row.failureCode),
+      id: row.id,
+      invitationId: row.invitationId,
+      leaseExpiresAt: row.leaseExpiresAt,
+      leaseOwner: row.leaseOwner,
+      manualRequiredAt: row.manualRequiredAt,
+      provisioningRevision: row.provisioningRevision,
+      reservedAt: row.reservedAt,
+      retryCount: row.retryCount,
+      revision: row.revision,
+      state: row.state,
+      tombstonedAt: row.tombstonedAt,
+      userId: row.userId,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
     };
     Object.defineProperty(record, "toJSON", {
       value: () => {

@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "f8dd8c6c-5def-4aeb-a43a-29fd3d72e9f0",
+  "id": "d5d4d78a-ee59-4dd2-b7d2-b262b670f54e",
   "prevId": "811ec4f7-0291-4882-ab4b-d5a7a19be614",
   "tables": {
     "acquisition_grab_operations": {
@@ -2735,6 +2735,14 @@
           "autoincrement": false,
           "default": 0
         },
+        "cleanup_eligible": {
+          "name": "cleanup_eligible",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
         "lease_owner": {
           "name": "lease_owner",
           "type": "text",
@@ -2833,12 +2841,33 @@
         }
       },
       "indexes": {
-        "jellyfin_activation_operations_invitation_user_identity_unique": {
-          "name": "jellyfin_activation_operations_invitation_user_identity_unique",
+        "jellyfin_activation_operations_invitation_unique": {
+          "name": "jellyfin_activation_operations_invitation_unique",
           "columns": [
-            "invitation_id",
-            "user_id",
+            "invitation_id"
+          ],
+          "isUnique": true
+        },
+        "jellyfin_activation_operations_user_unique": {
+          "name": "jellyfin_activation_operations_user_unique",
+          "columns": [
+            "user_id"
+          ],
+          "isUnique": true
+        },
+        "jellyfin_activation_operations_external_identity_unique": {
+          "name": "jellyfin_activation_operations_external_identity_unique",
+          "columns": [
             "external_identity_id"
+          ],
+          "isUnique": true
+        },
+        "jellyfin_activation_operations_id_user_connector_unique": {
+          "name": "jellyfin_activation_operations_id_user_connector_unique",
+          "columns": [
+            "id",
+            "user_id",
+            "connector_id"
           ],
           "isUnique": true
         },
@@ -2948,7 +2977,7 @@
         },
         "jellyfin_activation_operations_state_check": {
           "name": "jellyfin_activation_operations_state_check",
-          "value": "\"jellyfin_activation_operations\".\"state\" in ('reserved', 'create_dispatched', 'created_id_recorded', 'manual_required', 'tombstoned')"
+          "value": "\"jellyfin_activation_operations\".\"state\" in ('reserved', 'create_dispatched', 'created', 'policy_pending', 'auth_pending', 'manual_required', 'tombstoned')"
         },
         "jellyfin_activation_operations_revision_check": {
           "name": "jellyfin_activation_operations_revision_check",
@@ -2956,7 +2985,7 @@
         },
         "jellyfin_activation_operations_attempt_check": {
           "name": "jellyfin_activation_operations_attempt_check",
-          "value": "\"jellyfin_activation_operations\".\"create_attempt_count\" between 0 and 1 and \"jellyfin_activation_operations\".\"retry_count\" between 0 and 8 and \"jellyfin_activation_operations\".\"cleanup_attempt_count\" between 0 and 8"
+          "value": "\"jellyfin_activation_operations\".\"create_attempt_count\" between 0 and 1 and \"jellyfin_activation_operations\".\"retry_count\" between 0 and 8 and \"jellyfin_activation_operations\".\"cleanup_attempt_count\" between 0 and 8 and \"jellyfin_activation_operations\".\"cleanup_eligible\" in (0, 1)"
         },
         "jellyfin_activation_operations_failure_code_check": {
           "name": "jellyfin_activation_operations_failure_code_check",
@@ -2968,7 +2997,7 @@
         },
         "jellyfin_activation_operations_state_attribution_check": {
           "name": "jellyfin_activation_operations_state_attribution_check",
-          "value": "(\"jellyfin_activation_operations\".\"state\" = 'reserved' and \"jellyfin_activation_operations\".\"create_attempt_count\" = 0 and \"jellyfin_activation_operations\".\"create_dispatched_at\" is null and \"jellyfin_activation_operations\".\"created_id_recorded_at\" is null and \"jellyfin_activation_operations\".\"manual_required_at\" is null and \"jellyfin_activation_operations\".\"tombstoned_at\" is null and \"jellyfin_activation_operations\".\"encrypted_stage_artifact\" is null) or (\"jellyfin_activation_operations\".\"state\" = 'create_dispatched' and \"jellyfin_activation_operations\".\"create_attempt_count\" = 1 and \"jellyfin_activation_operations\".\"create_dispatched_at\" is not null and \"jellyfin_activation_operations\".\"created_id_recorded_at\" is null and \"jellyfin_activation_operations\".\"manual_required_at\" is null and \"jellyfin_activation_operations\".\"tombstoned_at\" is null and \"jellyfin_activation_operations\".\"encrypted_stage_artifact\" is null) or (\"jellyfin_activation_operations\".\"state\" = 'created_id_recorded' and \"jellyfin_activation_operations\".\"create_attempt_count\" = 1 and \"jellyfin_activation_operations\".\"create_dispatched_at\" is not null and \"jellyfin_activation_operations\".\"created_id_recorded_at\" is not null and \"jellyfin_activation_operations\".\"manual_required_at\" is null and \"jellyfin_activation_operations\".\"tombstoned_at\" is null and \"jellyfin_activation_operations\".\"encrypted_stage_artifact\" is not null) or (\"jellyfin_activation_operations\".\"state\" = 'manual_required' and \"jellyfin_activation_operations\".\"manual_required_at\" is not null and \"jellyfin_activation_operations\".\"tombstoned_at\" is null and \"jellyfin_activation_operations\".\"encrypted_stage_artifact\" is null) or (\"jellyfin_activation_operations\".\"state\" = 'tombstoned' and \"jellyfin_activation_operations\".\"tombstoned_at\" is not null and \"jellyfin_activation_operations\".\"encrypted_stage_artifact\" is null)"
+          "value": "(\"jellyfin_activation_operations\".\"state\" = 'reserved' and \"jellyfin_activation_operations\".\"create_attempt_count\" = 0 and \"jellyfin_activation_operations\".\"create_dispatched_at\" is null and \"jellyfin_activation_operations\".\"created_id_recorded_at\" is null and \"jellyfin_activation_operations\".\"manual_required_at\" is null and \"jellyfin_activation_operations\".\"tombstoned_at\" is null and \"jellyfin_activation_operations\".\"encrypted_stage_artifact\" is null and \"jellyfin_activation_operations\".\"cleanup_eligible\" = 0) or (\"jellyfin_activation_operations\".\"state\" = 'create_dispatched' and \"jellyfin_activation_operations\".\"create_attempt_count\" = 1 and \"jellyfin_activation_operations\".\"create_dispatched_at\" is not null and \"jellyfin_activation_operations\".\"created_id_recorded_at\" is null and \"jellyfin_activation_operations\".\"manual_required_at\" is null and \"jellyfin_activation_operations\".\"tombstoned_at\" is null and \"jellyfin_activation_operations\".\"encrypted_stage_artifact\" is null and \"jellyfin_activation_operations\".\"cleanup_eligible\" = 0) or (\"jellyfin_activation_operations\".\"state\" in ('created', 'policy_pending', 'auth_pending') and \"jellyfin_activation_operations\".\"create_attempt_count\" = 1 and \"jellyfin_activation_operations\".\"create_dispatched_at\" is not null and \"jellyfin_activation_operations\".\"created_id_recorded_at\" is not null and \"jellyfin_activation_operations\".\"manual_required_at\" is null and \"jellyfin_activation_operations\".\"tombstoned_at\" is null and \"jellyfin_activation_operations\".\"encrypted_stage_artifact\" is not null and \"jellyfin_activation_operations\".\"cleanup_eligible\" = 1) or (\"jellyfin_activation_operations\".\"state\" = 'manual_required' and \"jellyfin_activation_operations\".\"manual_required_at\" is not null and \"jellyfin_activation_operations\".\"tombstoned_at\" is null and ((\"jellyfin_activation_operations\".\"encrypted_stage_artifact\" is null and \"jellyfin_activation_operations\".\"cleanup_eligible\" = 0) or (\"jellyfin_activation_operations\".\"encrypted_stage_artifact\" is not null and \"jellyfin_activation_operations\".\"cleanup_eligible\" = 1))) or (\"jellyfin_activation_operations\".\"state\" = 'tombstoned' and \"jellyfin_activation_operations\".\"tombstoned_at\" is not null and \"jellyfin_activation_operations\".\"encrypted_stage_artifact\" is null and \"jellyfin_activation_operations\".\"cleanup_eligible\" = 0)"
         },
         "jellyfin_activation_operations_timestamp_order_check": {
           "name": "jellyfin_activation_operations_timestamp_order_check",
@@ -7217,10 +7246,14 @@
           "tableFrom": "service_identity_links",
           "tableTo": "jellyfin_activation_operations",
           "columnsFrom": [
-            "provisioned_by_activation_id"
+            "provisioned_by_activation_id",
+            "user_id",
+            "connector_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "user_id",
+            "connector_id"
           ],
           "onDelete": "restrict",
           "onUpdate": "restrict"

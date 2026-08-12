@@ -1221,6 +1221,7 @@ function sanitizeJellyfinActivationOperations(sqlite: Database.Database, now: nu
     update main.jellyfin_activation_operations
     set state = case when state in ('manual_required', 'tombstoned') then state else 'manual_required' end,
         encrypted_stage_artifact = null, artifact_revision = artifact_revision + 1,
+        cleanup_eligible = 0,
         lease_owner = null, lease_expires_at = null,
         failure_code = case when state = 'tombstoned' then failure_code else 'restore_sanitized' end,
         manual_required_at = case when state = 'tombstoned' then manual_required_at else max(created_at, ${now}) end,
@@ -1400,6 +1401,9 @@ function mergeRollbackJellyfinProvisioningFacts(sqlite: Database.Database, rootK
 }
 
 function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number, rootKey?: Buffer) {
+  // The marker is a dependent FK. Clear it before replacing rollback activation rows,
+  // then restore only a marker authorized by the selected current timeline.
+  sqlite.exec("update main.service_identity_links set provisioned_by_activation_id = null");
   const exhaustedRevision = sqlite
     .prepare(
       `select 1 from main.service_identity_links restored
@@ -1431,7 +1435,6 @@ function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number, root
   // Preserve only the current timeline's negative provisioning authority. Credential-bearing
   // configuration is intentionally never imported across the restore boundary.
   mergeRollbackJellyfinProvisioningFacts(sqlite, rootKey);
-  mergeRollbackJellyfinActivationFacts(sqlite, now);
 
   sqlite.exec(`
     update main.users as restored
@@ -1628,6 +1631,20 @@ function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number, root
   mergeIdempotencyReceipts(sqlite);
   mergeRollbackExternalMutationFacts(sqlite);
   mergeRollbackInvitationFacts(sqlite, now);
+  mergeRollbackJellyfinActivationFacts(sqlite, now);
+  sqlite.exec(`
+    update main.service_identity_links as restored
+    set provisioned_by_activation_id = (
+      select current.provisioned_by_activation_id
+      from rollback_timeline.service_identity_links current
+      join main.jellyfin_activation_operations operation
+        on operation.id = current.provisioned_by_activation_id
+       and operation.user_id = current.user_id
+       and operation.connector_id = current.connector_id
+      where current.id = restored.id
+    )
+    where exists (select 1 from rollback_timeline.service_identity_links current where current.id = restored.id);
+  `);
 }
 
 function quarantineAuthorityWithoutCurrentTimeline(sqlite: Database.Database, now: number) {
