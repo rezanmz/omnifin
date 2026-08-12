@@ -1382,7 +1382,7 @@ describe("authentication schema invariants", () => {
     try {
       database.migrate();
       database.migrate();
-      expect(migrationFilenames.at(-1)).toBe("0038_charming_goblin_queen.sql");
+      expect(migrationFilenames.at(-1)).toBe("0039_jellyfin_activation_completion.sql");
       const tables = database.sqlite
         .prepare("select name from sqlite_master where type = 'table' order by name")
         .all() as { name: string }[];

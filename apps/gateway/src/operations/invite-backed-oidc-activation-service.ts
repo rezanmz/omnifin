@@ -111,7 +111,9 @@ export class InviteBackedOidcActivationService {
                     o.state, o.activation_status as activationStatus
              from jellyfin_activation_operations o
              join invitations i on i.activation_operation_id = o.id
-             where i.id = ? and i.activation_operation_id = o.id`,
+             where i.id = ? and i.activation_operation_id = o.id
+               and i.activation_claimed_at = i.consumed_at
+               and i.revoked_at is null and i.expires_at > ${now}`,
           )
           .get(input.invitationId) as
           | {
@@ -263,12 +265,14 @@ export class InviteBackedOidcActivationService {
           ? (this.#database.sqlite
               .prepare(
                 `select activation_operation_id as activationOperationId, consumed_at as consumedAt,
-                        revoked_at as revokedAt from invitations where id = ?`,
+                        activation_claimed_at as activationClaimedAt, expires_at as expiresAt, revoked_at as revokedAt from invitations where id = ?`,
               )
               .get(operation.invitationId) as
               | {
                   activationOperationId: string | null;
+                  activationClaimedAt: number | null;
                   consumedAt: number | null;
+                  expiresAt: number;
                   revokedAt: number | null;
                 }
               | undefined)
@@ -353,7 +357,7 @@ export class InviteBackedOidcActivationService {
         (id,user_id,service,connector_id,connector_instance_generation,external_server_id,external_user_id,
          external_username,external_display_name,encrypted_access_token,provisioned_by_activation_id,device_id,
          token_created_at,health_state,last_verified_at,revision,created_at,updated_at)
-        values (?,?,'jellyfin',?,?,?,?,?,?,?,?,?,'linked',?,0,?,?)`,
+        values (?, ?, 'jellyfin', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'linked', ?, 0, ?, ?)`,
           )
           .run(
             linkId,

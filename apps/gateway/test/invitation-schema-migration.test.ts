@@ -19,6 +19,8 @@ describe("invitation schema migration", () => {
         "registration_handoff_hash",
         "registration_handoff_expires_at",
         "created_at",
+        "activation_operation_id",
+        "activation_claimed_at",
       ]);
       expect(columns).not.toContain("role");
       expect(columns).not.toContain("recipient");

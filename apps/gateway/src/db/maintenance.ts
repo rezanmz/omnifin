@@ -1233,6 +1233,17 @@ function sanitizeJellyfinActivationOperations(sqlite: Database.Database, now: nu
       delete from main.jellyfin_activation_cleanup_reservations;
     `);
   }
+  // A completed operation is authoritative only when its marked link survived the
+  // restore. Drop orphaned completed records before the completion trigger sees them.
+  sqlite.exec(`
+    delete from main.jellyfin_activation_operations
+    where activation_status = 'completed'
+      and not exists (
+        select 1 from main.service_identity_links link
+        where link.id = activation_completed_link_id
+          and link.provisioned_by_activation_id = jellyfin_activation_operations.id
+      );
+  `);
   sqlite.exec(`
     update main.jellyfin_activation_operations
     set state = case when state in ('manual_required', 'tombstoned') then state else 'manual_required' end,

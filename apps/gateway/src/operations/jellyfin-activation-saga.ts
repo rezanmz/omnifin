@@ -529,19 +529,19 @@ export class JellyfinActivationSaga {
     const invitation = checkInvitation
       ? (this.#database.sqlite
           .prepare(
-            "select id, consumed_at as consumedAt, revoked_at as revokedAt, expires_at as expiresAt from invitations where id = ?",
+            "select id, consumed_at as consumedAt, activation_claimed_at as activationClaimedAt, activation_operation_id as operationId, revoked_at as revokedAt, expires_at as expiresAt from invitations where id = ?",
           )
           .get(operation.invitationId) as
-          | { consumedAt: number | null; expiresAt: number; id: string; revokedAt: number | null }
+          | {
+              consumedAt: number | null;
+              activationClaimedAt: number | null;
+              operationId: string | null;
+              expiresAt: number;
+              id: string;
+              revokedAt: number | null;
+            }
           | undefined)
       : undefined;
-    const invitationOperationId = invitation
-      ? ((
-          this.#database.sqlite
-            .prepare("select activation_operation_id as operationId from invitations where id = ?")
-            .get(operation.invitationId) as { operationId: string | null } | undefined
-        )?.operationId ?? null)
-      : null;
     if (checkLocalState && (!local || local.userStatus !== "pending_link"))
       return { reason: "user_not_pending" };
     if (checkLocalState && (local?.linkExists ?? 1) !== 0) return { reason: "link_exists" };
@@ -554,8 +554,12 @@ export class JellyfinActivationSaga {
       checkInvitation &&
       (!invitation ||
         invitation.revokedAt !== null ||
-        (invitation.consumedAt !== null && invitationOperationId !== operation.id) ||
-        (invitationOperationId !== null && invitation.consumedAt === null))
+        (invitation.operationId !== null &&
+          (invitation.consumedAt === null ||
+            invitation.activationClaimedAt !== invitation.consumedAt ||
+            invitation.operationId !== operation.id ||
+            invitation.activationClaimedAt === null ||
+            invitation.activationClaimedAt >= invitation.expiresAt)))
     )
       return { reason: "identity_invalid" };
     if (checkInvitation && this.#clock() >= invitation!.expiresAt) {

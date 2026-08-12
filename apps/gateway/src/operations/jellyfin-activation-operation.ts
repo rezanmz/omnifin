@@ -290,7 +290,9 @@ export class JellyfinActivationOperationRepository {
         );
       const marker = this.#sqlite
         .prepare(
-          "update invitations set activation_operation_id = ? where id = ? and activation_operation_id is null",
+          `update invitations set activation_operation_id = ?, activation_claimed_at = consumed_at
+           where id = ? and activation_operation_id is null and consumed_at is not null
+             and activation_claimed_at is null`,
         )
         .run(input.id, input.invitationId);
       if (marker.changes !== 1) throw new JellyfinActivationOperationError("reservation_conflict");

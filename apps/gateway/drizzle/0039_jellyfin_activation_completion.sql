@@ -1,5 +1,7 @@
 ALTER TABLE `invitations` ADD `activation_operation_id` text;
 --> statement-breakpoint
+ALTER TABLE `invitations` ADD `activation_claimed_at` integer;
+--> statement-breakpoint
 ALTER TABLE `jellyfin_activation_operations` ADD `activation_status` text NOT NULL DEFAULT 'pending';
 --> statement-breakpoint
 ALTER TABLE `jellyfin_activation_operations` ADD `activation_completed_link_id` text;
@@ -34,3 +36,14 @@ WHEN NEW.activation_operation_id IS NOT NULL AND NOT EXISTS (
   WHERE operation.id = NEW.activation_operation_id AND operation.invitation_id = NEW.id
 )
 BEGIN SELECT RAISE(ABORT, 'invitation activation binding mismatch'); END;
+
+--> statement-breakpoint
+CREATE TRIGGER `invitations_activation_claim_guard`
+BEFORE UPDATE OF activation_claimed_at ON `invitations`
+WHEN NEW.activation_claimed_at IS NOT NULL AND NOT (NEW.consumed_at IS NOT NULL AND NEW.activation_claimed_at = NEW.consumed_at AND NEW.activation_claimed_at < NEW.expires_at AND NEW.activation_operation_id IS NOT NULL)
+BEGIN SELECT RAISE(ABORT, 'invitation activation claim mismatch'); END;
+--> statement-breakpoint
+CREATE TRIGGER `invitations_activation_claim_immutable_guard`
+BEFORE UPDATE OF activation_claimed_at ON `invitations`
+WHEN OLD.activation_claimed_at IS NOT NULL AND NEW.activation_claimed_at <> OLD.activation_claimed_at
+BEGIN SELECT RAISE(ABORT, 'invitation activation claim immutable'); END;

@@ -2589,6 +2589,13 @@
           "notNull": true,
           "autoincrement": false,
           "default": "(unixepoch('subsec') * 1000)"
+        },
+        "activation_claimed_at": {
+          "name": "activation_claimed_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         }
       },
       "indexes": {
