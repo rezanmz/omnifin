@@ -42,6 +42,8 @@ export interface ReserveJellyfinActivationInput extends JellyfinActivationBindin
   leaseOwner: string;
   now: number;
   userId: string;
+  invitationClaimedAt?: number;
+  pendingOidcSessionId?: string;
 }
 
 export interface JellyfinActivationOperation {
@@ -60,8 +62,10 @@ export interface JellyfinActivationOperation {
   readonly failureCode: JellyfinActivationFailureCode | null;
   readonly id: string;
   readonly invitationId: string;
+  readonly invitationClaimedAt: number | null;
   readonly leaseExpiresAt: number | null;
   readonly leaseOwner: string | null;
+  readonly pendingOidcSessionId: string | null;
   readonly manualRequiredAt: number | null;
   readonly provisioningRevision: number;
   readonly reservedAt: number;
@@ -122,6 +126,7 @@ interface ActivationRow {
   failureCode: string | null;
   id: string;
   invitationId: string;
+  invitationClaimedAt: number | null;
   leaseExpiresAt: number | null;
   leaseOwner: string | null;
   manualRequiredAt: number | null;
@@ -134,6 +139,7 @@ interface ActivationRow {
   updatedAt: number;
   completedAt: number | null;
   userId: string;
+  pendingOidcSessionId: string | null;
 }
 
 const SELECT = `select id, invitation_id as invitationId, user_id as userId,
@@ -151,7 +157,8 @@ const SELECT = `select id, invitation_id as invitationId, user_id as userId,
  manual_required_at as manualRequiredAt, tombstoned_at as tombstonedAt,
  created_at as createdAt, updated_at as updatedAt,
  activation_status as activationStatus, activation_completed_link_id as activationCompletedLinkId,
- completed_at as completedAt
+ completed_at as completedAt, invitation_claimed_at as invitationClaimedAt,
+ pending_oidc_session_id as pendingOidcSessionId
  from jellyfin_activation_operations`;
 
 function validTime(value: number) {
@@ -191,6 +198,18 @@ function assertReservation(input: ReserveJellyfinActivationInput) {
   text(input.externalIdentityId);
   text(input.connectorId);
   text(input.leaseOwner);
+  if (input.invitationClaimedAt !== undefined && !validTime(input.invitationClaimedAt))
+    throw new JellyfinActivationOperationError("invalid_input");
+  if (
+    input.pendingOidcSessionId !== undefined &&
+    !/^[A-Za-z0-9_-]{8,128}$/u.test(input.pendingOidcSessionId)
+  )
+    throw new JellyfinActivationOperationError("invalid_input");
+}
+
+function assertAdmissionReservation(input: ReserveJellyfinActivationInput) {
+  if (input.invitationClaimedAt === undefined || input.pendingOidcSessionId === undefined)
+    throw new JellyfinActivationOperationError("invalid_input");
 }
 
 function parseFailureCode(value: string | null): JellyfinActivationFailureCode | null {
@@ -259,9 +278,25 @@ export class JellyfinActivationOperationRepository {
 
   public reserveInExistingTransaction(input: ReserveJellyfinActivationInput) {
     assertReservation(input);
+    assertAdmissionReservation(input);
     if (!this.#sqlite.inTransaction)
       throw new JellyfinActivationOperationError("invalid_transition");
     try {
+      const invitation = this.#sqlite
+        .prepare(
+          `select consumed_at as consumedAt, expires_at as expiresAt, revoked_at as revokedAt
+           from invitations where id = ?`,
+        )
+        .get(input.invitationId) as
+        { consumedAt: number | null; expiresAt: number; revokedAt: number | null } | undefined;
+      if (
+        !invitation ||
+        invitation.revokedAt !== null ||
+        invitation.consumedAt !== input.invitationClaimedAt ||
+        input.invitationClaimedAt >= invitation.expiresAt ||
+        input.now >= invitation.expiresAt
+      )
+        throw new JellyfinActivationOperationError("reservation_conflict");
       this.#sqlite
         .prepare(
           `insert into jellyfin_activation_operations (
@@ -269,8 +304,9 @@ export class JellyfinActivationOperationRepository {
             connector_config_generation, connector_instance_generation,
             connector_instance_identity_hash, provisioning_revision, state, revision,
             artifact_revision, lease_owner, lease_expires_at, create_attempt_count,
-            retry_count, cleanup_attempt_count, reserved_at, created_at, updated_at
-          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', 0, 0, ?, ?, 0, 0, 0, ?, ?, ?)`,
+            retry_count, cleanup_attempt_count, reserved_at, created_at, updated_at,
+            invitation_claimed_at, pending_oidc_session_id
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', 0, 0, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?)`,
         )
         .run(
           input.id,
@@ -287,14 +323,16 @@ export class JellyfinActivationOperationRepository {
           input.now,
           input.now,
           input.now,
+          input.invitationClaimedAt,
+          input.pendingOidcSessionId,
         );
       const marker = this.#sqlite
         .prepare(
-          `update invitations set activation_operation_id = ?, activation_claimed_at = consumed_at
-           where id = ? and activation_operation_id is null and consumed_at is not null
-             and activation_claimed_at is null`,
+          `update invitations set activation_operation_id = ?
+           where id = ? and activation_operation_id is null
+             and consumed_at = ? and ? < expires_at and revoked_at is null`,
         )
-        .run(input.id, input.invitationId);
+        .run(input.id, input.invitationId, input.invitationClaimedAt, input.now);
       if (marker.changes !== 1) throw new JellyfinActivationOperationError("reservation_conflict");
     } catch (error) {
       if ((error as { code?: unknown }).code === "SQLITE_CONSTRAINT_UNIQUE") {
@@ -915,8 +953,10 @@ export class JellyfinActivationOperationRepository {
       failureCode: parseFailureCode(row.failureCode),
       id: row.id,
       invitationId: row.invitationId,
+      invitationClaimedAt: row.invitationClaimedAt,
       leaseExpiresAt: row.leaseExpiresAt,
       leaseOwner: row.leaseOwner,
+      pendingOidcSessionId: row.pendingOidcSessionId,
       manualRequiredAt: row.manualRequiredAt,
       provisioningRevision: row.provisioningRevision,
       reservedAt: row.reservedAt,

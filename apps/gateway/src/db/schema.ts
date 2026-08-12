@@ -467,6 +467,8 @@ export const jellyfinActivationOperations = sqliteTable(
     createdIdRecordedAt: integer("created_id_recorded_at", { mode: "timestamp_ms" }),
     manualRequiredAt: integer("manual_required_at", { mode: "timestamp_ms" }),
     tombstonedAt: integer("tombstoned_at", { mode: "timestamp_ms" }),
+    invitationClaimedAt: integer("invitation_claimed_at", { mode: "timestamp_ms" }),
+    pendingOidcSessionId: text("pending_oidc_session_id"),
     activationStatus: text("activation_status", { enum: ["pending", "completed"] })
       .notNull()
       .default("pending"),
@@ -2219,7 +2221,6 @@ export const invitations = sqliteTable(
       mode: "timestamp_ms",
     }),
     activationOperationId: text("activation_operation_id"),
-    activationClaimedAt: integer("activation_claimed_at", { mode: "timestamp_ms" }),
     createdAt: timestamps.createdAt,
   },
   (table) => [
@@ -2256,11 +2257,6 @@ export const invitations = sqliteTable(
         and (${table.consumedAt} is null or (${table.consumedAt} >= ${table.createdAt} and ${table.consumedAt} < ${table.expiresAt}))
         and (${table.revokedAt} is null or (${table.revokedAt} >= ${table.createdAt} and ${table.revokedAt} < ${table.expiresAt}))
         and (${table.consumedAt} is null or ${table.revokedAt} is null)
-        and (${table.activationClaimedAt} is null or (
-          ${table.consumedAt} is not null
-          and ${table.activationClaimedAt} = ${table.consumedAt}
-          and ${table.activationClaimedAt} < ${table.expiresAt}
-        ))
         and ((${table.registrationHandoffHash} is null and ${table.registrationHandoffExpiresAt} is null)
           or (${table.registrationHandoffHash} is not null and ${table.registrationHandoffExpiresAt} is not null))
         and (${table.consumedAt} is null and ${table.revokedAt} is null

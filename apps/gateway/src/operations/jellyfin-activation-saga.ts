@@ -189,7 +189,12 @@ export class JellyfinActivationSaga {
     if (operation.state === "manual_required" || operation.state === "tombstoned") {
       return internalResult("manual_pairing", this.#safeReason(operation.failureCode));
     }
-    if (operation.state === "auth_pending") return internalResult("activated_ready");
+    if (operation.state === "auth_pending") {
+      const reason = this.#invitationEligibility(operation);
+      return reason
+        ? this.#manual(repository, operation, reason)
+        : internalResult("activated_ready");
+    }
     if (operation.state === "create_dispatched" && operation.createdIdRecordedAt === null) {
       if (operation.leaseExpiresAt !== null && operation.leaseExpiresAt >= this.#clock()) {
         return internalResult("in_progress");
@@ -442,7 +447,10 @@ export class JellyfinActivationSaga {
     }
 
     let current = repository.read(operation.id)!;
-    if (current.state === "auth_pending") return internalResult("activated_ready");
+    if (current.state === "auth_pending") {
+      const reason = this.#invitationEligibility(current);
+      return reason ? this.#manual(repository, current, reason) : internalResult("activated_ready");
+    }
     try {
       current = repository.acquireStageLease({
         id: current.id,
@@ -526,22 +534,6 @@ export class JellyfinActivationSaga {
       )
       .get(operation.externalIdentityId, operation.userId) as
       { identityUserId: string | null; linkExists: number; userStatus: string } | undefined;
-    const invitation = checkInvitation
-      ? (this.#database.sqlite
-          .prepare(
-            "select id, consumed_at as consumedAt, activation_claimed_at as activationClaimedAt, activation_operation_id as operationId, revoked_at as revokedAt, expires_at as expiresAt from invitations where id = ?",
-          )
-          .get(operation.invitationId) as
-          | {
-              consumedAt: number | null;
-              activationClaimedAt: number | null;
-              operationId: string | null;
-              expiresAt: number;
-              id: string;
-              revokedAt: number | null;
-            }
-          | undefined)
-      : undefined;
     if (checkLocalState && (!local || local.userStatus !== "pending_link"))
       return { reason: "user_not_pending" };
     if (checkLocalState && (local?.linkExists ?? 1) !== 0) return { reason: "link_exists" };
@@ -550,20 +542,9 @@ export class JellyfinActivationSaga {
     if (checkLocalState && (local?.linkExists ?? 1) !== 0) return { reason: "link_exists" };
     if (checkLocalState && (local?.identityUserId ?? null) !== operation.userId)
       return { reason: "identity_invalid" };
-    if (
-      checkInvitation &&
-      (!invitation ||
-        invitation.revokedAt !== null ||
-        (invitation.operationId !== null &&
-          (invitation.consumedAt === null ||
-            invitation.activationClaimedAt !== invitation.consumedAt ||
-            invitation.operationId !== operation.id ||
-            invitation.activationClaimedAt === null ||
-            invitation.activationClaimedAt >= invitation.expiresAt)))
-    )
-      return { reason: "identity_invalid" };
-    if (checkInvitation && this.#clock() >= invitation!.expiresAt) {
-      return { reason: "invite_expired" };
+    if (checkInvitation) {
+      const reason = this.#invitationEligibility(operation);
+      if (reason) return { reason };
     }
     const provisioning = this.#database.sqlite
       .prepare(
@@ -645,6 +626,34 @@ export class JellyfinActivationSaga {
       return { reason: "binding_changed" };
     }
     return { client, connector, credential, policy: state.template.policy, serverId };
+  }
+
+  #invitationEligibility(operation: JellyfinActivationOperation): JellyfinActivationReason | null {
+    const invitation = this.#database.sqlite
+      .prepare(
+        "select consumed_at as consumedAt, activation_operation_id as operationId, revoked_at as revokedAt, expires_at as expiresAt from invitations where id = ?",
+      )
+      .get(operation.invitationId) as
+      | {
+          consumedAt: number | null;
+          operationId: string | null;
+          revokedAt: number | null;
+          expiresAt: number;
+        }
+      | undefined;
+    if (
+      !invitation ||
+      invitation.revokedAt !== null ||
+      invitation.consumedAt === null ||
+      operation.invitationClaimedAt === null ||
+      invitation.operationId !== operation.id ||
+      invitation.consumedAt !== operation.invitationClaimedAt
+    )
+      return "identity_invalid";
+    return this.#clock() >= invitation.expiresAt ||
+      operation.invitationClaimedAt >= invitation.expiresAt
+      ? "invite_expired"
+      : null;
   }
 
   #credentials(operationId: string) {

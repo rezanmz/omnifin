@@ -61,6 +61,21 @@ function prepareCreated(repository: JellyfinActivationOperationRepository) {
   });
 }
 
+function prepareClaimed(
+  repository: JellyfinActivationOperationRepository,
+  sqlite: Database.Database,
+) {
+  sqlite.prepare("update invitations set consumed_at = 100 where id = ?").run("invite_0001");
+  sqlite.transaction(() =>
+    repository.reserveInExistingTransaction({
+      ...reservation({
+        invitationClaimedAt: 100,
+        pendingOidcSessionId: "pending-session",
+      }),
+    }),
+  )();
+}
+
 function reservation(
   overrides: Partial<Parameters<JellyfinActivationOperationRepository["reserve"]>[0]> = {},
 ) {
@@ -82,6 +97,28 @@ function reservation(
 }
 
 describe("Jellyfin activation operation repository", () => {
+  it("rejects admission when the current time is past the invitation expiry", () => {
+    const { repository, sqlite } = fixture();
+    sqlite
+      .prepare("update invitations set consumed_at = 100, expires_at = 200 where id = ?")
+      .run("invite_0001");
+    expect(() =>
+      sqlite.transaction(() =>
+        repository.reserveInExistingTransaction({
+          ...reservation({
+            invitationClaimedAt: 100,
+            pendingOidcSessionId: "pending-session",
+            now: 300,
+            leaseExpiresAt: 400,
+          }),
+        }),
+      )(),
+    ).toThrowError(expect.objectContaining({ code: "reservation_conflict" }));
+    expect(
+      sqlite.prepare("select count(*) as count from jellyfin_activation_operations").get(),
+    ).toEqual({ count: 0 });
+  });
+
   it.each([
     ["invitationId", { invitationId: "invite_0001", id: "jellyfin_activation_2" }],
     ["userId", { userId: "user-0001", id: "jellyfin_activation_2", invitationId: "invite_0002" }],
@@ -448,7 +485,9 @@ describe("Jellyfin activation operation repository", () => {
       "update jellyfin_activation_operations set connector_id = 'connector-0002' where id = 'jellyfin_activation_1'",
       "update jellyfin_activation_operations set id = 'jellyfin_activation_2' where id = 'jellyfin_activation_1'",
     ]) {
-      expect(() => sqlite.exec(statement)).toThrow(/activation marker binding mismatch/u);
+      expect(() => sqlite.exec(statement)).toThrow(
+        /activation (marker binding mismatch|claim binding is immutable)/u,
+      );
     }
     expect(
       sqlite
@@ -458,6 +497,51 @@ describe("Jellyfin activation operation repository", () => {
         .get(),
     ).toEqual({ connectorId: "connector-0001", id: "jellyfin_activation_1", userId: "user-0001" });
     expect(sqlite.pragma("foreign_key_check")).toEqual([]);
+  });
+
+  it("protects the claimed invitation and operation authority graph against raw SQL mutation", () => {
+    const { repository, sqlite } = fixture();
+    prepareClaimed(repository, sqlite);
+    expect(() =>
+      sqlite.exec("update invitations set activation_operation_id = null where id = 'invite_0001'"),
+    ).toThrow();
+    expect(() =>
+      sqlite.exec(
+        "update invitations set activation_operation_id = 'jellyfin_activation_2' where id = 'invite_0001'",
+      ),
+    ).toThrow();
+    expect(() =>
+      sqlite.exec("update invitations set consumed_at = 101 where id = 'invite_0001'"),
+    ).toThrow();
+    expect(() =>
+      sqlite.exec("update invitations set consumed_at = null where id = 'invite_0001'"),
+    ).toThrow();
+    expect(() =>
+      sqlite.exec("update invitations set revoked_at = 199 where id = 'invite_0001'"),
+    ).toThrow();
+    expect(() =>
+      sqlite.exec(
+        "update jellyfin_activation_operations set invitation_id = 'invite_0002' where id = 'jellyfin_activation_1'",
+      ),
+    ).toThrow();
+    expect(() =>
+      sqlite.exec(
+        "update jellyfin_activation_operations set invitation_claimed_at = null where id = 'jellyfin_activation_1'",
+      ),
+    ).toThrow();
+    expect(() =>
+      sqlite.exec(
+        "update jellyfin_activation_operations set pending_oidc_session_id = null where id = 'jellyfin_activation_1'",
+      ),
+    ).toThrow();
+    expect(() =>
+      sqlite.exec(
+        "update jellyfin_activation_operations set id = 'jellyfin_activation_2' where id = 'jellyfin_activation_1'",
+      ),
+    ).toThrow();
+    expect(() =>
+      sqlite.exec("delete from jellyfin_activation_operations where id = 'jellyfin_activation_1'"),
+    ).toThrow();
   });
 
   it("rejects all cleanup-dispatch binding mutations", () => {
@@ -516,7 +600,7 @@ describe("Jellyfin activation operation repository", () => {
       sqlite.exec(
         "update jellyfin_activation_operations set id = 'jellyfin_activation_2' where id = 'jellyfin_activation_1'",
       ),
-    ).toThrow(/activation cleanup binding is immutable/u);
+    ).toThrow(/activation (cleanup binding is immutable|claim binding is immutable)/u);
   });
 
   it("rejects unmarked same-binding links before cleanup reservation", () => {

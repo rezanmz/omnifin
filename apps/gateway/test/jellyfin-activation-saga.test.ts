@@ -36,8 +36,8 @@ function fixture(options: { status?: "active" | "pending_link"; link?: boolean }
       '${cipher.encrypt(JSON.stringify({ credentials: { kind: "none" }, schemaVersion: 1 }), "connector_credentials:jellyfin:phase-two-connector")}',
       0, 0, '${identityHash}', 1, 1, 1
     );
-    insert into invitations (id, token_hash, expires_at, created_at)
-      values ('invite_phase_two', '${"i".repeat(43)}', 10000, 1);
+    insert into invitations (id, token_hash, expires_at, consumed_at, created_at)
+      values ('invite_phase_two', '${"i".repeat(43)}', 10000, 100, 1);
     insert into external_identities (id, user_id, provider_id, issuer, subject, last_login_at, created_at, updated_at)
       values ('identity-phase-two', 'phase-two-user', 'provider-phase-two', 'https://issuer.example', 'subject', 1, 1, 1);
   `);
@@ -81,20 +81,24 @@ function fixture(options: { status?: "active" | "pending_link"; link?: boolean }
     `);
   }
   const repository = new JellyfinActivationOperationRepository(database.sqlite, key);
-  repository.reserve({
-    connectorConfigGeneration: 0,
-    connectorId: "phase-two-connector",
-    connectorInstanceGeneration: 0,
-    connectorInstanceIdentityHash: identityHash,
-    externalIdentityId: "identity-phase-two",
-    id: "jellyfin_phase_two",
-    invitationId: "invite_phase_two",
-    leaseExpiresAt: 200,
-    leaseOwner: "reservation-worker",
-    now,
-    provisioningRevision: 1,
-    userId: "phase-two-user",
-  });
+  database.sqlite.transaction(() =>
+    repository.reserveInExistingTransaction({
+      connectorConfigGeneration: 0,
+      connectorId: "phase-two-connector",
+      connectorInstanceGeneration: 0,
+      connectorInstanceIdentityHash: identityHash,
+      externalIdentityId: "identity-phase-two",
+      id: "jellyfin_phase_two",
+      invitationId: "invite_phase_two",
+      leaseExpiresAt: 200,
+      leaseOwner: "reservation-worker",
+      now,
+      provisioningRevision: 1,
+      userId: "phase-two-user",
+      invitationClaimedAt: 100,
+      pendingOidcSessionId: "pending-session",
+    }),
+  )();
   cleanup.push(() => database.close());
   return { database, repository };
 }
@@ -154,6 +158,41 @@ describe("JellyfinActivationSaga", () => {
       accessToken: "created-user-token",
       createdId: "created-upstream-id",
     });
+  });
+
+  it.each([
+    [
+      "revoked",
+      "update invitations set revoked_at = 9999, consumed_at = null where id = 'invite_phase_two'",
+    ],
+    [
+      "changed consumption",
+      "update invitations set consumed_at = 200 where id = 'invite_phase_two'",
+    ],
+    [
+      "cleared consumption",
+      "update invitations set consumed_at = null where id = 'invite_phase_two'",
+    ],
+    [
+      "expired",
+      "update invitations set expires_at = 200, consumed_at = 100 where id = 'invite_phase_two'",
+    ],
+  ])("does not bypass invitation binding from auth_pending after %s", async (_name, mutation) => {
+    const { database, repository } = fixture();
+    const fake = client();
+    await saga(database, fake).run("jellyfin_phase_two");
+    for (const trigger of [
+      "invitations_revocation_binding_guard",
+      "invitations_consumption_binding_guard",
+    ]) {
+      database.sqlite.exec(`drop trigger if exists ${trigger}`);
+    }
+    database.sqlite.exec(mutation);
+    const result = await saga(database, fake).run("jellyfin_phase_two");
+    expect(result.disposition).toBe("manual_pairing");
+    expect(result.reason).not.toBeNull();
+    expect(repository.read("jellyfin_phase_two")?.state).toBe("manual_required");
+    expect(fake.deleteUser).not.toHaveBeenCalled();
   });
 
   it("serializes concurrent callers behind the one-create fence", async () => {
@@ -378,7 +417,7 @@ describe("JellyfinActivationSaga", () => {
   it.each([
     ["revocation", "update invitations set revoked_at = 200 where id = 'invite_phase_two'"],
     ["consumption", "update invitations set consumed_at = 200 where id = 'invite_phase_two'"],
-  ])("cleans an eligible exact ID after invitation %s", async (_name, update) => {
+  ])("blocks mutation of a claimed invitation during cleanup (%s)", async (_name, update) => {
     const { database, repository } = fixture();
     const fake = client();
     await saga(database, fake).run("jellyfin_phase_two");
@@ -387,13 +426,8 @@ describe("JellyfinActivationSaga", () => {
       failureCode: "manual_required",
       now: 400,
     });
-    database.sqlite.exec(update);
-    const sagaInstance = saga(database, fake);
-    const result = await sagaInstance.confirmedCleanup(
-      sagaInstance.createConfirmedCleanupCapability("jellyfin_phase_two"),
-    );
-    expect(result.disposition).toBe("cleanup_confirmed");
-    expect(fake.deleteUser).toHaveBeenCalledTimes(1);
+    expect(() => database.sqlite.exec(update)).toThrow();
+    expect(fake.deleteUser).not.toHaveBeenCalled();
   });
 
   it("does not let a fresh non-eligible operation bypass cleanup preconditions", async () => {
