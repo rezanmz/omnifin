@@ -483,6 +483,8 @@ export class JellyfinActivationSaga {
         ) {
           return this.#manual(repository, current, "response_invalid");
         }
+        const invitationReason = this.#invitationEligibility(current);
+        if (invitationReason) return this.#manual(repository, current, invitationReason);
         repository.recordStageArtifact({
           id: current.id,
           artifact: {

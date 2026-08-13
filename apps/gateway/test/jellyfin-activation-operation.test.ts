@@ -544,6 +544,52 @@ describe("Jellyfin activation operation repository", () => {
     ).toThrow();
   });
 
+  it("rejects null, revoked, and mismatched initial activation markers", () => {
+    const { repository, sqlite } = fixture();
+    repository.reserve(reservation({ id: "jellyfin_activation_2", invitationId: "invite_0002" }));
+    expect(() =>
+      sqlite.exec(
+        "update invitations set activation_operation_id = 'jellyfin_activation_2' where id = 'invite_0002'",
+      ),
+    ).toThrow(/invitation activation marker is immutable/u);
+
+    const insertRawOperation = (id: string, invitationId: string, claim: number | null) => {
+      sqlite
+        .prepare(
+          `insert into jellyfin_activation_operations (
+             id, invitation_id, user_id, external_identity_id, connector_id,
+             connector_config_generation, connector_instance_generation,
+             provisioning_revision, state, revision, artifact_revision, cleanup_eligible,
+             lease_owner, lease_expires_at, create_attempt_count, retry_count,
+             cleanup_attempt_count, reserved_at, created_at, updated_at,
+             invitation_claimed_at, pending_oidc_session_id
+           ) values (?, ?, 'user-0002', 'identity-0002', 'connector-0002',
+             0, 0, 1, 'reserved', 0, 0, 0, 'worker-2', 200, 0, 0, 0, 100, 100, 100, ?, 'pending-2')`,
+        )
+        .run(id, invitationId, claim);
+    };
+    sqlite
+      .prepare("update invitations set consumed_at = 100, revoked_at = null where id = ?")
+      .run("invite_0001");
+    insertRawOperation("jellyfin_activation_3", "invite_0001", 101);
+    expect(() =>
+      sqlite.exec(
+        "update invitations set activation_operation_id = 'jellyfin_activation_3' where id = 'invite_0001'",
+      ),
+    ).toThrow(/invitation activation marker is immutable/u);
+    sqlite.exec("delete from jellyfin_activation_operations where id = 'jellyfin_activation_3'");
+
+    sqlite
+      .prepare("update invitations set consumed_at = null, revoked_at = 100 where id = ?")
+      .run("invite_0001");
+    insertRawOperation("jellyfin_activation_4", "invite_0001", 100);
+    expect(() =>
+      sqlite.exec(
+        "update invitations set activation_operation_id = 'jellyfin_activation_4' where id = 'invite_0001'",
+      ),
+    ).toThrow(/invitation activation marker is immutable/u);
+  });
+
   it("rejects all cleanup-dispatch binding mutations", () => {
     const { repository, sqlite } = fixture();
     prepareCreated(repository);

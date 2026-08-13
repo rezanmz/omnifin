@@ -22,7 +22,12 @@ WHEN (OLD.activation_operation_id IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM jellyfin_activation_operations operation
       WHERE operation.id IS NEW.activation_operation_id
         AND operation.invitation_id IS NEW.id
-        AND operation.invitation_claimed_at IS NEW.consumed_at))
+        AND operation.invitation_claimed_at IS NOT NULL
+        AND NEW.consumed_at IS NOT NULL
+        AND operation.invitation_claimed_at IS NEW.consumed_at
+        AND operation.pending_oidc_session_id IS NOT NULL
+        AND NEW.revoked_at IS NULL
+        AND operation.invitation_claimed_at < NEW.expires_at))
 BEGIN SELECT RAISE(ABORT, 'invitation activation marker is immutable'); END;
 --> statement-breakpoint
 CREATE TRIGGER `invitations_consumption_binding_guard`

@@ -336,6 +336,37 @@ describe("JellyfinActivationSaga", () => {
     expect(longFixture.repository.readStageArtifact("jellyfin_phase_two").createdId).toBe(longId);
   });
 
+  it("revalidates invitation eligibility after authentication crosses expiry", async () => {
+    const { database, repository } = fixture();
+    let now = 300;
+    const fake = client({
+      authenticateCreatedUser: vi.fn(async () => {
+        now = 10000;
+        return {
+          accessToken: "created-user-token",
+          serverId,
+          userId: "created-upstream-id",
+        };
+      }),
+    });
+    const result = await new JellyfinActivationSaga(
+      database,
+      { encryptionKey: key },
+      {
+        clock: () => now,
+        createClient: () => fake,
+        leaseOwner: "expiry-crossing-saga",
+      },
+    ).run("jellyfin_phase_two");
+
+    expect(result).toEqual({ disposition: "manual_pairing", reason: "invite_expired" });
+    expect(fake.createUser).toHaveBeenCalledTimes(1);
+    expect(fake.authenticateCreatedUser).toHaveBeenCalledTimes(1);
+    expect(repository.read("jellyfin_phase_two")?.state).toBe("manual_required");
+    expect(repository.read("jellyfin_phase_two")?.state).not.toBe("auth_pending");
+    expect(repository.readStageArtifact("jellyfin_phase_two")).not.toHaveProperty("accessToken");
+  });
+
   it("terminalizes an expired create fence without calling the client", async () => {
     const { database, repository } = fixture();
     database.sqlite
