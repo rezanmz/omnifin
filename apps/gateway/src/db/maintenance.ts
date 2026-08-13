@@ -1326,6 +1326,163 @@ function mergeRollbackJellyfinActivationFacts(sqlite: Database.Database, now: nu
     )
     .get();
   if (cleanupExists) sqlite.exec("delete from main.jellyfin_activation_cleanup_reservations");
+  // A completed current row is one lineage tuple. The selected row may still
+  // own a different immutable claim binding, so eligibility must not require
+  // that stale marker to already match the current timeline.
+  sqlite.exec(`
+    drop table if exists temp.restore_completed_activation_lineage;
+    create temp table restore_completed_activation_lineage as
+      select current.id as operation_id,
+             current.invitation_id,
+             current.invitation_claimed_at,
+             current.pending_oidc_session_id,
+             current.user_id,
+             current.external_identity_id,
+             current.connector_id,
+             current.connector_config_generation,
+             current.connector_instance_generation,
+             current.connector_instance_identity_hash,
+             current.provisioning_revision,
+             current.activation_completed_link_id as link_id
+      from rollback_timeline.jellyfin_activation_operations current
+      join rollback_timeline.invitations invitation
+        on invitation.id = current.invitation_id
+       and invitation.activation_operation_id = current.id
+       and invitation.consumed_at = current.invitation_claimed_at
+       and current.invitation_claimed_at is not null
+       and invitation.revoked_at is null
+       and current.invitation_claimed_at < invitation.expires_at
+      join rollback_timeline.service_identity_links link
+        on link.id = current.activation_completed_link_id
+       and link.provisioned_by_activation_id = current.id
+       and link.user_id = current.user_id
+       and link.connector_id = current.connector_id
+      join main.users user on user.id = current.user_id
+      join main.external_identities identity
+        on identity.id = current.external_identity_id and identity.user_id = current.user_id
+      join main.connector_configs connector on connector.id = current.connector_id
+      join main.invitations main_invitation
+        on main_invitation.id = current.invitation_id
+       and main_invitation.consumed_at = current.invitation_claimed_at
+       and main_invitation.revoked_at is null
+       and current.invitation_claimed_at < main_invitation.expires_at
+      where current.activation_status = 'completed'
+        and current.state = 'tombstoned'
+        and current.pending_oidc_session_id is not null;
+
+    update main.service_identity_links
+       set provisioned_by_activation_id = null
+     where provisioned_by_activation_id in
+       (select operation_id from temp.restore_completed_activation_lineage)
+        or id in (select link_id from temp.restore_completed_activation_lineage);
+
+    drop trigger if exists main.invitations_activation_marker_guard;
+    drop trigger if exists main.jellyfin_activation_operations_claim_binding_guard;
+    drop trigger if exists main.jellyfin_activation_operations_marker_update_guard;
+
+    update main.invitations
+       set activation_operation_id = null
+     where activation_operation_id in (select operation_id from temp.restore_completed_activation_lineage)
+        or id in (select invitation_id from temp.restore_completed_activation_lineage);
+
+    update main.jellyfin_activation_operations as restored
+       set invitation_id = lineage.invitation_id,
+           invitation_claimed_at = lineage.invitation_claimed_at,
+           pending_oidc_session_id = lineage.pending_oidc_session_id,
+           user_id = lineage.user_id,
+           external_identity_id = lineage.external_identity_id,
+           connector_id = lineage.connector_id,
+           connector_config_generation = lineage.connector_config_generation,
+           connector_instance_generation = lineage.connector_instance_generation,
+           connector_instance_identity_hash = lineage.connector_instance_identity_hash,
+           provisioning_revision = lineage.provisioning_revision
+      from temp.restore_completed_activation_lineage lineage
+     where restored.id = lineage.operation_id;
+
+    insert into main.service_identity_links (
+      id, user_id, service, connector_id, connector_instance_generation,
+      external_server_id, external_user_id, external_username, external_display_name,
+      encrypted_access_token, provisioned_by_activation_id, device_id, token_created_at,
+      health_state, last_verified_at, revoked_at, revision, created_at, updated_at
+    ) select
+      link.id, link.user_id, link.service, link.connector_id, link.connector_instance_generation,
+      link.external_server_id, link.external_user_id, link.external_username,
+      link.external_display_name, link.encrypted_access_token, null, link.device_id,
+      link.token_created_at, link.health_state, link.last_verified_at, link.revoked_at,
+      link.revision, link.created_at, link.updated_at
+    from rollback_timeline.service_identity_links link
+    join temp.restore_completed_activation_lineage lineage on lineage.link_id = link.id
+    where not exists (select 1 from main.service_identity_links restored where restored.id = link.id);
+
+    update main.service_identity_links as restored
+       set user_id = current.user_id,
+           service = current.service,
+           connector_id = current.connector_id,
+           connector_instance_generation = current.connector_instance_generation,
+           external_server_id = current.external_server_id,
+           external_user_id = current.external_user_id,
+           external_username = current.external_username,
+           external_display_name = current.external_display_name,
+           encrypted_access_token = current.encrypted_access_token,
+           token_created_at = current.token_created_at,
+           health_state = current.health_state,
+           last_verified_at = current.last_verified_at,
+           revoked_at = current.revoked_at,
+           revision = current.revision,
+           created_at = current.created_at,
+           updated_at = current.updated_at
+      from rollback_timeline.service_identity_links current
+      join temp.restore_completed_activation_lineage lineage on lineage.link_id = current.id
+     where restored.id = current.id;
+
+    update main.service_identity_links as restored
+       set provisioned_by_activation_id = lineage.operation_id
+      from temp.restore_completed_activation_lineage lineage
+     where restored.id = lineage.link_id;
+
+    update main.invitations as restored
+       set activation_operation_id = lineage.operation_id
+      from temp.restore_completed_activation_lineage lineage
+     where restored.id = lineage.invitation_id;
+
+    create trigger invitations_activation_marker_guard
+    before update of activation_operation_id on main.invitations
+    when (old.activation_operation_id is not null
+      and new.activation_operation_id is not old.activation_operation_id)
+      or (old.activation_operation_id is null and new.activation_operation_id is not null
+        and not exists (select 1 from main.jellyfin_activation_operations operation
+          where operation.id is new.activation_operation_id
+            and operation.invitation_id is new.id
+            and operation.invitation_claimed_at is not null
+            and new.consumed_at is not null
+            and operation.invitation_claimed_at is new.consumed_at
+            and operation.pending_oidc_session_id is not null
+            and operation.invitation_claimed_at < new.expires_at
+            and new.expires_at > cast(unixepoch('subsec') * 1000 as integer)))
+    begin select raise(abort, 'invitation activation marker is immutable'); end;
+
+    create trigger jellyfin_activation_operations_claim_binding_guard
+    before update of invitation_id, invitation_claimed_at, pending_oidc_session_id
+    on main.jellyfin_activation_operations
+    when new.invitation_id is not old.invitation_id
+      or new.invitation_claimed_at is not old.invitation_claimed_at
+      or new.pending_oidc_session_id is not old.pending_oidc_session_id
+    begin select raise(abort, 'activation claim binding is immutable'); end;
+
+    create trigger jellyfin_activation_operations_marker_update_guard
+    before update of id, user_id, connector_id on main.jellyfin_activation_operations
+    when exists (
+      select 1
+      from main.service_identity_links link
+      where link.provisioned_by_activation_id = old.id
+        and (
+          new.id <> old.id
+          or new.user_id <> link.user_id
+          or new.connector_id <> link.connector_id
+        )
+    )
+    begin select raise(abort, 'activation marker binding mismatch'); end;
+  `);
   // Same-ID claimed operations cannot be deleted. Upgrade the retained row in
   // place when the selected current timeline proves a complete triple.
   sqlite.exec(`
@@ -1425,6 +1582,7 @@ function mergeRollbackJellyfinActivationFacts(sqlite: Database.Database, now: nu
         and not exists (select 1 from main.jellyfin_activation_operations existing where existing.id = current.id or existing.invitation_id = current.invitation_id or existing.user_id = current.user_id or existing.external_identity_id = current.external_identity_id);
   `);
   sanitizeJellyfinActivationOperations(sqlite, now);
+  sqlite.exec("drop table temp.restore_completed_activation_lineage");
 }
 
 function provisioningCipher(rootKey: Buffer | undefined) {
@@ -1647,6 +1805,9 @@ function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number, root
   // Preserve only the current timeline's negative provisioning authority. Credential-bearing
   // configuration is intentionally never imported across the restore boundary.
   mergeRollbackJellyfinProvisioningFacts(sqlite, rootKey);
+  // Invitation consumption is part of the activation claim binding. Merge it before
+  // activation replacement so a newly imported marker satisfies the 0039 guard.
+  mergeRollbackInvitationFacts(sqlite, now);
   mergeRollbackJellyfinActivationFacts(sqlite, now);
   sqlite.exec(`
     update main.users as restored
@@ -1842,17 +2003,40 @@ function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number, root
   `);
   mergeIdempotencyReceipts(sqlite);
   mergeRollbackExternalMutationFacts(sqlite);
-  mergeRollbackInvitationFacts(sqlite, now);
   if (markerColumn)
     sqlite.exec(`
     update main.service_identity_links as restored
     set provisioned_by_activation_id = (
       select current.provisioned_by_activation_id
       from rollback_timeline.service_identity_links current
+      join rollback_timeline.jellyfin_activation_operations current_operation
+        on current_operation.id = current.provisioned_by_activation_id
+       and current_operation.activation_status = 'completed'
+       and current_operation.state = 'tombstoned'
+       and current_operation.activation_completed_link_id = current.id
+       and current_operation.user_id = current.user_id
+       and current_operation.connector_id = current.connector_id
+      join rollback_timeline.invitations current_invitation
+        on current_invitation.id = current_operation.invitation_id
+       and current_invitation.activation_operation_id = current_operation.id
+       and current_invitation.consumed_at = current_operation.invitation_claimed_at
+       and current_operation.invitation_claimed_at is not null
+       and current_invitation.revoked_at is null
+       and current_operation.invitation_claimed_at < current_invitation.expires_at
       join main.jellyfin_activation_operations operation
-        on operation.id = current.provisioned_by_activation_id
-       and operation.user_id = current.user_id
-       and operation.connector_id = current.connector_id
+        on operation.id = current_operation.id
+       and operation.activation_status = 'completed'
+       and operation.state = 'tombstoned'
+       and operation.activation_completed_link_id = restored.id
+       and operation.user_id = restored.user_id
+       and operation.connector_id = restored.connector_id
+      join main.invitations invitation
+        on invitation.id = operation.invitation_id
+       and invitation.activation_operation_id = operation.id
+       and invitation.consumed_at = operation.invitation_claimed_at
+       and operation.invitation_claimed_at is not null
+       and invitation.revoked_at is null
+       and operation.invitation_claimed_at < invitation.expires_at
       where current.id = restored.id
     )
     where exists (select 1 from rollback_timeline.service_identity_links current where current.id = restored.id);

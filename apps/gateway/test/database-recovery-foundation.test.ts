@@ -204,6 +204,68 @@ function insertActivationRestoreOperation(
     .run(input.id, input.invitationId, input.userId, input.externalIdentityId, input.connectorId);
 }
 
+function completeActivationRestoreOperation(
+  sqlite: Database.Database,
+  input: {
+    connectorId: string;
+    externalIdentityId: string;
+    id: string;
+    invitationId: string;
+    linkId: string;
+    userId: string;
+  },
+) {
+  sqlite
+    .prepare(
+      `insert into jellyfin_activation_operations (
+         id, invitation_id, user_id, external_identity_id, connector_id,
+         connector_config_generation, connector_instance_generation, provisioning_revision,
+         state, revision, encrypted_stage_artifact, artifact_revision, cleanup_eligible,
+         create_attempt_count, retry_count, cleanup_attempt_count, reserved_at,
+         create_dispatched_at, created_id_recorded_at, invitation_claimed_at,
+         pending_oidc_session_id, created_at, updated_at
+       ) values (?, ?, ?, ?, ?, 0, 0, 1, 'auth_pending', 0, 'artifact', 1, 1,
+                 1, 0, 0, 1000, 1000, 1000, 2000, 'restore-session', 1000, 2000)`,
+    )
+    .run(input.id, input.invitationId, input.userId, input.externalIdentityId, input.connectorId);
+  sqlite
+    .prepare("update invitations set expires_at = 4102444800000, consumed_at = ? where id = ?")
+    .run(2000, input.invitationId);
+  sqlite
+    .prepare("update invitations set activation_operation_id = ? where id = ?")
+    .run(input.id, input.invitationId);
+  sqlite
+    .prepare(
+      `insert into service_identity_links (
+         id, user_id, service, connector_id, connector_instance_generation,
+         external_server_id, external_user_id, external_username, external_display_name,
+         encrypted_access_token, provisioned_by_activation_id, device_id, token_created_at,
+         health_state, revision, created_at, updated_at
+       ) values (?, ?, 'jellyfin', ?, 0, ?, ?, ?, ?, 'restore-token', ?, 'restore-device', 200,
+                 'linked', 0, 1, 2000)`,
+    )
+    .run(
+      input.linkId,
+      input.userId,
+      input.connectorId,
+      `${input.id}-server`,
+      `${input.id}-external-user`,
+      `${input.id}-username`,
+      `${input.id} display`,
+      input.id,
+    );
+  sqlite
+    .prepare(
+      `update jellyfin_activation_operations
+       set state = 'tombstoned', activation_status = 'completed',
+           activation_completed_link_id = ?, encrypted_stage_artifact = null,
+           cleanup_eligible = 0, lease_owner = null, lease_expires_at = null,
+           artifact_revision = artifact_revision + 1, completed_at = 2000, tombstoned_at = 2000
+       where id = ?`,
+    )
+    .run(input.linkId, input.id);
+}
+
 describe("migration and key preflight", () => {
   it("accepts every exact released migration prefix from v0.12 through current", async () => {
     const catalog = readMigrationCatalog();
@@ -928,6 +990,99 @@ describe("restore sanitation and rollback", () => {
       externalIdentityId: "activation-identity-current",
       userId: "activation-user-current",
     });
+    expect(sqlite.pragma("foreign_key_check")).toEqual([]);
+    sqlite.close();
+  });
+
+  it("restores a completed current tuple over a selected pending old marker", async () => {
+    const directory = await privateDirectory("omnifin-activation-pending-replacement-");
+    const databasePath = path.join(directory, "omnifin.db");
+    const selectedPath = path.join(directory, "selected.sqlite");
+    const rollbackPath = path.join(directory, "rollback.sqlite");
+    createCurrentDatabase(databasePath);
+    createCurrentDatabase(rollbackPath);
+
+    let sqlite = new Database(databasePath);
+    seedActivationRestoreFixture(sqlite);
+    insertActivationRestoreOperation(sqlite, {
+      connectorId: "activation-connector-selected",
+      externalIdentityId: "activation-identity-selected",
+      id: "jellyfin_activation_replaced",
+      invitationId: "invite_activation_selected",
+      userId: "activation-user-selected",
+    });
+    sqlite.exec("drop trigger jellyfin_activation_operations_claim_binding_guard;");
+    sqlite
+      .prepare(
+        `update jellyfin_activation_operations
+         set state = 'auth_pending', encrypted_stage_artifact = 'old-artifact',
+             artifact_revision = 1, cleanup_eligible = 1,
+             create_attempt_count = 1, create_dispatched_at = 1000,
+             created_id_recorded_at = 1000, invitation_claimed_at = 2000,
+             pending_oidc_session_id = 'old-session', updated_at = 2000
+         where id = ?`,
+      )
+      .run("jellyfin_activation_replaced");
+    sqlite
+      .prepare(
+        "update invitations set expires_at = 4102444800000, consumed_at = ?, activation_operation_id = ? where id = ?",
+      )
+      .run(2000, "jellyfin_activation_replaced", "invite_activation_selected");
+    sqlite.close();
+    await createDatabaseBackup({ databasePath, outputPath: selectedPath });
+
+    sqlite = new Database(rollbackPath);
+    seedActivationRestoreFixture(sqlite);
+    completeActivationRestoreOperation(sqlite, {
+      connectorId: "activation-connector-current",
+      externalIdentityId: "activation-identity-current",
+      id: "jellyfin_activation_replaced",
+      invitationId: "invite_activation_current",
+      linkId: "activation-link-current",
+      userId: "activation-user-current",
+    });
+    sqlite.close();
+
+    await expect(
+      restoreDatabaseBackup({
+        backupPath: selectedPath,
+        confirmedGatewayStopped: true,
+        databasePath: rollbackPath,
+        now: new Date(5_000),
+        rollbackOutputPath: path.join(directory, "pre-restore.sqlite"),
+      }),
+    ).resolves.toBeDefined();
+
+    sqlite = new Database(rollbackPath, { readonly: true });
+    expect(
+      sqlite
+        .prepare(
+          `select id, invitation_id as invitationId, user_id as userId,
+                  external_identity_id as externalIdentityId, connector_id as connectorId,
+                  activation_status as activationStatus, state,
+                  activation_completed_link_id as linkId
+           from jellyfin_activation_operations`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        activationStatus: "completed",
+        connectorId: "activation-connector-current",
+        externalIdentityId: "activation-identity-current",
+        id: "jellyfin_activation_replaced",
+        invitationId: "invite_activation_current",
+        linkId: "activation-link-current",
+        state: "tombstoned",
+        userId: "activation-user-current",
+      },
+    ]);
+    expect(
+      sqlite
+        .prepare(
+          "select id, activation_operation_id as operationId from invitations where activation_operation_id is not null",
+        )
+        .all(),
+    ).toEqual([{ id: "invite_activation_current", operationId: "jellyfin_activation_replaced" }]);
     expect(sqlite.pragma("foreign_key_check")).toEqual([]);
     sqlite.close();
   });
