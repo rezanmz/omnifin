@@ -1003,6 +1003,7 @@ describe("restore sanitation and rollback", () => {
     createCurrentDatabase(rollbackPath);
 
     let sqlite = new Database(databasePath);
+    initializeDatabaseKeyVerifier(sqlite, rootKey);
     seedActivationRestoreFixture(sqlite);
     insertActivationRestoreOperation(sqlite, {
       connectorId: "activation-connector-selected",
@@ -1032,6 +1033,7 @@ describe("restore sanitation and rollback", () => {
     await createDatabaseBackup({ databasePath, outputPath: selectedPath });
 
     sqlite = new Database(rollbackPath);
+    initializeDatabaseKeyVerifier(sqlite, rootKey);
     seedActivationRestoreFixture(sqlite);
     completeActivationRestoreOperation(sqlite, {
       connectorId: "activation-connector-current",
@@ -1050,6 +1052,7 @@ describe("restore sanitation and rollback", () => {
         databasePath: rollbackPath,
         now: new Date(5_000),
         rollbackOutputPath: path.join(directory, "pre-restore.sqlite"),
+        rootKey,
       }),
     ).resolves.toBeDefined();
 
@@ -1083,8 +1086,45 @@ describe("restore sanitation and rollback", () => {
         )
         .all(),
     ).toEqual([{ id: "invite_activation_current", operationId: "jellyfin_activation_replaced" }]);
+    expect(() => assertDatabasePostMigrationChecks(sqlite, rootKey)).not.toThrow();
     expect(sqlite.pragma("foreign_key_check")).toEqual([]);
     sqlite.close();
+
+    sqlite = new Database(rollbackPath);
+    expect(() =>
+      sqlite
+        .prepare("update invitations set revoked_at = 3000 where id = 'invite_activation_current'")
+        .run(),
+    ).toThrow(/claimed invitation cannot be revoked/u);
+    sqlite.close();
+
+    await expect(
+      restoreDatabaseBackup({
+        backupPath: selectedPath,
+        confirmedGatewayStopped: true,
+        databasePath: rollbackPath,
+        now: new Date(5_000),
+        rollbackOutputPath: path.join(directory, "pre-restore-second.sqlite"),
+        rootKey,
+      }),
+    ).resolves.toBeDefined();
+    sqlite = new Database(rollbackPath, { readonly: true });
+    try {
+      expect(() => assertDatabasePostMigrationChecks(sqlite, rootKey)).not.toThrow();
+      expect(
+        sqlite
+          .prepare(
+            "select id, activation_status as activationStatus, state from jellyfin_activation_operations",
+          )
+          .get(),
+      ).toEqual({
+        activationStatus: "completed",
+        id: "jellyfin_activation_replaced",
+        state: "tombstoned",
+      });
+    } finally {
+      sqlite.close();
+    }
   });
 
   it("sanitizes a selected activation whose external identity is absent from the current timeline", async () => {

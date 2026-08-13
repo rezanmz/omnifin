@@ -1445,43 +1445,44 @@ function mergeRollbackJellyfinActivationFacts(sqlite: Database.Database, now: nu
       from temp.restore_completed_activation_lineage lineage
      where restored.id = lineage.invitation_id;
 
-    create trigger invitations_activation_marker_guard
-    before update of activation_operation_id on main.invitations
-    when (old.activation_operation_id is not null
-      and new.activation_operation_id is not old.activation_operation_id)
-      or (old.activation_operation_id is null and new.activation_operation_id is not null
-        and not exists (select 1 from main.jellyfin_activation_operations operation
-          where operation.id is new.activation_operation_id
-            and operation.invitation_id is new.id
-            and operation.invitation_claimed_at is not null
-            and new.consumed_at is not null
-            and operation.invitation_claimed_at is new.consumed_at
-            and operation.pending_oidc_session_id is not null
-            and operation.invitation_claimed_at < new.expires_at
-            and new.expires_at > cast(unixepoch('subsec') * 1000 as integer)))
-    begin select raise(abort, 'invitation activation marker is immutable'); end;
+CREATE TRIGGER \u0060invitations_activation_marker_guard\u0060
+BEFORE UPDATE OF activation_operation_id ON \u0060invitations\u0060
+WHEN (OLD.activation_operation_id IS NOT NULL
+  AND NEW.activation_operation_id IS NOT OLD.activation_operation_id)
+  OR (OLD.activation_operation_id IS NULL AND NEW.activation_operation_id IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM jellyfin_activation_operations operation
+      WHERE operation.id IS NEW.activation_operation_id
+        AND operation.invitation_id IS NEW.id
+        AND operation.invitation_claimed_at IS NOT NULL
+        AND NEW.consumed_at IS NOT NULL
+        AND operation.invitation_claimed_at IS NEW.consumed_at
+        AND operation.pending_oidc_session_id IS NOT NULL
+        AND NEW.revoked_at IS NULL
+        AND operation.invitation_claimed_at < NEW.expires_at
+        AND NEW.expires_at > CAST(unixepoch('subsec') * 1000 AS INTEGER)))
+BEGIN SELECT RAISE(ABORT, 'invitation activation marker is immutable'); END;
 
-    create trigger jellyfin_activation_operations_claim_binding_guard
-    before update of invitation_id, invitation_claimed_at, pending_oidc_session_id
-    on main.jellyfin_activation_operations
-    when new.invitation_id is not old.invitation_id
-      or new.invitation_claimed_at is not old.invitation_claimed_at
-      or new.pending_oidc_session_id is not old.pending_oidc_session_id
-    begin select raise(abort, 'activation claim binding is immutable'); end;
+CREATE TRIGGER \u0060jellyfin_activation_operations_claim_binding_guard\u0060
+BEFORE UPDATE OF invitation_id, invitation_claimed_at, pending_oidc_session_id
+ON \u0060jellyfin_activation_operations\u0060
+WHEN NEW.invitation_id IS NOT OLD.invitation_id
+  OR NEW.invitation_claimed_at IS NOT OLD.invitation_claimed_at
+  OR NEW.pending_oidc_session_id IS NOT OLD.pending_oidc_session_id
+BEGIN SELECT RAISE(ABORT, 'activation claim binding is immutable'); END;
 
-    create trigger jellyfin_activation_operations_marker_update_guard
-    before update of id, user_id, connector_id on main.jellyfin_activation_operations
-    when exists (
-      select 1
-      from main.service_identity_links link
-      where link.provisioned_by_activation_id = old.id
-        and (
-          new.id <> old.id
-          or new.user_id <> link.user_id
-          or new.connector_id <> link.connector_id
-        )
+CREATE TRIGGER \u0060jellyfin_activation_operations_marker_update_guard\u0060
+BEFORE UPDATE OF id, user_id, connector_id ON \u0060jellyfin_activation_operations\u0060
+WHEN EXISTS (
+  SELECT 1
+  FROM service_identity_links link
+  WHERE link.provisioned_by_activation_id = OLD.id
+    AND (
+      NEW.id <> OLD.id
+      OR NEW.user_id <> link.user_id
+      OR NEW.connector_id <> link.connector_id
     )
-    begin select raise(abort, 'activation marker binding mismatch'); end;
+)
+BEGIN SELECT RAISE(ABORT, 'activation marker binding mismatch'); END;
   `);
   // Same-ID claimed operations cannot be deleted. Upgrade the retained row in
   // place when the selected current timeline proves a complete triple.
