@@ -1112,6 +1112,7 @@ export class SessionService {
     expectedUserId: string,
     expectedExternalIdentityId: string,
     expectedProviderId: string,
+    expectedOperationSessionId?: string,
   ): ValidatedOidcPairingSession | null {
     if (!SESSION_ID_PATTERN.test(String(sessionId))) return null;
     const now = this.currentTime();
@@ -1123,6 +1124,7 @@ export class SessionService {
       !principal ||
       !this.sessionLifecycleIsActive(row, now) ||
       row.sessionId !== sessionId ||
+      (expectedOperationSessionId !== undefined && row.sessionId !== expectedOperationSessionId) ||
       row.authMethod !== "oidc" ||
       row.oidcProviderId !== expectedProviderId ||
       row.sessionUserId !== expectedUserId ||

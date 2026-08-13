@@ -801,4 +801,101 @@ describe("Jellyfin activation operation repository", () => {
       }),
     ).toThrowError(expect.objectContaining({ code: "invalid_transition" }));
   });
+
+  it("restores a selected completed operation and exact link provenance over a same-ID pending row", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "omnifin-activation-restore-completed-"));
+    cleanup.push(() => rmSync(directory, { force: true, recursive: true }));
+    const selectedPath = path.join(directory, "selected.sqlite");
+    const currentPath = path.join(directory, "current.sqlite");
+    const selected = fixture(selectedPath);
+    const current = fixture(currentPath);
+    prepareClaimed(selected.repository, selected.sqlite);
+    prepareClaimed(current.repository, current.sqlite);
+    const linkValues = `('link-completed','user-0001','jellyfin','connector-0001',0,'server','upstream-1','name','Name','token','jellyfin_activation_1','device',1,'linked',0,1,1)`;
+    current.sqlite.exec(
+      `insert into service_identity_links (id,user_id,service,connector_id,connector_instance_generation,external_server_id,external_user_id,external_username,external_display_name,encrypted_access_token,provisioned_by_activation_id,device_id,token_created_at,health_state,revision,created_at,updated_at) values ${linkValues}`,
+    );
+    current.sqlite.exec(
+      "update jellyfin_activation_operations set state = 'tombstoned', activation_status = 'completed', activation_completed_link_id = 'link-completed', completed_at = 200, tombstoned_at = 200 where id = 'jellyfin_activation_1'",
+    );
+    selected.database.close();
+    current.database.close();
+    sanitizeRestoredDatabase(selectedPath, {
+      now: new Date(300),
+      rollbackDatabasePath: currentPath,
+    });
+    const restored = new Database(selectedPath);
+    cleanup.push(() => restored.close());
+    expect(
+      restored
+        .prepare(
+          "select state, activation_status as status, activation_completed_link_id as linkId from jellyfin_activation_operations where id = 'jellyfin_activation_1'",
+        )
+        .get(),
+    ).toEqual({
+      linkId: "link-completed",
+      state: "tombstoned",
+      status: "completed",
+    });
+    expect(
+      restored
+        .prepare(
+          "select provisioned_by_activation_id as operationId from service_identity_links where id = 'link-completed'",
+        )
+        .get(),
+    ).toEqual({ operationId: "jellyfin_activation_1" });
+    expect(restored.prepare("select count(*) as count from sessions").get()).toEqual({ count: 0 });
+  });
+
+  it.each([
+    ["pending operation", "pending"],
+    ["mismatched completed link", "mismatch"],
+  ])("sanitizes a %s marker and retains no orphan activation provenance", (_name, mode) => {
+    const directory = mkdtempSync(path.join(tmpdir(), "omnifin-activation-marker-sanitize-"));
+    cleanup.push(() => rmSync(directory, { force: true, recursive: true }));
+    const databasePath = path.join(directory, "database.sqlite");
+    const database = fixture(databasePath).database;
+    prepareClaimed(
+      new JellyfinActivationOperationRepository(database.sqlite, key),
+      database.sqlite,
+    );
+    database.sqlite.exec(
+      `insert into service_identity_links (id,user_id,service,connector_id,connector_instance_generation,external_server_id,external_user_id,external_username,external_display_name,encrypted_access_token,provisioned_by_activation_id,device_id,token_created_at,health_state,revision,created_at,updated_at) values ('link-invalid','user-0001','jellyfin','connector-0001',0,'server','upstream-1','name','Name','token','jellyfin_activation_1','device',1,'linked',0,1,1)`,
+    );
+    if (mode === "mismatch") {
+      database.sqlite.exec("drop trigger jellyfin_activation_operations_completion_guard");
+      database.sqlite.exec(
+        "update jellyfin_activation_operations set state = 'tombstoned', activation_status = 'completed', activation_completed_link_id = 'other-link', completed_at = 200, tombstoned_at = 200 where id = 'jellyfin_activation_1'",
+      );
+    }
+    database.close();
+    sanitizeRestoredDatabase(databasePath, { now: new Date(300) });
+    const restored = new Database(databasePath);
+    cleanup.push(() => restored.close());
+    expect(
+      restored
+        .prepare(
+          "select provisioned_by_activation_id as operationId, encrypted_access_token as token, health_state as health from service_identity_links where id = 'link-invalid'",
+        )
+        .get(),
+    ).toEqual({
+      health: "revoked",
+      operationId: null,
+      token: null,
+    });
+    expect(
+      restored
+        .prepare(
+          "select state, activation_status as status from jellyfin_activation_operations where id = 'jellyfin_activation_1'",
+        )
+        .get(),
+    ).toMatchObject(
+      mode === "mismatch"
+        ? { state: "tombstoned", status: "completed" }
+        : { state: "manual_required", status: "pending" },
+    );
+    expect(restored.prepare("select status from users where id = 'user-0001'").get()).toEqual({
+      status: mode === "mismatch" ? "disabled" : "disabled",
+    });
+  });
 });

@@ -1233,9 +1233,28 @@ function sanitizeJellyfinActivationOperations(sqlite: Database.Database, now: nu
       delete from main.jellyfin_activation_cleanup_reservations;
     `);
   }
-  // Preserve completed rows; malformed completed rows are quarantined rather than
-  // deleted (the claim marker trigger deliberately forbids that deletion).
+  // Preserve completed rows only when their link provenance is exact; pending
+  // and manual operations are never authority for a live link.
   sqlite.exec(`
+    update main.service_identity_links
+    set provisioned_by_activation_id = null
+    where provisioned_by_activation_id is not null
+      and not exists (
+        select 1 from main.jellyfin_activation_operations operation
+        where operation.id = service_identity_links.provisioned_by_activation_id
+          and operation.activation_status = 'completed'
+          and operation.state = 'tombstoned'
+          and operation.activation_completed_link_id = service_identity_links.id
+          and operation.user_id = service_identity_links.user_id
+          and operation.connector_id = service_identity_links.connector_id
+          and exists (select 1 from main.invitations invitation
+                      where invitation.id = operation.invitation_id
+                        and invitation.activation_operation_id = operation.id
+                        and invitation.consumed_at = operation.invitation_claimed_at
+                        and operation.invitation_claimed_at is not null
+                        and invitation.revoked_at is null
+                        and operation.invitation_claimed_at < invitation.expires_at)
+      );
     update main.users
     set status = 'disabled', updated_at = max(updated_at, ${now})
     where id in (
@@ -1245,6 +1264,13 @@ function sanitizeJellyfinActivationOperations(sqlite: Database.Database, now: nu
           select 1 from main.service_identity_links link
           where link.id = operation.activation_completed_link_id
             and link.provisioned_by_activation_id = operation.id
+            and exists (select 1 from main.invitations invitation
+                        where invitation.id = operation.invitation_id
+                          and invitation.activation_operation_id = operation.id
+                          and invitation.consumed_at = operation.invitation_claimed_at
+                          and operation.invitation_claimed_at is not null
+                          and invitation.revoked_at is null
+                          and operation.invitation_claimed_at < invitation.expires_at)
         )
     );
     update main.service_identity_links
@@ -1258,6 +1284,13 @@ function sanitizeJellyfinActivationOperations(sqlite: Database.Database, now: nu
           select 1 from main.service_identity_links valid_link
           where valid_link.id = operation.activation_completed_link_id
             and valid_link.provisioned_by_activation_id = operation.id
+            and exists (select 1 from main.invitations invitation
+                        where invitation.id = operation.invitation_id
+                          and invitation.activation_operation_id = operation.id
+                          and invitation.consumed_at = operation.invitation_claimed_at
+                          and operation.invitation_claimed_at is not null
+                          and invitation.revoked_at is null
+                          and operation.invitation_claimed_at < invitation.expires_at)
         )
     );
   `);
@@ -1293,6 +1326,72 @@ function mergeRollbackJellyfinActivationFacts(sqlite: Database.Database, now: nu
     )
     .get();
   if (cleanupExists) sqlite.exec("delete from main.jellyfin_activation_cleanup_reservations");
+  // Same-ID claimed operations cannot be deleted. Upgrade the retained row in
+  // place when the selected current timeline proves a complete triple.
+  sqlite.exec(`
+    insert into main.service_identity_links (
+      id, user_id, service, connector_id, connector_instance_generation,
+      external_server_id, external_user_id, external_username, external_display_name,
+      encrypted_access_token, provisioned_by_activation_id, device_id, token_created_at,
+      health_state, last_verified_at, revoked_at, revision, created_at, updated_at
+    ) select
+      link.id, link.user_id, link.service, link.connector_id, link.connector_instance_generation,
+      link.external_server_id, link.external_user_id, link.external_username,
+      link.external_display_name, link.encrypted_access_token, link.provisioned_by_activation_id,
+      link.device_id, link.token_created_at, link.health_state, link.last_verified_at,
+      link.revoked_at, link.revision, link.created_at, link.updated_at
+    from rollback_timeline.service_identity_links link
+    join rollback_timeline.jellyfin_activation_operations operation
+      on operation.id = link.provisioned_by_activation_id
+     and operation.activation_status = 'completed'
+     and operation.state = 'tombstoned'
+     and operation.activation_completed_link_id = link.id
+     and operation.user_id = link.user_id
+     and operation.connector_id = link.connector_id
+    join rollback_timeline.invitations invitation
+      on invitation.id = operation.invitation_id
+     and invitation.activation_operation_id = operation.id
+     and invitation.consumed_at = operation.invitation_claimed_at
+     and operation.invitation_claimed_at is not null
+     and invitation.revoked_at is null
+     and operation.invitation_claimed_at < invitation.expires_at
+    join main.users user on user.id = link.user_id
+    join main.connector_configs connector on connector.id = link.connector_id
+    where not exists (select 1 from main.service_identity_links restored where restored.id = link.id);
+  `);
+  sqlite.exec(`
+    update main.jellyfin_activation_operations as restored
+    set state = current.state,
+        activation_status = current.activation_status,
+        activation_completed_link_id = current.activation_completed_link_id,
+        completed_at = current.completed_at,
+        encrypted_stage_artifact = current.encrypted_stage_artifact,
+        artifact_revision = current.artifact_revision,
+        cleanup_eligible = current.cleanup_eligible,
+        lease_owner = current.lease_owner,
+        lease_expires_at = current.lease_expires_at,
+        failure_code = current.failure_code,
+        manual_required_at = current.manual_required_at,
+        tombstoned_at = current.tombstoned_at,
+        revision = current.revision,
+        updated_at = current.updated_at
+    from rollback_timeline.jellyfin_activation_operations current
+    join rollback_timeline.invitations invitation
+      on invitation.id = current.invitation_id
+     and invitation.activation_operation_id = current.id
+     and invitation.consumed_at = current.invitation_claimed_at
+     and current.invitation_claimed_at is not null
+     and invitation.revoked_at is null
+     and current.invitation_claimed_at < invitation.expires_at
+    join rollback_timeline.service_identity_links link
+      on link.id = current.activation_completed_link_id
+     and link.provisioned_by_activation_id = current.id
+     and link.user_id = current.user_id
+     and link.connector_id = current.connector_id
+    where restored.id = current.id
+      and current.activation_status = 'completed'
+      and current.state = 'tombstoned';
+  `);
   sqlite.exec(`
     delete from main.jellyfin_activation_operations as collision
     where exists (
@@ -1498,6 +1597,18 @@ function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number, root
           where operation.id = service_identity_links.provisioned_by_activation_id
             and operation.user_id = service_identity_links.user_id
             and operation.connector_id = service_identity_links.connector_id
+            and operation.activation_status = 'completed'
+            and operation.state = 'tombstoned'
+            and operation.activation_completed_link_id = service_identity_links.id
+            and exists (
+              select 1 from main.invitations invitation
+              where invitation.id = operation.invitation_id
+                and invitation.activation_operation_id = operation.id
+                and invitation.consumed_at = operation.invitation_claimed_at
+                and operation.invitation_claimed_at is not null
+                and invitation.revoked_at is null
+                and operation.invitation_claimed_at < invitation.expires_at
+            )
         )
         and not exists (
           select 1 from rollback_timeline.service_identity_links restored
@@ -1537,7 +1648,6 @@ function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number, root
   // configuration is intentionally never imported across the restore boundary.
   mergeRollbackJellyfinProvisioningFacts(sqlite, rootKey);
   mergeRollbackJellyfinActivationFacts(sqlite, now);
-
   sqlite.exec(`
     update main.users as restored
     set status = case

@@ -26,6 +26,8 @@ export interface InviteBackedOidcActivationResult {
 }
 
 export interface InviteBackedOidcActivationDependencies extends JellyfinActivationSagaDependencies {
+  /** @internal Test-only lifecycle hook for changing persisted state after saga return. */
+  afterSagaReturn?: () => void;
   createId?: () => string;
   finalizationFailpoint?: (
     stage:
@@ -220,6 +222,7 @@ export class InviteBackedOidcActivationService {
       );
     }
     const saga = await this.#saga.run(operationId);
+    this.#dependencies.afterSagaReturn?.();
     if (saga.disposition !== "activated_ready")
       return internalResult("pending_link", pendingSession, saga);
     try {
@@ -264,12 +267,14 @@ export class InviteBackedOidcActivationService {
           operation.userId,
           operation.externalIdentityId,
           identity.providerId,
+          operation.pendingOidcSessionId,
         );
         return pairing ? { operationId: operation.id, pairing } : null;
       })
       .immediate();
     if (!resolved) return null;
     const saga = await this.#saga.run(resolved.operationId);
+    this.#dependencies.afterSagaReturn?.();
     if (saga.disposition !== "activated_ready") return null;
     try {
       return internalResult(
@@ -387,6 +392,25 @@ export class InviteBackedOidcActivationService {
               .get(operation.externalIdentityId) as
               { providerId: string; userId: string } | undefined)
           : undefined;
+        const provider = identity
+          ? (this.#database.sqlite
+              .prepare(
+                `select id, enabled, issuer, client_id as clientId, discovery_state as discoveryState,
+                        discovery_checked_at as discoveryCheckedAt, discovery_capabilities_json as discoveryCapabilitiesJson
+                 from oidc_providers where id = ?`,
+              )
+              .get(identity.providerId) as
+              | {
+                  clientId: string;
+                  discoveryCapabilitiesJson: string;
+                  discoveryCheckedAt: number | null;
+                  discoveryState: string;
+                  enabled: number;
+                  id: string;
+                  issuer: string;
+                }
+              | undefined)
+          : undefined;
         const provisioning = operation
           ? (this.#database.sqlite
               .prepare(
@@ -424,10 +448,20 @@ export class InviteBackedOidcActivationService {
           invitation.consumedAt === null ||
           operation.invitationClaimedAt === null ||
           invitation.consumedAt !== operation.invitationClaimedAt ||
+          now >= invitation.expiresAt ||
           operation.invitationClaimedAt >= invitation.expiresAt ||
           invitation.revokedAt !== null ||
           !identity ||
           identity.userId !== operation.userId ||
+          pairing.oidcProviderId !== identity.providerId ||
+          !provider ||
+          provider.id !== identity.providerId ||
+          provider.enabled !== 1 ||
+          provider.discoveryState !== "ready" ||
+          provider.discoveryCheckedAt === null ||
+          provider.issuer.length === 0 ||
+          provider.clientId.length === 0 ||
+          provider.discoveryCapabilitiesJson === "{}" ||
           existingLink ||
           !provisioning ||
           provisioning.type !== "jellyfin" ||
@@ -454,7 +488,8 @@ export class InviteBackedOidcActivationService {
           throw new Error("activation artifact unavailable");
         if (
           pairing.userId !== operation.userId ||
-          pairing.externalIdentityId !== operation.externalIdentityId
+          pairing.externalIdentityId !== operation.externalIdentityId ||
+          pairing.sessionId !== operation.pendingOidcSessionId
         )
           throw new Error("activation binding mismatch");
         const livePairing = this.#sessions.resumeValidatedOidcPairingSessionById(
@@ -462,6 +497,7 @@ export class InviteBackedOidcActivationService {
           operation.userId,
           operation.externalIdentityId,
           identity.providerId,
+          operation.pendingOidcSessionId,
         );
         if (!livePairing || livePairing.serviceIdentityLinkId !== null)
           throw new Error("activation session unavailable");
