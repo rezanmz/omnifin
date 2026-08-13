@@ -483,8 +483,20 @@ export class JellyfinActivationSaga {
         ) {
           return this.#manual(repository, current, "response_invalid");
         }
-        const invitationReason = this.#invitationEligibility(current);
-        if (invitationReason) return this.#manual(repository, current, invitationReason);
+        const persisted = repository.read(current.id);
+        if (!persisted) return internalResult("manual_pairing", "invalid_state");
+        const invitationReason = this.#invitationEligibility(persisted);
+        const operationFenceChanged =
+          persisted.id !== current.id ||
+          persisted.invitationId !== current.invitationId ||
+          persisted.invitationClaimedAt !== current.invitationClaimedAt ||
+          persisted.pendingOidcSessionId !== current.pendingOidcSessionId ||
+          persisted.state !== current.state ||
+          persisted.revision !== current.revision;
+        if (operationFenceChanged) {
+          return this.#manual(repository, persisted, invitationReason ?? "binding_changed");
+        }
+        if (invitationReason) return this.#manual(repository, persisted, invitationReason);
         repository.recordStageArtifact({
           id: current.id,
           artifact: {

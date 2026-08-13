@@ -32,8 +32,8 @@ function fixture(databaseUrl = ":memory:") {
       values ('connector-0001', 'jellyfin', 'Jellyfin', 'https://jellyfin.example', 'cipher', 0, 0, 1, 1),
              ('connector-0002', 'jellyfin', 'Other Jellyfin', 'https://other.example', 'cipher', 0, 0, 1, 1);
     insert into invitations (id, token_hash, expires_at, created_at)
-      values ('invite_0001', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 100000, 1),
-             ('invite_0002', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 100000, 1);
+      values ('invite_0001', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 8640000000000000, 1),
+             ('invite_0002', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 8640000000000000, 1);
     insert into external_identities (id, user_id, provider_id, issuer, subject, last_login_at)
       values ('identity-0001', 'user-0001', 'provider-1', 'https://issuer.example', 'subject-1', 1),
              ('identity-0002', 'user-0002', 'provider-1', 'https://issuer.example', 'subject-2', 1);
@@ -588,6 +588,56 @@ describe("Jellyfin activation operation repository", () => {
         "update invitations set activation_operation_id = 'jellyfin_activation_4' where id = 'invite_0001'",
       ),
     ).toThrow(/invitation activation marker is immutable/u);
+  });
+
+  it("rejects an initial marker when expiry is behind database time and accepts one ahead", () => {
+    const { sqlite } = fixture();
+    const databaseNow = (
+      sqlite.prepare("select cast(unixepoch('subsec') * 1000 as integer) as now").get() as {
+        now: number;
+      }
+    ).now;
+    const insertRawOperation = (id: string, claim: number) => {
+      sqlite
+        .prepare(
+          `insert into jellyfin_activation_operations (
+             id, invitation_id, user_id, external_identity_id, connector_id,
+             connector_config_generation, connector_instance_generation,
+             provisioning_revision, state, revision, artifact_revision, cleanup_eligible,
+             lease_owner, lease_expires_at, create_attempt_count, retry_count,
+             cleanup_attempt_count, reserved_at, created_at, updated_at,
+             invitation_claimed_at, pending_oidc_session_id
+           ) values (?, 'invite_0001', 'user-0001', 'identity-0001', 'connector-0001',
+             0, 0, 1, 'reserved', 0, 0, 0, 'worker-1', ?, 0, 0, 0, ?, ?, ?, ?, 'pending-1')`,
+        )
+        .run(id, databaseNow + 60_000, claim, claim, claim, claim);
+    };
+
+    sqlite
+      .prepare("update invitations set consumed_at = ?, expires_at = ? where id = ?")
+      .run(databaseNow - 1_000, databaseNow - 1, "invite_0001");
+    insertRawOperation("jellyfin_activation_3", databaseNow - 1_000);
+    expect(() =>
+      sqlite.exec(
+        "update invitations set activation_operation_id = 'jellyfin_activation_3' where id = 'invite_0001'",
+      ),
+    ).toThrow(/invitation activation marker is immutable/u);
+    sqlite.exec("delete from jellyfin_activation_operations where id = 'jellyfin_activation_3'");
+
+    sqlite
+      .prepare("update invitations set consumed_at = ?, expires_at = ? where id = ?")
+      .run(databaseNow - 1_000, databaseNow + 60_000, "invite_0001");
+    insertRawOperation("jellyfin_activation_4", databaseNow - 1_000);
+    expect(() =>
+      sqlite.exec(
+        "update invitations set activation_operation_id = 'jellyfin_activation_4' where id = 'invite_0001'",
+      ),
+    ).not.toThrow();
+    expect(
+      sqlite
+        .prepare("select activation_operation_id as operationId from invitations where id = ?")
+        .get("invite_0001"),
+    ).toEqual({ operationId: "jellyfin_activation_4" });
   });
 
   it("rejects all cleanup-dispatch binding mutations", () => {

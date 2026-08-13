@@ -37,7 +37,7 @@ function fixture(options: { status?: "active" | "pending_link"; link?: boolean }
       0, 0, '${identityHash}', 1, 1, 1
     );
     insert into invitations (id, token_hash, expires_at, consumed_at, created_at)
-      values ('invite_phase_two', '${"i".repeat(43)}', 10000, 100, 1);
+      values ('invite_phase_two', '${"i".repeat(43)}', 8640000000000000, 100, 1);
     insert into external_identities (id, user_id, provider_id, issuer, subject, last_login_at, created_at, updated_at)
       values ('identity-phase-two', 'phase-two-user', 'provider-phase-two', 'https://issuer.example', 'subject', 1, 1, 1);
   `);
@@ -339,6 +339,9 @@ describe("JellyfinActivationSaga", () => {
   it("revalidates invitation eligibility after authentication crosses expiry", async () => {
     const { database, repository } = fixture();
     let now = 300;
+    database.sqlite
+      .prepare("update invitations set expires_at = 10000 where id = ?")
+      .run("invite_phase_two");
     const fake = client({
       authenticateCreatedUser: vi.fn(async () => {
         now = 10000;
@@ -363,6 +366,39 @@ describe("JellyfinActivationSaga", () => {
     expect(fake.createUser).toHaveBeenCalledTimes(1);
     expect(fake.authenticateCreatedUser).toHaveBeenCalledTimes(1);
     expect(repository.read("jellyfin_phase_two")?.state).toBe("manual_required");
+    expect(repository.read("jellyfin_phase_two")?.state).not.toBe("auth_pending");
+    expect(repository.readStageArtifact("jellyfin_phase_two")).not.toHaveProperty("accessToken");
+  });
+
+  it("does not record authentication after the persisted claim changes during authentication", async () => {
+    const { database, repository } = fixture();
+    let releaseAuthentication!: () => void;
+    const authenticationStarted = new Promise<void>((resolve) => {
+      releaseAuthentication = resolve;
+    });
+    const fake = client({
+      authenticateCreatedUser: vi.fn(async () => {
+        await authenticationStarted;
+        return {
+          accessToken: "created-user-token",
+          serverId,
+          userId: "created-upstream-id",
+        };
+      }),
+    });
+    const run = saga(database, fake).run("jellyfin_phase_two");
+    await vi.waitFor(() => expect(fake.authenticateCreatedUser).toHaveBeenCalledTimes(1));
+    database.sqlite.exec("drop trigger jellyfin_activation_operations_claim_binding_guard");
+    database.sqlite
+      .prepare(
+        "update jellyfin_activation_operations set invitation_claimed_at = invitation_claimed_at + 1 where id = ?",
+      )
+      .run("jellyfin_phase_two");
+    releaseAuthentication();
+
+    const result = await run;
+    expect(result.disposition).toBe("manual_pairing");
+    expect(result.disposition).not.toBe("activated_ready");
     expect(repository.read("jellyfin_phase_two")?.state).not.toBe("auth_pending");
     expect(repository.readStageArtifact("jellyfin_phase_two")).not.toHaveProperty("accessToken");
   });

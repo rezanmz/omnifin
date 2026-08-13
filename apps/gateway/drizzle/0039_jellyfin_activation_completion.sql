@@ -27,7 +27,8 @@ WHEN (OLD.activation_operation_id IS NOT NULL
         AND operation.invitation_claimed_at IS NEW.consumed_at
         AND operation.pending_oidc_session_id IS NOT NULL
         AND NEW.revoked_at IS NULL
-        AND operation.invitation_claimed_at < NEW.expires_at))
+        AND operation.invitation_claimed_at < NEW.expires_at
+        AND NEW.expires_at > CAST(unixepoch('subsec') * 1000 AS INTEGER)))
 BEGIN SELECT RAISE(ABORT, 'invitation activation marker is immutable'); END;
 --> statement-breakpoint
 CREATE TRIGGER `invitations_consumption_binding_guard`
