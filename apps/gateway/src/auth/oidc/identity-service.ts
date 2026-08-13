@@ -94,6 +94,12 @@ export interface ResolvedOidcIdentity {
   toJSON(): never;
 }
 
+export interface ExistingOidcIdentityProof {
+  readonly externalIdentityId: string;
+  readonly providerId: string;
+  readonly userId: string;
+}
+
 export type OidcIdentityResolution =
   | ResolvedOidcIdentity
   | {
@@ -397,6 +403,52 @@ export class OidcIdentityService {
       if (error instanceof OidcIdentityServiceError) throw error;
       throw new OidcIdentityServiceError({ cause: error });
     }
+  }
+
+  /** @internal Verifies a resume grant without login, role, identity, or session writes. */
+  public verifyExistingIdentityInExistingTransaction(
+    grant: VerifiedOidcGrant,
+  ): ExistingOidcIdentityProof | null {
+    if (!this.database.sqlite.inTransaction) throw new OidcIdentityServiceError();
+    let identity: ConsumedVerifiedOidcGrant;
+    try {
+      identity = consumeVerifiedOidcGrant(grant);
+    } catch {
+      return null;
+    }
+    const provider = this.database.sqlite
+      .prepare(
+        `select id, issuer, client_id as clientId, enabled, discovery_state as discoveryState
+         from oidc_providers where id = ?`,
+      )
+      .get(identity.providerId) as
+      | { id: string; issuer: string; clientId: string; enabled: number; discoveryState: string }
+      | undefined;
+    if (
+      !provider ||
+      provider.issuer !== identity.issuer ||
+      provider.clientId !== identity.clientId ||
+      provider.enabled !== 1 ||
+      provider.discoveryState !== "ready"
+    )
+      return null;
+    try {
+      this.#providerBindingVerifier.verify(provider.id, identity.providerRuntimeBinding);
+    } catch {
+      return null;
+    }
+    const row = this.database.sqlite
+      .prepare(
+        `select e.id as externalIdentityId, e.user_id as userId
+         from external_identities e join users u on u.id = e.user_id
+         where e.provider_id = ? and e.issuer = ? and e.subject = ?
+           and u.status = 'pending_link'`,
+      )
+      .get(provider.id, provider.issuer, identity.claims.subject) as
+      { externalIdentityId: string; userId: string } | undefined;
+    return row
+      ? { externalIdentityId: row.externalIdentityId, providerId: provider.id, userId: row.userId }
+      : null;
   }
 
   /** @internal Resolves one recovery-bound OIDC identity as the first administrator. */

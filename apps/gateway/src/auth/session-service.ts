@@ -1106,6 +1106,44 @@ export class SessionService {
     });
   }
 
+  /** @internal Rehydrates only the exact operation-bound pending OIDC session. */
+  public resumeValidatedOidcPairingSessionById(
+    sessionId: unknown,
+    expectedUserId: string,
+    expectedExternalIdentityId: string,
+    expectedProviderId: string,
+  ): ValidatedOidcPairingSession | null {
+    if (!SESSION_ID_PATTERN.test(String(sessionId))) return null;
+    const now = this.currentTime();
+    const row = this.loadJoinedSessionById(sessionId as string);
+    const principalRecord = row && mapPrincipalRecord(row);
+    const principal = principalRecord && buildSessionPrincipal(principalRecord, now);
+    if (
+      !row ||
+      !principal ||
+      !this.sessionLifecycleIsActive(row, now) ||
+      row.sessionId !== sessionId ||
+      row.authMethod !== "oidc" ||
+      row.oidcProviderId !== expectedProviderId ||
+      row.sessionUserId !== expectedUserId ||
+      row.externalIdentityId !== expectedExternalIdentityId ||
+      row.serviceIdentityLinkId !== null ||
+      row.joinedUserStatus !== "pending_link" ||
+      principal.accountState !== "pending_link" ||
+      principal.linkedServices.length !== 0
+    )
+      return null;
+    return Object.freeze({
+      [VALIDATED_OIDC_PAIRING_SESSION_BRAND]: true as const,
+      externalIdentityId: row.externalIdentityId,
+      oidcProviderId: row.oidcProviderId,
+      operationTime: now.getTime(),
+      serviceIdentityLinkId: null,
+      sessionId: row.sessionId,
+      userId: row.sessionUserId,
+    });
+  }
+
   /** @internal Returns the exact pending OIDC session for activation retry without issuing one. */
   public resumeIssuedOidcPairingSession(
     sessionToken: unknown,
@@ -1143,6 +1181,37 @@ export class SessionService {
       principal,
       sessionToken: typeof sessionToken === "string" ? sessionToken : "",
     };
+  }
+
+  /** @internal Resolves one live pending OIDC session before operation lookup. */
+  public resolveIssuedOidcPairingSessionForProvider(
+    sessionToken: unknown,
+    expectedProviderId: string,
+  ): {
+    externalIdentityId: string;
+    sessionId: string;
+    userId: string;
+  } | null {
+    const now = this.currentTime();
+    const candidate = this.loadSessionReplacementCandidate(sessionToken, now);
+    const row = candidate?.row;
+    if (
+      !candidate ||
+      !row ||
+      !this.sessionLifecycleIsActive(row, now) ||
+      row.authMethod !== "oidc" ||
+      row.oidcProviderId !== expectedProviderId ||
+      row.serviceIdentityLinkId !== null ||
+      row.sessionUserId === null ||
+      row.externalIdentityId === null ||
+      row.joinedUserStatus !== "pending_link"
+    )
+      return null;
+    return Object.freeze({
+      externalIdentityId: row.externalIdentityId,
+      sessionId: row.sessionId,
+      userId: row.sessionUserId,
+    });
   }
 
   /** @internal Resolves only a live, CSRF-proven recovery session for first-admin bootstrap. */

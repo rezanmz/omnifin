@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { VerifiedOidcGrant } from "../auth/oidc/protocol.js";
-import type { InvitationService } from "../auth/invitation-service.js";
 import type { OidcIdentityService } from "../auth/oidc/identity-service.js";
-import type { OidcSignInService } from "../auth/oidc/sign-in-service.js";
 import type {
   SessionService,
   IssuedSession,
@@ -29,6 +27,14 @@ export interface InviteBackedOidcActivationResult {
 
 export interface InviteBackedOidcActivationDependencies extends JellyfinActivationSagaDependencies {
   createId?: () => string;
+  finalizationFailpoint?: (
+    stage:
+      | "before_link"
+      | "after_link_insert"
+      | "after_user_activation"
+      | "after_session_replacement"
+      | "after_operation_completion",
+  ) => void;
 }
 
 function internalResult(
@@ -72,9 +78,7 @@ export class InviteBackedOidcActivationService {
     config: Pick<AppConfig, "encryptionKey" | "session">,
     dependencies: InviteBackedOidcActivationDependencies,
     identity: OidcIdentityService,
-    invitations: InvitationService,
     sessions: SessionService,
-    _signIn: OidcSignInService,
   ) {
     this.#database = database;
     this.#leaseOwner = dependencies.leaseOwner ?? `activation-${randomUUID()}`;
@@ -165,6 +169,21 @@ export class InviteBackedOidcActivationService {
           ) ?? undefined;
         const target = this.#exactTarget();
         if (!target || !pairing) return { identity, session, target: null };
+        const invitation = this.#database.sqlite
+          .prepare(
+            `select consumed_at as consumedAt, expires_at as expiresAt, revoked_at as revokedAt
+             from invitations where id = ?`,
+          )
+          .get(input.invitationId) as
+          { consumedAt: number | null; expiresAt: number; revokedAt: number | null } | undefined;
+        if (
+          !invitation ||
+          invitation.consumedAt === null ||
+          invitation.revokedAt !== null ||
+          invitation.consumedAt >= invitation.expiresAt ||
+          now >= invitation.expiresAt
+        )
+          throw new Error("activation invitation binding unavailable");
         operationId = `jellyfin_${this.#createId()}`;
         const repository = new JellyfinActivationOperationRepository(
           this.#database.sqlite,
@@ -183,6 +202,8 @@ export class InviteBackedOidcActivationService {
           leaseOwner: this.#leaseOwner,
           leaseExpiresAt: now + 1,
           now,
+          invitationClaimedAt: invitation.consumedAt,
+          pendingOidcSessionId: pairing.sessionId,
         });
         return { identity, session, target };
       })
@@ -207,6 +228,87 @@ export class InviteBackedOidcActivationService {
     } catch {
       return internalResult("pending_link", pendingSession, saga);
     }
+  }
+
+  public async resume(input: {
+    grant: VerifiedOidcGrant;
+    activationOperationId: string;
+    pendingOidcSessionId: string;
+    ipAddress?: string;
+    requestId?: string;
+    userAgent?: string;
+  }) {
+    const resolved = this.#database.sqlite
+      .transaction(() => {
+        const repository = new JellyfinActivationOperationRepository(
+          this.#database.sqlite,
+          this.#config.encryptionKey,
+        );
+        const operation = repository.read(input.activationOperationId);
+        if (
+          !operation ||
+          operation.pendingOidcSessionId !== input.pendingOidcSessionId ||
+          operation.state !== "auth_pending" ||
+          operation.activationStatus !== "pending"
+        )
+          return null;
+        const identity = this.#identity.verifyExistingIdentityInExistingTransaction(input.grant);
+        if (
+          !identity ||
+          identity.userId !== operation.userId ||
+          identity.externalIdentityId !== operation.externalIdentityId
+        )
+          return null;
+        const pairing = this.#sessions.resumeValidatedOidcPairingSessionById(
+          input.pendingOidcSessionId,
+          operation.userId,
+          operation.externalIdentityId,
+          identity.providerId,
+        );
+        return pairing ? { operationId: operation.id, pairing } : null;
+      })
+      .immediate();
+    if (!resolved) return null;
+    const saga = await this.#saga.run(resolved.operationId);
+    if (saga.disposition !== "activated_ready") return null;
+    try {
+      return internalResult(
+        "active",
+        this.#finalize(resolved.operationId, resolved.pairing, input),
+        saga,
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  public resumeCandidate(sessionToken: unknown, providerId: string) {
+    const session = this.#sessions.resolveIssuedOidcPairingSessionForProvider(
+      sessionToken,
+      providerId,
+    );
+    if (!session) return null;
+    const rows = this.#database.sqlite
+      .prepare(
+        `select o.id as operationId, o.user_id as userId, o.external_identity_id as externalIdentityId,
+                o.pending_oidc_session_id as pendingOidcSessionId
+         from jellyfin_activation_operations o
+         where o.state = 'auth_pending' and o.activation_status = 'pending'
+           and o.pending_oidc_session_id = ?
+           and o.user_id = ?
+           and o.external_identity_id = ?
+           and exists (select 1 from invitations i where i.id = o.invitation_id
+                       and i.activation_operation_id = o.id and i.revoked_at is null
+                       and i.consumed_at = o.invitation_claimed_at and i.expires_at > ?)
+           and o.id = o.id`,
+      )
+      .all(session.sessionId, session.userId, session.externalIdentityId, this.#clock()) as Array<{
+      operationId: string;
+      userId: string;
+      externalIdentityId: string;
+      pendingOidcSessionId: string;
+    }>;
+    return rows.length === 1 ? rows[0] : null;
   }
 
   #exactTarget() {
@@ -256,6 +358,7 @@ export class InviteBackedOidcActivationService {
   ) {
     return this.#database.sqlite
       .transaction(() => {
+        const now = this.#clock();
         const repository = new JellyfinActivationOperationRepository(
           this.#database.sqlite,
           this.#config.encryptionKey,
@@ -278,8 +381,11 @@ export class InviteBackedOidcActivationService {
           : undefined;
         const identity = operation
           ? (this.#database.sqlite
-              .prepare("select user_id as userId from external_identities where id = ?")
-              .get(operation.externalIdentityId) as { userId: string } | undefined)
+              .prepare(
+                "select user_id as userId, provider_id as providerId from external_identities where id = ?",
+              )
+              .get(operation.externalIdentityId) as
+              { providerId: string; userId: string } | undefined)
           : undefined;
         const provisioning = operation
           ? (this.#database.sqlite
@@ -332,6 +438,7 @@ export class InviteBackedOidcActivationService {
           provisioning.provisioningRevision !== operation.provisioningRevision
         )
           throw new Error("activation unavailable");
+        this.#dependencies.finalizationFailpoint?.("before_link");
         const artifact = repository.readStageArtifact(operationId);
         if (
           typeof artifact.accessToken !== "string" ||
@@ -350,9 +457,16 @@ export class InviteBackedOidcActivationService {
           pairing.externalIdentityId !== operation.externalIdentityId
         )
           throw new Error("activation binding mismatch");
+        const livePairing = this.#sessions.resumeValidatedOidcPairingSessionById(
+          pairing.sessionId,
+          operation.userId,
+          operation.externalIdentityId,
+          identity.providerId,
+        );
+        if (!livePairing || livePairing.serviceIdentityLinkId !== null)
+          throw new Error("activation session unavailable");
         const linkId = this.#createId();
         const encrypted = this.#cipher.encrypt(artifact.accessToken, accessTokenContext(linkId));
-        const now = this.#clock();
         this.#database.sqlite
           .prepare(
             `insert into service_identity_links
@@ -378,6 +492,7 @@ export class InviteBackedOidcActivationService {
             now,
             now,
           );
+        this.#dependencies.finalizationFailpoint?.("after_link_insert");
         if (
           this.#database.sqlite
             .prepare(
@@ -386,13 +501,20 @@ export class InviteBackedOidcActivationService {
             .run(now, operation.userId).changes !== 1
         )
           throw new Error("user finalization failed");
-        const issued = this.#sessions.completeValidatedOidcPairingSession(pairing, linkId, input);
+        this.#dependencies.finalizationFailpoint?.("after_user_activation");
+        const issued = this.#sessions.completeValidatedOidcPairingSession(
+          livePairing,
+          linkId,
+          input,
+        );
+        this.#dependencies.finalizationFailpoint?.("after_session_replacement");
         repository.completeActivation({
           id: operation.id,
           linkId,
           now,
           expectedRevision: operation.revision,
         });
+        this.#dependencies.finalizationFailpoint?.("after_operation_completion");
         return issued;
       })
       .immediate();

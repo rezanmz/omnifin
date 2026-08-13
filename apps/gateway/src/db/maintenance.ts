@@ -1233,16 +1233,33 @@ function sanitizeJellyfinActivationOperations(sqlite: Database.Database, now: nu
       delete from main.jellyfin_activation_cleanup_reservations;
     `);
   }
-  // A completed operation is authoritative only when its marked link survived the
-  // restore. Drop orphaned completed records before the completion trigger sees them.
+  // Preserve completed rows; malformed completed rows are quarantined rather than
+  // deleted (the claim marker trigger deliberately forbids that deletion).
   sqlite.exec(`
-    delete from main.jellyfin_activation_operations
-    where activation_status = 'completed'
-      and not exists (
-        select 1 from main.service_identity_links link
-        where link.id = activation_completed_link_id
-          and link.provisioned_by_activation_id = jellyfin_activation_operations.id
-      );
+    update main.users
+    set status = 'disabled', updated_at = max(updated_at, ${now})
+    where id in (
+      select operation.user_id from main.jellyfin_activation_operations operation
+      where operation.activation_status = 'completed'
+        and not exists (
+          select 1 from main.service_identity_links link
+          where link.id = operation.activation_completed_link_id
+            and link.provisioned_by_activation_id = operation.id
+        )
+    );
+    update main.service_identity_links
+    set encrypted_access_token = null, token_created_at = null,
+        last_verified_at = null, health_state = 'revoked',
+        revoked_at = max(created_at, ${now}), updated_at = max(updated_at, ${now})
+    where provisioned_by_activation_id in (
+      select operation.id from main.jellyfin_activation_operations operation
+      where operation.activation_status = 'completed'
+        and not exists (
+          select 1 from main.service_identity_links valid_link
+          where valid_link.id = operation.activation_completed_link_id
+            and valid_link.provisioned_by_activation_id = operation.id
+        )
+    );
   `);
   sqlite.exec(`
     update main.jellyfin_activation_operations
@@ -1253,7 +1270,8 @@ function sanitizeJellyfinActivationOperations(sqlite: Database.Database, now: nu
         failure_code = case when state = 'tombstoned' then failure_code else 'restore_sanitized' end,
         manual_required_at = case when state = 'tombstoned' then manual_required_at else max(created_at, ${now}) end,
         tombstoned_at = case when state = 'tombstoned' then tombstoned_at else null end,
-        revision = revision + 1, updated_at = max(updated_at, created_at, ${now});
+        revision = revision + 1, updated_at = max(updated_at, created_at, ${now})
+     where activation_status <> 'completed';
   `);
 }
 
@@ -1288,6 +1306,10 @@ function mergeRollbackJellyfinActivationFacts(sqlite: Database.Database, now: nu
       and not exists (
         select 1 from main.service_identity_links link
         where link.provisioned_by_activation_id = collision.id
+      )
+      and not exists (
+        select 1 from main.invitations invitation
+        where invitation.activation_operation_id = collision.id
       );
     delete from main.jellyfin_activation_operations as restored
     where not exists (select 1 from rollback_timeline.jellyfin_activation_operations current where current.id = restored.id)
@@ -1467,7 +1489,22 @@ function mergeRollbackSecurityFacts(sqlite: Database.Database, now: number, root
     sqlite.pragma("table_info(service_identity_links)") as Array<{ name: string }>
   ).some((column) => column.name === "provisioned_by_activation_id");
   if (markerColumn)
-    sqlite.exec("update main.service_identity_links set provisioned_by_activation_id = null");
+    sqlite.exec(`
+      update main.service_identity_links
+      set provisioned_by_activation_id = null
+      where provisioned_by_activation_id is not null
+        and not exists (
+          select 1 from main.jellyfin_activation_operations operation
+          where operation.id = service_identity_links.provisioned_by_activation_id
+            and operation.user_id = service_identity_links.user_id
+            and operation.connector_id = service_identity_links.connector_id
+        )
+        and not exists (
+          select 1 from rollback_timeline.service_identity_links restored
+          where restored.id = service_identity_links.id
+            and restored.provisioned_by_activation_id is not null
+        );
+    `);
   const exhaustedRevision = sqlite
     .prepare(
       `select 1 from main.service_identity_links restored

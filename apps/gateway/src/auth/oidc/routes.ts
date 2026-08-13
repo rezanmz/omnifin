@@ -393,9 +393,7 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
     app.appConfig,
     dependencies.activation ?? {},
     identity,
-    invitations,
     app.sessionService,
-    signIn,
   );
   const failureAudit = new OidcFailureAuditService(
     app.database,
@@ -1051,10 +1049,21 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
           providerId,
           redirectUri: canonicalOidcCallbackUri(app.appConfig.baseUrl, providerId),
         });
+        const resume = activation.resumeCandidate(
+          request.cookies[sessionCookieName(app.appConfig)],
+          providerId,
+        );
         const transaction = await transactions.create({
           browserBindingToken: currentBinding,
           providerId,
           providerRuntimeBinding,
+          ...(resume
+            ? {
+                activationOperationId: resume.operationId,
+                pendingOidcSessionId: resume.pendingOidcSessionId,
+                purpose: "activation_resume" as const,
+              }
+            : {}),
           returnPath,
         });
         try {
@@ -1180,6 +1189,29 @@ export const oidcRoutes: FastifyPluginAsync<OidcRoutesOptions> = async (app, opt
           runtime,
           transaction,
         });
+        if (transaction.purpose === "activation_resume") {
+          if (!transaction.activationOperationId || !transaction.pendingOidcSessionId) {
+            throw new OidcBrowserRouteError();
+          }
+          const resumed = await activation.resume({
+            activationOperationId: transaction.activationOperationId,
+            grant,
+            pendingOidcSessionId: transaction.pendingOidcSessionId,
+            ipAddress: request.ip,
+            requestId: request.id,
+            ...(request.headers["user-agent"] === undefined
+              ? {}
+              : { userAgent: request.headers["user-agent"] }),
+          });
+          if (!resumed) return reply.redirect("/link/jellyfin", 303);
+          writeSessionCookie(
+            reply,
+            app.appConfig,
+            resumed.session.sessionToken,
+            resumed.session.absoluteExpiresAt,
+          );
+          return reply.redirect(safeReturnPath(transaction.returnPath), 303);
+        }
         const signInInput = {
           currentSessionToken: request.cookies[sessionCookieName(app.appConfig)],
           grant,

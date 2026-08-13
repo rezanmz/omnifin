@@ -70,6 +70,7 @@ export interface OidcAuthorizationTransactionDependencies {
 }
 
 export interface CreateOidcAuthorizationTransactionInput {
+  activationOperationId?: string;
   administratorId?: string;
   browserBindingToken?: string;
   confirmation?: typeof ADMINISTRATOR_RECOVERY_CONFIRMATION;
@@ -78,12 +79,18 @@ export interface CreateOidcAuthorizationTransactionInput {
   providerId: string;
   providerRuntimeBinding: OidcProviderRuntimeBinding;
   purpose?:
-    "administrator_bootstrap" | "administrator_replacement" | "invitation_registration" | "sign_in";
+    | "activation_resume"
+    | "administrator_bootstrap"
+    | "administrator_replacement"
+    | "invitation_registration"
+    | "sign_in";
+  pendingOidcSessionId?: string;
   recoverySessionId?: string;
   returnPath?: string;
 }
 
 export interface CreatedOidcAuthorizationTransaction {
+  activationOperationId?: string;
   administratorId?: string;
   browserBindingToken: string;
   codeChallenge: string;
@@ -96,7 +103,12 @@ export interface CreatedOidcAuthorizationTransaction {
   providerId: string;
   providerRuntimeBinding: OidcProviderRuntimeBinding;
   purpose?:
-    "administrator_bootstrap" | "administrator_replacement" | "invitation_registration" | "sign_in";
+    | "activation_resume"
+    | "administrator_bootstrap"
+    | "administrator_replacement"
+    | "invitation_registration"
+    | "sign_in";
+  pendingOidcSessionId?: string;
   recoverySessionId?: string;
   redirectUri: string;
   returnPath: string;
@@ -112,6 +124,7 @@ export interface ConsumeOidcAuthorizationTransactionInput {
 export type CancelOidcAuthorizationTransactionInput = ConsumeOidcAuthorizationTransactionInput;
 
 export interface ConsumedOidcAuthorizationTransaction {
+  activationOperationId?: string;
   administratorId?: string;
   codeVerifier: string;
   confirmation?: typeof ADMINISTRATOR_RECOVERY_CONFIRMATION;
@@ -124,7 +137,12 @@ export interface ConsumedOidcAuthorizationTransaction {
   providerId: string;
   providerRuntimeBinding: OidcProviderRuntimeBinding;
   purpose:
-    "administrator_bootstrap" | "administrator_replacement" | "invitation_registration" | "sign_in";
+    | "activation_resume"
+    | "administrator_bootstrap"
+    | "administrator_replacement"
+    | "invitation_registration"
+    | "sign_in";
+  pendingOidcSessionId?: string;
   recoverySessionId?: string;
   redirectUri: string;
   returnPath: string;
@@ -202,11 +220,22 @@ interface EncryptedOidcAuthorizationTransactionPayloadV4 {
   readonly schemaVersion: 4;
 }
 
+interface EncryptedOidcAuthorizationTransactionPayloadV5 {
+  readonly activationOperationId: string;
+  readonly nonce: string;
+  readonly pendingOidcSessionId: string;
+  readonly providerId: string;
+  readonly providerRuntimeBinding: OidcProviderRuntimeBinding;
+  readonly purpose: "activation_resume";
+  readonly schemaVersion: 5;
+}
+
 type EncryptedOidcAuthorizationTransactionPayload =
   | EncryptedOidcAuthorizationTransactionPayloadV1
   | EncryptedOidcAuthorizationTransactionPayloadV2
   | EncryptedOidcAuthorizationTransactionPayloadV3
-  | EncryptedOidcAuthorizationTransactionPayloadV4;
+  | EncryptedOidcAuthorizationTransactionPayloadV4
+  | EncryptedOidcAuthorizationTransactionPayloadV5;
 
 function invalidTransaction(): never {
   throw new OidcAuthorizationTransactionError("oidc_transaction_invalid");
@@ -228,6 +257,10 @@ function validProviderId(value: unknown): value is string {
 
 function validSessionId(value: unknown): value is string {
   return typeof value === "string" && SESSION_ID_PATTERN.test(value);
+}
+
+function validActivationOperationId(value: unknown): value is string {
+  return typeof value === "string" && /^jellyfin_[A-Za-z0-9_-]{1,118}$/.test(value);
 }
 
 function validCodeVerifier(value: unknown): value is string {
@@ -441,9 +474,15 @@ function serializeEncryptedTransactionPayload(
   providerId: string,
   providerRuntimeBinding: OidcProviderRuntimeBinding,
   purpose:
-    "administrator_bootstrap" | "administrator_replacement" | "invitation_registration" | "sign_in",
+    | "activation_resume"
+    | "administrator_bootstrap"
+    | "administrator_replacement"
+    | "invitation_registration"
+    | "sign_in",
   invitationId: string | null,
   recoverySessionId: string | null,
+  activationOperationId: string | null,
+  pendingOidcSessionId: string | null,
   replacement: AdministratorRecoveryConfirmationRequest | null,
 ) {
   if (purpose === "sign_in") {
@@ -468,6 +507,23 @@ function serializeEncryptedTransactionPayload(
       providerRuntimeBinding,
       purpose,
       schemaVersion: 4,
+    });
+  }
+  if (purpose === "activation_resume") {
+    if (
+      !validActivationOperationId(activationOperationId) ||
+      !validSessionId(pendingOidcSessionId)
+    ) {
+      invalidTransaction();
+    }
+    return JSON.stringify({
+      activationOperationId,
+      nonce,
+      pendingOidcSessionId,
+      providerId,
+      providerRuntimeBinding,
+      purpose,
+      schemaVersion: 5,
     });
   }
   if (replacement === null || recoverySessionId === null) invalidTransaction();
@@ -504,11 +560,14 @@ function parseEncryptedTransactionPayload(
     "administratorId,confirmation,expectedUpdatedAt,nonce,providerId,providerRuntimeBinding,purpose,recoverySessionId,schemaVersion";
   const invitationKeys =
     "invitationId,nonce,providerId,providerRuntimeBinding,purpose,schemaVersion";
+  const activationResumeKeys =
+    "activationOperationId,nonce,pendingOidcSessionId,providerId,providerRuntimeBinding,purpose,schemaVersion";
   if (
     keys !== "nonce,providerId,providerRuntimeBinding,schemaVersion" &&
     keys !== "nonce,providerId,providerRuntimeBinding,purpose,recoverySessionId,schemaVersion" &&
     keys !== replacementKeys &&
-    keys !== invitationKeys
+    keys !== invitationKeys &&
+    keys !== activationResumeKeys
   ) {
     invalidTransaction();
   }
@@ -518,6 +577,15 @@ function parseEncryptedTransactionPayload(
     validProviderId(candidate.providerId) &&
     validRuntimeBinding(candidate.providerRuntimeBinding);
   if (!commonValid) invalidTransaction();
+  if (
+    candidate.schemaVersion === 5 &&
+    keys === activationResumeKeys &&
+    candidate.purpose === "activation_resume" &&
+    validActivationOperationId(candidate.activationOperationId) &&
+    validSessionId(candidate.pendingOidcSessionId)
+  ) {
+    return candidate as unknown as EncryptedOidcAuthorizationTransactionPayloadV5;
+  }
   if (
     candidate.schemaVersion === 4 &&
     keys === invitationKeys &&
@@ -599,13 +667,16 @@ export class OidcAuthorizationTransactionService {
         input.purpose !== "sign_in" &&
         input.purpose !== "administrator_bootstrap" &&
         input.purpose !== "administrator_replacement" &&
-        input.purpose !== "invitation_registration")
+        input.purpose !== "invitation_registration" &&
+        input.purpose !== "activation_resume")
     ) {
       invalidTransaction();
     }
     const purpose = input.purpose ?? "sign_in";
     const recoverySessionId = input.recoverySessionId ?? null;
     const invitationId = input.invitationId ?? null;
+    const activationOperationId = input.activationOperationId ?? null;
+    const pendingOidcSessionId = input.pendingOidcSessionId ?? null;
     const replacement = administratorRecoveryConfirmationRequestSchema.safeParse({
       administratorId: input.administratorId,
       confirmation: input.confirmation,
@@ -623,6 +694,13 @@ export class OidcAuthorizationTransactionService {
         (recoverySessionId !== null || invitationId === null || !validProviderId(invitationId))) ||
       (purpose !== "invitation_registration" && invitationId !== null) ||
       (purpose === "administrator_replacement" && !replacement.success) ||
+      (purpose === "activation_resume" &&
+        (!validActivationOperationId(activationOperationId) ||
+          !validSessionId(pendingOidcSessionId) ||
+          recoverySessionId !== null ||
+          invitationId !== null)) ||
+      (purpose !== "activation_resume" &&
+        (activationOperationId !== null || pendingOidcSessionId !== null)) ||
       (purpose !== "administrator_replacement" && hasReplacementFields)
     ) {
       invalidTransaction();
@@ -676,6 +754,8 @@ export class OidcAuthorizationTransactionService {
             purpose,
             invitationId,
             recoverySessionId,
+            activationOperationId,
+            pendingOidcSessionId,
             replacement.success ? replacement.data : null,
           ),
           nonceContext(transactionId),
@@ -702,6 +782,8 @@ export class OidcAuthorizationTransactionService {
         ...(replacement.success ? replacement.data : {}),
         ...(invitationId === null ? {} : { invitationId }),
         ...(recoverySessionId === null ? {} : { recoverySessionId }),
+        ...(activationOperationId === null ? {} : { activationOperationId }),
+        ...(pendingOidcSessionId === null ? {} : { pendingOidcSessionId }),
         redirectUri,
         returnPath,
         state,
@@ -815,6 +897,12 @@ export class OidcAuthorizationTransactionService {
       providerId: row.providerId,
       providerRuntimeBinding: encryptedPayload.providerRuntimeBinding,
       purpose: encryptedPayload.schemaVersion === 1 ? "sign_in" : encryptedPayload.purpose,
+      ...(encryptedPayload.schemaVersion === 5
+        ? {
+            activationOperationId: encryptedPayload.activationOperationId,
+            pendingOidcSessionId: encryptedPayload.pendingOidcSessionId,
+          }
+        : {}),
       ...(encryptedPayload.schemaVersion === 4
         ? { invitationId: encryptedPayload.invitationId }
         : {}),
