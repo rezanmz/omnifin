@@ -11,6 +11,65 @@ const tierValues = new Set([1, 2, 3, 4]);
 
 export const STABLE_ARCHITECTURES = Object.freeze(["linux/amd64", "linux/arm64"]);
 
+const TIER_REQUIREMENTS = Object.freeze({
+  1: Object.freeze({
+    claim: "Contract fixtures",
+    coverage: Object.freeze([
+      "parsing",
+      "normalization",
+      "authorization",
+      "malformed-responses",
+      "limits",
+      "timeouts",
+      "cancellation",
+      "operation-success",
+      "operation-failure",
+    ]),
+  }),
+  2: Object.freeze({
+    claim: "Digest-pinned disposable real upstreams",
+    coverage: Object.freeze([
+      "version-discovery",
+      "capability-discovery",
+      "authentication",
+      "representative-reads",
+      "safe-mutations",
+      "failure-behavior",
+      "recovery",
+      "deterministic-teardown",
+    ]),
+  }),
+  3: Object.freeze({
+    claim: "Exact-candidate verticals",
+    coverage: Object.freeze([
+      "identity",
+      "connector-use",
+      "representative-media",
+      "sse",
+      "mutations",
+      "backup-restore",
+      "migration",
+    ]),
+  }),
+  4: Object.freeze({
+    claim: "Real home-lab rehearsal",
+    coverage: Object.freeze([
+      "documented-install",
+      "tls-reverse-proxy",
+      "bootstrap",
+      "backup",
+      "empty-host-restore",
+      "upgrade",
+      "rollback",
+      "troubleshooting",
+      "real-network",
+      "sse-media-proxying",
+      "recovery-evidence",
+      "sanitized-diagnostics",
+    ]),
+  }),
+});
+
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -100,10 +159,27 @@ function validateArchitectures(value, label, expectedArchitectures) {
   return [...value].sort();
 }
 
+function validateTierCoverage(value, tier, label) {
+  const requirement = TIER_REQUIREMENTS[tier];
+  if (value.claim !== requirement.claim) {
+    throw new Error(`${label}.claim must identify the documented Tier ${tier} evidence.`);
+  }
+  if (
+    !Array.isArray(value.coverage) ||
+    value.coverage.length !== requirement.coverage.length ||
+    new Set(value.coverage).size !== value.coverage.length ||
+    [...value.coverage].sort().join(",") !== [...requirement.coverage].sort().join(",")
+  ) {
+    throw new Error(`${label}.coverage must include every documented Tier ${tier} behavior.`);
+  }
+  return { claim: requirement.claim, coverage: [...requirement.coverage] };
+}
+
 function validateRecord(value, index, sourceSha, candidateDigest, expectedArchitectures, today) {
   const label = `Evidence record ${index + 1}`;
   const expectedKeys = [
     "architectures",
+    "coverage",
     "artifact",
     "candidateDigest",
     "claim",
@@ -134,11 +210,13 @@ function validateRecord(value, index, sourceSha, candidateDigest, expectedArchit
   if (expiresAt < verifiedAt || expiresAt < today) {
     throw new Error(`${label} must have unexpired evidence after its verification date.`);
   }
+  const tierCoverage = validateTierCoverage(value, value.tier, label);
   return {
     architectures: validateArchitectures(value.architectures, label, expectedArchitectures),
     artifact: validateArtifact(value.artifact, label),
     candidateDigest,
-    claim: requireString(value.claim, `${label}.claim`),
+    claim: tierCoverage.claim,
+    coverage: tierCoverage.coverage,
     expiresAt,
     limitations: requireString(value.limitations, `${label}.limitations`),
     owner: requireString(value.owner, `${label}.owner`, 128),
