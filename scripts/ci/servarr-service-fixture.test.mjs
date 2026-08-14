@@ -369,9 +369,44 @@ test("restores Sonarr monitoring when bounded fresh readback never converges", a
       intervalMs: 0,
       wait: async () => {},
     }),
-    /monitoring_fresh_read_invalid/u,
+    /monitoring_fresh_read_invalid_stale/u,
   );
   assert.equal(readCount, 4);
+  assert.deepEqual(
+    updates.map(({ expectedMonitored, monitored }) => ({ expectedMonitored, monitored })),
+    [
+      { expectedMonitored: true, monitored: false },
+      { expectedMonitored: false, monitored: true },
+    ],
+  );
+});
+
+test("reports a mismatched Sonarr target without disclosing fixture identifiers", async () => {
+  const updates = [];
+  const state = (monitored, mediaId = 77) => ({
+    monitored,
+    target: { kind: "series", mediaId, service: "sonarr" },
+    verifiedAt: "2026-08-08T00:00:00.000Z",
+  });
+  const reads = [state(true), state(false, 78), state(true)];
+  const adapter = {
+    async readAcquisitionMonitoring() {
+      return reads.shift();
+    },
+    async updateAcquisitionMonitoring(input) {
+      updates.push(input);
+      return state(input.monitored);
+    },
+  };
+
+  await assert.rejects(
+    verifyMonitoringMutation({ service: "sonarr" }, adapter, 77, {
+      attempts: 1,
+      intervalMs: 0,
+      wait: async () => {},
+    }),
+    /monitoring_fresh_read_invalid_target/u,
+  );
   assert.deepEqual(
     updates.map(({ expectedMonitored, monitored }) => ({ expectedMonitored, monitored })),
     [

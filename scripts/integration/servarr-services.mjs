@@ -1185,16 +1185,31 @@ async function verifyCredentialRejection(context, server, apiKey) {
   }
 }
 
-function assertMonitoringState(state, context, mediaId, monitored, failureCode) {
+function monitoringStateFailureCode(state, context, mediaId, monitored, failureCode) {
   const expectedKind = context.service === "radarr" ? "movie" : "series";
   if (
-    state?.monitored !== monitored ||
-    state?.target?.kind !== expectedKind ||
+    !state ||
+    typeof state !== "object" ||
+    typeof state.monitored !== "boolean" ||
+    !state.target ||
+    typeof state.target !== "object"
+  ) {
+    return `${failureCode}_state`;
+  }
+  if (state.monitored !== monitored) return `${failureCode}_stale`;
+  if (
+    state.target.kind !== expectedKind ||
     state.target.mediaId !== mediaId ||
     state.target.service !== context.service
   ) {
-    throw new ServarrFixtureFailure(failureCode);
+    return `${failureCode}_target`;
   }
+  return null;
+}
+
+function assertMonitoringState(state, context, mediaId, monitored, failureCode) {
+  const code = monitoringStateFailureCode(state, context, mediaId, monitored, failureCode);
+  if (code) throw new ServarrFixtureFailure(code);
 }
 
 export async function readMonitoringStateWithReadback(
