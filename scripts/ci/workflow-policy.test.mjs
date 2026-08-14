@@ -689,6 +689,18 @@ test("stable publication crosses optional live coverage only through explicit su
   }
 });
 
+test("release fixtures retain required evidence", () => {
+  const document = workflowDocument("publish.yml");
+  const fixtureEvidence = namedStep(
+    document.jobs["validate-source"].steps,
+    "Upload sanitized fixture release evidence",
+  );
+
+  assert.equal(fixtureEvidence.if, "always()");
+  assert.equal(fixtureEvidence.with.path, "artifacts/release-integration/fixture.json");
+  assert.equal(fixtureEvidence.with["if-no-files-found"], "error");
+});
+
 test("CI builds Storybook before exercising stories", () => {
   const source = workflow("ci.yml");
   const build = source.indexOf("pnpm --filter @omnifin/web build:storybook");
