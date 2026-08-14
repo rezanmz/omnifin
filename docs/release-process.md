@@ -164,9 +164,12 @@ The release sequence is:
 9. Recheck release ordering and full-version-tag absence, then point the full, minor,
    major, and `latest` tags at that exact verified digest.
 10. From another anonymous job, resolve every stable tag and pull the full version.
-11. Attach `compose.yaml`, `omnifin.env.example`, and `SHA256SUMS` to the still-draft release,
-    refusing asset replacement, then publish the GitHub Release and record the coverage profile
-    and container digest in its notes.
+11. Generate the release-only Compose and environment assets plus a manifest binding the release
+    tag, exact source SHA, image digest, and asset SHA-256 digests. Sign that manifest with the
+    protected `publish.yml` workflow's keyless Sigstore identity, verify the bundle before upload,
+    then attach the assets, manifest, and Sigstore bundle to the still-draft release without
+    allowing replacement. Publish the GitHub Release and record the coverage profile and container
+    digest in its notes.
 
 For version `1.4.2`, successful promotion creates:
 

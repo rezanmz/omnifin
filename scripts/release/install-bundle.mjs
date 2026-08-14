@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const publicImage = "ghcr.io/rezanmz/omnifin";
-const outputNames = ["compose.yaml", "omnifin.env.example", "SHA256SUMS"];
+const outputNames = ["compose.yaml", "omnifin.env.example", "SHA256SUMS", "release-manifest.json"];
 const releaseImage = "image: ${OMNIFIN_IMAGE:?Set OMNIFIN_IMAGE from the release environment file}";
 const releaseImageReference =
   "OMNIFIN_IMAGE_REF: ${OMNIFIN_IMAGE:?Set OMNIFIN_IMAGE from the release environment file}";
@@ -12,6 +12,13 @@ const releaseImageReference =
 export function stableReleaseVersion(value) {
   if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.test(value ?? "")) {
     throw new Error("release_version_invalid");
+  }
+  return value;
+}
+
+export function releaseSourceSha(value) {
+  if (!/^[a-f0-9]{40}$/u.test(value ?? "")) {
+    throw new Error("release_source_sha_invalid");
   }
   return value;
 }
@@ -84,6 +91,7 @@ function sha256(source) {
 
 export function createReleaseInstallBundle(options) {
   const version = stableReleaseVersion(options.version);
+  const sourceSha = releaseSourceSha(options.sourceSha);
   const image = immutableReleaseImage(options.digest);
   const repositoryRoot = path.resolve(options.repositoryRoot);
   const outputDirectory = path.resolve(options.outputDirectory);
@@ -103,11 +111,27 @@ export function createReleaseInstallBundle(options) {
     `${sha256(environment)}  omnifin.env.example`,
     "",
   ].join("\n");
+  const manifest = `${JSON.stringify(
+    {
+      assets: {
+        SHA256SUMS: sha256(checksums),
+        "compose.yaml": sha256(compose),
+        "omnifin.env.example": sha256(environment),
+      },
+      image,
+      sourceSha,
+      tag: `v${version}`,
+      version,
+    },
+    null,
+    2,
+  )}\n`;
 
   for (const [target, source] of [
     [targets[0], compose],
     [targets[1], environment],
     [targets[2], checksums],
+    [targets[3], manifest],
   ]) {
     writeFileSync(target, source, { encoding: "utf8", flag: "wx", mode: 0o644 });
     chmodSync(target, 0o644);
@@ -117,21 +141,26 @@ export function createReleaseInstallBundle(options) {
 }
 
 function commandOptions(arguments_) {
-  if (arguments_.length !== 6) throw new Error("install_bundle_arguments_invalid");
+  if (arguments_.length !== 8) throw new Error("install_bundle_arguments_invalid");
   const values = new Map();
   for (let index = 0; index < arguments_.length; index += 2) {
     const name = arguments_[index];
     const value = arguments_[index + 1];
-    if (!["--digest", "--output", "--version"].includes(name) || !value || values.has(name)) {
+    if (
+      !["--digest", "--output", "--source-sha", "--version"].includes(name) ||
+      !value ||
+      values.has(name)
+    ) {
       throw new Error("install_bundle_arguments_invalid");
     }
     values.set(name, value);
   }
-  if (values.size !== 3) throw new Error("install_bundle_arguments_invalid");
+  if (values.size !== 4) throw new Error("install_bundle_arguments_invalid");
   return {
     digest: values.get("--digest"),
     outputDirectory: path.resolve(values.get("--output")),
     repositoryRoot: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.."),
+    sourceSha: values.get("--source-sha"),
     version: values.get("--version"),
   };
 }

@@ -799,6 +799,7 @@ jobs:
           node scripts/release/install-bundle.mjs
           --version "${{ inputs.version }}"
           --digest "$IMAGE_DIGEST"
+          --source-sha "${{ inputs.release_sha }}"
           --output "${{ runner.temp }}/omnifin-install"
       - name: Start, inspect, back up, and verify the release
         run: |
@@ -812,6 +813,11 @@ jobs:
           )
 
           (cd "$bundle" && sha256sum --check SHA256SUMS)
+          (
+            cd "$bundle"
+            jq --raw-output '.assets | to_entries[] | "\(.value)  \(.key)"' release-manifest.json \
+              | sha256sum --check --strict
+          )
           "${compose[@]}" config --quiet
           images=$("${compose[@]}" config --images | sort --unique)
           test "$images" = "$(grep '^OMNIFIN_IMAGE=' "$bundle/omnifin.env.example" | cut -d= -f2-)"
@@ -1179,6 +1185,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: write
+      id-token: write
     steps:
       - name: Check out immutable release source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1189,6 +1196,8 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Generate release install assets
         env:
           IMAGE_DIGEST: ${{ needs.publish-candidate.outputs.digest }}
@@ -1196,7 +1205,21 @@ jobs:
           node scripts/release/install-bundle.mjs
           --version "${{ inputs.version }}"
           --digest "$IMAGE_DIGEST"
+          --source-sha "${{ inputs.release_sha }}"
           --output "${{ runner.temp }}/release-install-assets"
+      - name: Sign and verify the release asset manifest
+        env:
+          ASSET_DIRECTORY: ${{ runner.temp }}/release-install-assets
+        run: |
+          set -euo pipefail
+          manifest="$ASSET_DIRECTORY/release-manifest.json"
+          bundle="$ASSET_DIRECTORY/release-manifest.sigstore.json"
+          cosign sign-blob --yes --bundle "$bundle" "$manifest"
+          cosign verify-blob "$manifest" \
+            --bundle "$bundle" \
+            --certificate-identity \
+              "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/publish.yml@refs/heads/main" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null
       - name: Attach install assets to the draft
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
@@ -1217,7 +1240,13 @@ jobs:
             if (!release?.draft) {
               throw new Error(`Expected an unpublished release draft for ${process.env.RELEASE_TAG}.`);
             }
-            const names = ["compose.yaml", "omnifin.env.example", "SHA256SUMS"];
+            const names = [
+              "compose.yaml",
+              "omnifin.env.example",
+              "SHA256SUMS",
+              "release-manifest.json",
+              "release-manifest.sigstore.json",
+            ];
             const existing = await github.paginate(github.rest.repos.listReleaseAssets, {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -1266,7 +1295,7 @@ jobs:
             const digestLine = `Container digest: \`${process.env.IMAGE_DIGEST}\``;
             const profileLine = `Release coverage profile: \`${process.env.RELEASE_PROFILE}\``;
             const installLine =
-              "Install bundle: verify `SHA256SUMS`, copy `omnifin.env.example` to `.env`, then start `compose.yaml`.";
+              "Install bundle: verify `release-manifest.json` with `release-manifest.sigstore.json`, then verify its listed SHA-256 digests before starting `compose.yaml`.";
             const evidenceLines = [digestLine, profileLine, installLine].filter(
               (line) => !release.body?.includes(line),
             );
