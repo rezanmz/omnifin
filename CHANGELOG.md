@@ -7,6 +7,22 @@
 * **auth:** add single-use administrator invitations with OIDC/Jellyfin onboarding proof,
   lifecycle auditing, and restore-safe replacement handling ([#335](https://github.com/rezanmz/omnifin/issues/335))
 
+## [0.17.0](https://github.com/rezanmz/omnifin/compare/v0.16.0...v0.17.0) (2026-08-14)
+
+
+### Features
+
+* **connectors:** add secure Jellyfin provisioning configuration ([#372](https://github.com/rezanmz/omnifin/issues/372)) ([3b702f5](https://github.com/rezanmz/omnifin/commit/3b702f547fafdac0be4ae2d81b35384d7e5f2335))
+
+
+### Fixes
+
+* **gateway:** require clean restore quiescence ([#377](https://github.com/rezanmz/omnifin/issues/377)) ([f1a107d](https://github.com/rezanmz/omnifin/commit/f1a107df5607c7a24ec3c8bfbb331889d002a81d))
+* **gateway:** scan Jellyfin ownership pages ([#376](https://github.com/rezanmz/omnifin/issues/376)) ([41b5133](https://github.com/rezanmz/omnifin/commit/41b5133364286530e362e0ad9a395ee7477a8701))
+* **release:** sign installation asset manifests ([#380](https://github.com/rezanmz/omnifin/issues/380)) ([2bdba08](https://github.com/rezanmz/omnifin/commit/2bdba08e518809bd5302c2e0da352aa2b9e51b49))
+* **security:** block private remote artwork egress ([#379](https://github.com/rezanmz/omnifin/issues/379)) ([5381fce](https://github.com/rezanmz/omnifin/commit/5381fce5da6d2b62634c73a0a14615db8736c20c))
+* **security:** patch vulnerable archive extraction ([#378](https://github.com/rezanmz/omnifin/issues/378)) ([3747623](https://github.com/rezanmz/omnifin/commit/374762396060e2ddc86aca2d21ae5dbaf1664dc2))
+
 ## [0.16.0](https://github.com/rezanmz/omnifin/compare/v0.15.0...v0.16.0) (2026-08-11)
 
 
