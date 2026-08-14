@@ -646,7 +646,7 @@ test("draft-aware release jobs receive narrowly scoped push access", () => {
     namedStep(promotion.steps, "Recheck draft and monotonic release order").with.script,
     /repos\.listReleases/u,
   );
-  assert.deepEqual(finalize.permissions, { contents: "write" });
+  assert.deepEqual(finalize.permissions, { contents: "write", "id-token": "write" });
 
   const contentWriters = Object.entries(document.jobs)
     .filter(([, job]) => job.permissions?.contents === "write")

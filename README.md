@@ -94,9 +94,11 @@ and the [roadmap](docs/roadmap.md) for current implementation status.
 Each verified tagged release publishes a small Compose bundle whose environment template is bound
 to the exact multi-architecture image digest that passed the release gates. Open the
 [latest verified release](https://github.com/rezanmz/omnifin/releases/latest), copy its exact tag
-into `OMNIFIN_RELEASE` in place of `vX.Y.Z`, then download and verify its three assets. Keeping the
-tag explicit makes installs and later rollbacks reproducible instead of silently following a moving
-image tag.
+into `OMNIFIN_RELEASE` in place of `vX.Y.Z`, then download and verify its five assets. Install
+[Cosign](https://docs.sigstore.dev/cosign/system_config/installation/) and `jq` first. The signed
+manifest proves the release tag, source commit, image digest, and artifact digests were produced by
+Omnifin's protected `publish.yml` workflow; keeping the tag explicit makes installs and later
+rollbacks reproducible instead of silently following a moving image tag.
 
 ```sh
 OMNIFIN_RELEASE=vX.Y.Z
@@ -112,7 +114,20 @@ curl --fail --location --remote-name \
   "https://github.com/rezanmz/omnifin/releases/download/${OMNIFIN_RELEASE}/omnifin.env.example"
 curl --fail --location --remote-name \
   "https://github.com/rezanmz/omnifin/releases/download/${OMNIFIN_RELEASE}/SHA256SUMS"
-sha256sum --check SHA256SUMS
+curl --fail --location --remote-name \
+  "https://github.com/rezanmz/omnifin/releases/download/${OMNIFIN_RELEASE}/release-manifest.json"
+curl --fail --location --remote-name \
+  "https://github.com/rezanmz/omnifin/releases/download/${OMNIFIN_RELEASE}/release-manifest.sigstore.json"
+cosign verify-blob release-manifest.json \
+  --bundle release-manifest.sigstore.json \
+  --certificate-identity \
+    "https://github.com/rezanmz/omnifin/.github/workflows/publish.yml@refs/heads/main" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+test "$(jq --raw-output '.tag' release-manifest.json)" = "$OMNIFIN_RELEASE"
+jq --exit-status '.sourceSha | test("^[a-f0-9]{40}$")' release-manifest.json >/dev/null
+jq --raw-output '.assets | to_entries[] | "\(.value)  \(.key)"' release-manifest.json \
+  | sha256sum --check --strict
+sha256sum --check --strict SHA256SUMS
 cp omnifin.env.example .env
 chmod 0600 .env
 ```
