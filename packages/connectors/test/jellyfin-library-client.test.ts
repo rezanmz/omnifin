@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { JellyfinLibraryClient } from "../src/media/jellyfin-library-client.js";
 import { createMockTransport, jsonResponse, publicResolver } from "./helpers/mock-fetch.js";
 
-function clientWithResponses(responses: Response[]) {
+function clientWithResponses(responses: Response[], resolveHost = publicResolver) {
   const mock = createMockTransport(responses);
   return {
     client: new JellyfinLibraryClient({
@@ -14,7 +14,7 @@ function clientWithResponses(responses: Response[]) {
         baseUrl: "https://jellyfin.example.test/base/",
         connectorId: "jellyfin-home",
         displayName: "Home Jellyfin",
-        resolveHost: publicResolver,
+        resolveHost,
         transport: mock.transport,
       },
     }),
@@ -225,6 +225,20 @@ describe("JellyfinLibraryClient", () => {
     expect(requests[0]?.url.origin).toBe("https://image.example.test");
     expect(requests[0]?.url.searchParams.get("size")).toBe("small");
     expect(requests[0]?.init.headers.has("authorization")).toBe(false);
+  });
+
+  it("blocks remote artwork that resolves to a private address", async () => {
+    const { client, requests } = clientWithResponses([], async () => [
+      { address: "192.168.50.20", family: 4 },
+    ]);
+
+    await expect(
+      client.readRemoteArtwork("https://image.example.test/thumb/poster.jpg"),
+    ).rejects.toMatchObject({
+      code: "destination_blocked",
+      operation: "library.artwork.preview",
+    });
+    expect(requests).toHaveLength(0);
   });
 
   it("fails closed on mismatched item reads and unsafe artwork URLs", async () => {

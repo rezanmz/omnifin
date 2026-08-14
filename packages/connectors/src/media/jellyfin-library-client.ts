@@ -409,6 +409,7 @@ export class JellyfinLibraryClient {
     const remoteClient = new SafeHttpClient({
       baseUrl: `${url.origin}/`,
       maxResponseBytes: MAX_REMOTE_IMAGE_BYTES,
+      allowPrivateNetwork: false,
       ...(this.#target.resolveHost === undefined ? {} : { resolveHost: this.#target.resolveHost }),
       service: "jellyfin",
       ...(this.#target.timeoutMs === undefined ? {} : { timeoutMs: this.#target.timeoutMs }),

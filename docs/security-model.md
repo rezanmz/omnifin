@@ -236,8 +236,9 @@ absolute and extraction-root-escaping symlink targets before creation.
   user. A reference cannot be replayed by another account, used after expiry, or changed into an
   arbitrary connector destination.
 - Artwork resolution repeats session, permission, owner, expiry, connector, and path checks before
-  an upstream request. Redirects are blocked; response type, length, and transfer size are bounded;
-  logging and errors exclude the protected path and response body.
+  an upstream request. Redirects are blocked; remote artwork has public-only DNS and address policy
+  that rejects private IPv4 and IPv6 destinations; response type, length, and transfer size are
+  bounded; logging and errors exclude the protected path and response body.
 - The browser receives only same-origin artwork-reference URLs and accepts only their exact grammar.
   Images are privately cacheable with a gateway ETag and `nosniff`; normalized feed responses are
   private, short-lived, and vary on the session cookie.

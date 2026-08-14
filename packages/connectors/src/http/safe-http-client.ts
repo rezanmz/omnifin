@@ -21,6 +21,7 @@ export interface SafeHttpClientOptions {
   service: ConnectorService;
   baseUrl: string;
   allowInsecureHttp?: boolean;
+  allowPrivateNetwork?: boolean;
   tlsPolicy?: ConnectorTlsPolicy;
   tlsCaCertificatePem?: string;
   timeoutMs?: number;
@@ -324,6 +325,7 @@ export class SafeHttpClient {
 
   readonly #baseUrl: URL;
   readonly #allowInsecureHttp: boolean;
+  readonly #allowPrivateNetwork: boolean;
   readonly #timeoutMs: number;
   readonly #maxResponseBytes: number;
   readonly #headers: Readonly<Record<string, string>>;
@@ -416,6 +418,7 @@ export class SafeHttpClient {
     this.origin = baseUrl.origin;
     this.#baseUrl = baseUrl;
     this.#allowInsecureHttp = options.allowInsecureHttp ?? false;
+    this.#allowPrivateNetwork = options.allowPrivateNetwork ?? true;
     this.#timeoutMs = timeoutMs;
     this.#maxResponseBytes = maxResponseBytes;
     this.#headers = options.headers ?? {};
@@ -601,6 +604,7 @@ export class SafeHttpClient {
       destination = await abortable(
         resolveDestinationUrl(url, {
           allowInsecureHttp: this.#allowInsecureHttp,
+          allowPrivateNetwork: this.#allowPrivateNetwork,
           allowedHosts: [this.#baseUrl.hostname],
           ...(this.#resolveHost ? { resolveHost: this.#resolveHost } : {}),
         }),
