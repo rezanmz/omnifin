@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { JellyfinUserMediaClient } from "../src/media/jellyfin-user-media-client.js";
+import {
+  JELLYFIN_OWNERSHIP_LOOKUP_MAX_ITEMS,
+  JELLYFIN_OWNERSHIP_LOOKUP_PAGE_SIZE,
+  JellyfinUserMediaClient,
+} from "../src/media/jellyfin-user-media-client.js";
 import { createMockTransport, jsonResponse, publicResolver } from "./helpers/mock-fetch.js";
 
 function clientWithResponses(responses: Response[]) {
@@ -55,28 +59,36 @@ const series = {
 };
 
 describe("JellyfinUserMediaClient", () => {
-  it("checks exact user-scoped TMDB ownership with a bounded kind-specific query", async () => {
+  it("scans bounded user-scoped pages when Jellyfin ignores unsupported provider filters", async () => {
     const { client, requests } = clientWithResponses([
+      jsonResponse({
+        Items: Array.from({ length: JELLYFIN_OWNERSHIP_LOOKUP_PAGE_SIZE }, (_, index) => ({
+          Id: `movie-upstream-${index}`,
+          ProviderIds: { Tmdb: String(index + 1_000) },
+          Type: "Movie",
+        })),
+        StartIndex: 0,
+        TotalRecordCount: JELLYFIN_OWNERSHIP_LOOKUP_PAGE_SIZE + 1,
+      }),
       jsonResponse({
         Items: [
           {
-            Id: "movie-upstream-1",
-            Name: "Ignored display title",
+            Id: "movie-upstream-target",
             ProviderIds: { Tmdb: "550" },
             Type: "Movie",
           },
         ],
-        StartIndex: 0,
-        TotalRecordCount: 1,
+        StartIndex: JELLYFIN_OWNERSHIP_LOOKUP_PAGE_SIZE,
+        TotalRecordCount: JELLYFIN_OWNERSHIP_LOOKUP_PAGE_SIZE + 1,
       }),
     ]);
 
     await expect(
       client.readExactOwnership({ kind: "movie", tmdbId: 550, userId: "paired-user-id" }),
-    ).resolves.toEqual({ itemId: "movie-upstream-1", owned: true });
+    ).resolves.toEqual({ itemId: "movie-upstream-target", owned: true });
+    expect(requests).toHaveLength(2);
     expect(requests[0]?.url.pathname).toBe("/base/Users/paired-user-id/Items");
     expect(Object.fromEntries(requests[0]!.url.searchParams)).toMatchObject({
-      AnyProviderIdEquals: "Tmdb.550",
       EnableImages: "false",
       EnableTotalRecordCount: "true",
       EnableUserData: "false",
@@ -84,11 +96,15 @@ describe("JellyfinUserMediaClient", () => {
       IncludeItemTypes: "Movie",
       IsMissing: "false",
       IsVirtualItem: "false",
-      Limit: "2",
+      Limit: String(JELLYFIN_OWNERSHIP_LOOKUP_PAGE_SIZE),
       Recursive: "true",
       StartIndex: "0",
     });
+    expect(requests[0]?.url.searchParams.has("AnyProviderIdEquals")).toBe(false);
     expect(requests[0]?.url.searchParams.has("SearchTerm")).toBe(false);
+    expect(requests[1]?.url.searchParams.get("StartIndex")).toBe(
+      String(JELLYFIN_OWNERSHIP_LOOKUP_PAGE_SIZE),
+    );
   });
 
   it("reports exact absence without falling back to title or year matching", async () => {
@@ -106,6 +122,7 @@ describe("JellyfinUserMediaClient", () => {
       label: "malformed provider id",
       response: {
         Items: [{ Id: "movie-1", ProviderIds: { Tmdb: "0550" }, Type: "Movie" }],
+        StartIndex: 0,
         TotalRecordCount: 1,
       },
     },
@@ -116,6 +133,7 @@ describe("JellyfinUserMediaClient", () => {
           { Id: "movie-1", ProviderIds: { Tmdb: "550" }, Type: "Movie" },
           { Id: "movie-2", ProviderIds: { Tmdb: "550" }, Type: "Movie" },
         ],
+        StartIndex: 0,
         TotalRecordCount: 2,
       },
     },
@@ -123,6 +141,7 @@ describe("JellyfinUserMediaClient", () => {
       label: "wrong media kind",
       response: {
         Items: [{ Id: "series-1", ProviderIds: { Tmdb: "550" }, Type: "Series" }],
+        StartIndex: 0,
         TotalRecordCount: 1,
       },
     },
@@ -147,12 +166,13 @@ describe("JellyfinUserMediaClient", () => {
 
     const oversized = clientWithResponses([
       jsonResponse({
-        Items: Array.from({ length: 3 }, (_, index) => ({
+        Items: Array.from({ length: JELLYFIN_OWNERSHIP_LOOKUP_PAGE_SIZE }, (_, index) => ({
           Id: `movie-${index}`,
-          ProviderIds: { Tmdb: "550" },
+          ProviderIds: { Tmdb: String(index + 1_000) },
           Type: "Movie",
         })),
-        TotalRecordCount: 3,
+        StartIndex: 0,
+        TotalRecordCount: JELLYFIN_OWNERSHIP_LOOKUP_MAX_ITEMS + 1,
       }),
     ]);
     await expect(
@@ -163,7 +183,9 @@ describe("JellyfinUserMediaClient", () => {
       }),
     ).rejects.toMatchObject({ code: "response_invalid", operation: "media.ownership" });
 
-    const cancelled = clientWithResponses([jsonResponse({ Items: [] })]);
+    const cancelled = clientWithResponses([
+      jsonResponse({ Items: [], StartIndex: 0, TotalRecordCount: 0 }),
+    ]);
     const controller = new AbortController();
     controller.abort();
     await expect(
