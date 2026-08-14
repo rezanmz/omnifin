@@ -1023,7 +1023,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: read
+      # Persist the normalized v1 record to the Release Please draft before
+      # aliases move; Actions artifact retention alone is not durable evidence.
+      contents: write
     steps:
       - name: Check out immutable release source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1058,6 +1060,61 @@ jobs:
           name: v1-evidence-index-${{ github.run_id }}
           path: artifacts/release-evidence/index.json
           retention-days: 90
+      - name: Attach durable v1 evidence index to the draft
+        if: needs.release-coverage.outputs.profile == 'v1'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          EVIDENCE_DIRECTORY: artifacts/release-evidence
+          RELEASE_TAG: ${{ inputs.tag }}
+        with:
+          script: |
+            const crypto = require("node:crypto");
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const release = releases.find(
+              (candidate) => candidate.tag_name === process.env.RELEASE_TAG,
+            );
+            if (!release?.draft || release.prerelease) {
+              throw new Error(`Expected an unpublished, non-prerelease draft for ${process.env.RELEASE_TAG}.`);
+            }
+            const indexName = `v1-evidence-index-${context.runId}.json`;
+            const checksumName = `${indexName}.sha256`;
+            const index = fs.readFileSync(path.join(process.env.EVIDENCE_DIRECTORY, "index.json"));
+            const checksum = Buffer.from(
+              `${crypto.createHash("sha256").update(index).digest("hex")}  ${indexName}\n`,
+            );
+            const existing = await github.paginate(github.rest.repos.listReleaseAssets, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              per_page: 100,
+            });
+            for (const name of [indexName, checksumName]) {
+              if (existing.some((asset) => asset.name === name)) {
+                throw new Error(`Refusing to overwrite release asset ${name}.`);
+              }
+            }
+            for (const [name, data] of [
+              [indexName, index],
+              [checksumName, checksum],
+            ]) {
+              await github.rest.repos.uploadReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: release.id,
+                name,
+                data,
+                headers: {
+                  "content-length": data.length,
+                  "content-type": "application/octet-stream",
+                },
+              });
+            }
 
   promote-stable:
     name: Promote verified digest to stable tags

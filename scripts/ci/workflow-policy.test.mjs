@@ -95,6 +95,15 @@ test("v1 promotion requires an exact-candidate evidence index", () => {
   assert.equal(validate.env.EVIDENCE_INDEX, "${{ vars.OMNIFIN_V1_EVIDENCE_INDEX }}");
   assert.match(validate.run, /release-evidence\.mjs/u);
   assert.equal(upload.with["if-no-files-found"], "error");
+  const attach = namedStep(evidence.steps, "Attach durable v1 evidence index to the draft");
+
+  assert.deepEqual(evidence.permissions, { contents: "write" });
+  assert.equal(attach.if, "needs.release-coverage.outputs.profile == 'v1'");
+  assert.equal(attach.env.RELEASE_TAG, "${{ inputs.tag }}");
+  assert.match(attach.with.script, /repos\.listReleaseAssets/u);
+  assert.match(attach.with.script, /repos\.uploadReleaseAsset/u);
+  assert.match(attach.with.script, /v1-evidence-index-\$\{context\.runId\}\.json/u);
+  assert.match(attach.with.script, /createHash\("sha256"\)/u);
   assert.ok(promotion.needs.includes("validate-v1-evidence"));
   assert.match(promotion.if, /needs\.validate-v1-evidence\.result == 'success'/u);
 });
@@ -676,12 +685,25 @@ test("draft-aware release jobs receive narrowly scoped push access", () => {
     /repos\.listReleases/u,
   );
   assert.deepEqual(finalize.permissions, { contents: "write", "id-token": "write" });
+  const v1Evidence = document.jobs["validate-v1-evidence"];
+
+  assert.deepEqual(v1Evidence.permissions, { contents: "write" });
+  assert.equal(v1Evidence.environment, "release");
+  assert.equal(
+    namedStep(v1Evidence.steps, "Attach durable v1 evidence index to the draft").if,
+    "needs.release-coverage.outputs.profile == 'v1'",
+  );
 
   const contentWriters = Object.entries(document.jobs)
     .filter(([, job]) => job.permissions?.contents === "write")
     .map(([name]) => name)
     .sort();
-  assert.deepEqual(contentWriters, ["finalize", "promote-stable", "validate-release-metadata"]);
+  assert.deepEqual(contentWriters, [
+    "finalize",
+    "promote-stable",
+    "validate-release-metadata",
+    "validate-v1-evidence",
+  ]);
 });
 
 test("stable publication crosses optional live coverage only through explicit successful gates", () => {
