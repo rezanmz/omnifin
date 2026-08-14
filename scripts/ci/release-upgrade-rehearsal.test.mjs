@@ -785,6 +785,22 @@ test("passes the production gateway runtime contract", () => {
   assert.match(gatewayStart, /`OMNIFIN_IMAGE_REF=\$\{image\.reference\}`/u);
 });
 
+test("mounts the encryption key for maintenance restore sanitization", () => {
+  const maintenance = HARNESS_SOURCE.slice(
+    HARNESS_SOURCE.indexOf("function maintenanceArguments"),
+    HARNESS_SOURCE.indexOf("function runMaintenance"),
+  );
+
+  assert.match(
+    maintenance,
+    /`\$\{resources\.encryptionFile\}:\/run\/secrets\/omnifin_encryption_key:ro`/u,
+  );
+  assert.match(
+    maintenance,
+    /"OMNIFIN_ENCRYPTION_KEY_FILE=\/run\/secrets\/omnifin_encryption_key"/u,
+  );
+});
+
 test("uses the prior image to restore the original backup and retains candidate evidence", () => {
   assert.match(
     HARNESS_SOURCE,
