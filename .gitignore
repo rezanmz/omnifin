@@ -42,3 +42,6 @@ secrets/
 *.tsbuildinfo
 .idea/
 .vscode/
+
+# Local deepwork coordination state
+.slim/deepwork/
