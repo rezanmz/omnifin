@@ -12,11 +12,13 @@ overrides:
   esbuild: 0.28.1
   postcss: 8.5.24
   sharp: 0.35.3
+  nanoid: 3.3.18
   tmp: 0.2.7
   uuid: 11.1.1
 
 patchedDependencies:
   brace-expansion@5.0.9: e39bf130b4d379f5f6616b21ae24aecd698c5346a07ac7f5ea7f294addf721e1
+  extract-zip@2.0.1: 79e1bb3dac47ddfe5ca52367a9b0c5b6c2c113a78ab43259bd7c2bdc132c0d3a
 
 importers:
 
@@ -4309,8 +4311,8 @@ packages:
   mz@2.7.0:
     resolution: {integrity: sha512-z81GNO7nnYMEhrGh9LeymoE4+Yr0Wn5McHIZMK5cfQCl+NDX08sCZgUc9/6MHni9IWuFLm1Z3HTCXu2z9fN62Q==}
 
-  nanoid@3.3.17:
-    resolution: {integrity: sha512-xQLf0A3HOMlgHq0n247/LRuAOYmB7dXJ/DvAxGvsSBij45XtBSmQycu+F8ODbHwns/XyFZagyL1+J0Offw1E0g==}
+  nanoid@3.3.18:
+    resolution: {integrity: sha512-DTg4MJbGMWkfi6VZFdNt2/caMbQy4Ou+Op/hJQvGEWcnVfoA1QA+xzRKAzw9jD6+GVOOeYr/mIcuDSdug6F6+w==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
 
@@ -6710,7 +6712,7 @@ snapshots:
   '@puppeteer/browsers@2.13.2':
     dependencies:
       debug: 4.4.3
-      extract-zip: 2.0.1
+      extract-zip: 2.0.1(patch_hash=79e1bb3dac47ddfe5ca52367a9b0c5b6c2c113a78ab43259bd7c2bdc132c0d3a)
       progress: 2.0.3
       proxy-agent: 6.5.0
       semver: 7.8.5
@@ -8681,7 +8683,7 @@ snapshots:
       iconv-lite: 0.4.24
       tmp: 0.2.7
 
-  extract-zip@2.0.1:
+  extract-zip@2.0.1(patch_hash=79e1bb3dac47ddfe5ca52367a9b0c5b6c2c113a78ab43259bd7c2bdc132c0d3a):
     dependencies:
       debug: 4.4.3
       get-stream: 5.2.0
@@ -9677,7 +9679,7 @@ snapshots:
       object-assign: 4.1.1
       thenify-all: 1.6.0
 
-  nanoid@3.3.17: {}
+  nanoid@3.3.18: {}
 
   napi-postinstall@0.3.4: {}
 
@@ -10011,7 +10013,7 @@ snapshots:
 
   postcss@8.5.24:
     dependencies:
-      nanoid: 3.3.17
+      nanoid: 3.3.18
       picocolors: 1.1.1
       source-map-js: 1.2.1
 
