@@ -7,6 +7,13 @@
 * **auth:** add single-use administrator invitations with OIDC/Jellyfin onboarding proof,
   lifecycle auditing, and restore-safe replacement handling ([#335](https://github.com/rezanmz/omnifin/issues/335))
 
+## [0.18.1](https://github.com/rezanmz/omnifin/compare/v0.18.0...v0.18.1) (2026-08-14)
+
+
+### Fixes
+
+* **release:** skip v1 evidence gates for preview profiles ([#409](https://github.com/rezanmz/omnifin/issues/409)) ([2951ce0](https://github.com/rezanmz/omnifin/commit/2951ce02eec87a37d58db90d3fcc922b8278ea9d))
+
 ## [0.18.0](https://github.com/rezanmz/omnifin/compare/v0.17.0...v0.18.0) (2026-08-14)
 
 
