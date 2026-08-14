@@ -866,7 +866,16 @@ jobs:
             if (!/^sha256:[0-9a-f]{64}$/u.test(candidateDigest)) throw new Error("invalid_candidate_digest");
             await writeFile(
               "artifacts/release/install.json",
-              `${JSON.stringify({ candidateDigest, checks: ["compose-config", "health", "recovery", "backup", "backup-verify"], schemaVersion: 1, sourceSha }, null, 2)}\n`,
+              JSON.stringify(
+                {
+                  candidateDigest,
+                  checks: ["compose-config", "health", "recovery", "backup", "backup-verify"],
+                  schemaVersion: 1,
+                  sourceSha,
+                },
+                null,
+                2,
+              ) + "\n",
               { encoding: "utf8", mode: 0o644 },
             );
           '
