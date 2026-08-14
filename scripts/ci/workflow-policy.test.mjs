@@ -71,6 +71,7 @@ test("release pull requests are normalized through a verified exact-tree commit"
   assert.deepEqual(release.permissions, { contents: "read" });
   assert.equal(checkout.with.ref, "${{ github.event.workflow_run.head_sha }}");
   assert.equal(checkout.with["persist-credentials"], false);
+
   assert.equal(normalize.if, "steps.release.outputs.prs_created == 'true'");
   assert.equal(normalize.env.EXPECTED_BASE_SHA, "${{ github.event.workflow_run.head_sha }}");
   assert.equal(normalize.env.GH_TOKEN, "${{ secrets.RELEASE_PLEASE_TOKEN }}");
@@ -78,6 +79,24 @@ test("release pull requests are normalized through a verified exact-tree commit"
   assert.equal(normalize.run, "node scripts/ci/normalize-release-commit.mjs");
   assert.equal(release.outputs["normalized-sha"], undefined);
   assert.doesNotMatch(JSON.stringify(release), /contents:\s*write|pull-requests:\s*write/u);
+});
+test("v1 promotion requires an exact-candidate evidence index", () => {
+  const document = workflowDocument("publish.yml");
+  const evidence = document.jobs["validate-v1-evidence"];
+  const promotion = document.jobs["promote-stable"];
+  const validate = namedStep(evidence.steps, "Validate operator-provided v1 evidence");
+  const upload = namedStep(evidence.steps, "Upload validated v1 evidence index");
+
+  assert.equal(evidence.environment, "release");
+  assert.ok(evidence.needs.includes("publish-candidate"));
+  assert.ok(evidence.needs.includes("rehearse-upgrade"));
+  assert.equal(validate.if, "needs.release-coverage.outputs.profile == 'v1'");
+  assert.equal(validate.env.CANDIDATE_DIGEST, "${{ needs.publish-candidate.outputs.digest }}");
+  assert.equal(validate.env.EVIDENCE_INDEX, "${{ vars.OMNIFIN_V1_EVIDENCE_INDEX }}");
+  assert.match(validate.run, /release-evidence\.mjs/u);
+  assert.equal(upload.with["if-no-files-found"], "error");
+  assert.ok(promotion.needs.includes("validate-v1-evidence"));
+  assert.match(promotion.if, /needs\.validate-v1-evidence\.result == 'success'/u);
 });
 
 test("CI installs actionlint from a checksum-pinned release", () => {
