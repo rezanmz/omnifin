@@ -1042,6 +1042,7 @@ jobs:
       ${{
         always() &&
         needs.release-coverage.result == 'success' &&
+        needs.release-coverage.outputs.profile == 'v1' &&
         needs.publish-candidate.result == 'success' &&
         needs.scan-candidate.result == 'success' &&
         needs.verify-candidate.result == 'success' &&
@@ -1209,8 +1210,23 @@ jobs:
 
   promote-stable:
     name: Promote verified digest to stable tags
-    if: ${{ always() && needs.validate-release-metadata.result == 'success' && needs.publish-candidate.result == 'success' && needs.scan-candidate.result == 'success' && needs.verify-candidate.result == 'success' && needs.verify-install-bundle.result == 'success' && needs.rehearse-upgrade.result == 'success' && needs.validate-v1-evidence.result == 'success' }}
+    if: >-
+      ${{
+        always() &&
+        needs.release-coverage.result == 'success' &&
+        needs.validate-release-metadata.result == 'success' &&
+        needs.publish-candidate.result == 'success' &&
+        needs.scan-candidate.result == 'success' &&
+        needs.verify-candidate.result == 'success' &&
+        needs.verify-install-bundle.result == 'success' &&
+        needs.rehearse-upgrade.result == 'success' &&
+        (
+          needs.release-coverage.outputs.profile != 'v1' ||
+          needs.validate-v1-evidence.result == 'success'
+        )
+      }}
     needs:
+      - release-coverage
       - validate-release-metadata
       - publish-candidate
       - scan-candidate
