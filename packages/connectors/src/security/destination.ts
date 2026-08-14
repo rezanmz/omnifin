@@ -10,6 +10,7 @@ export type HostResolver = (hostname: string) => Promise<readonly ResolvedHostAd
 
 export interface DestinationPolicy {
   allowInsecureHttp?: boolean;
+  allowPrivateNetwork?: boolean;
   allowedHosts?: readonly string[];
   resolveHost?: HostResolver;
 }
@@ -77,6 +78,14 @@ BLOCKED_ADDRESSES.addAddress("fd00:ec2::23", "ipv6");
 BLOCKED_ADDRESSES.addAddress("fd00:ec2::254", "ipv6");
 BLOCKED_ADDRESSES.addAddress("fd20:ce::254", "ipv6");
 
+const PRIVATE_ADDRESSES = new BlockList();
+PRIVATE_ADDRESSES.addSubnet("10.0.0.0", 8, "ipv4");
+PRIVATE_ADDRESSES.addSubnet("172.16.0.0", 12, "ipv4");
+PRIVATE_ADDRESSES.addSubnet("192.168.0.0", 16, "ipv4");
+PRIVATE_ADDRESSES.addSubnet("fc00::", 7, "ipv6");
+PRIVATE_ADDRESSES.addSubnet("::ffff:10.0.0.0", 104, "ipv6");
+PRIVATE_ADDRESSES.addSubnet("::ffff:172.16.0.0", 108, "ipv6");
+PRIVATE_ADDRESSES.addSubnet("::ffff:192.168.0.0", 112, "ipv6");
 const IPV4_MAPPED_ADDRESSES = new BlockList();
 IPV4_MAPPED_ADDRESSES.addSubnet("::ffff:0:0", 96, "ipv6");
 
@@ -97,6 +106,14 @@ export function isBlockedDestinationAddress(address: string): boolean {
     );
   }
   return true;
+}
+
+export function isPrivateDestinationAddress(address: string): boolean {
+  const normalized = address.toLowerCase();
+  const family = isIP(normalized);
+  if (family === 4) return PRIVATE_ADDRESSES.check(normalized, "ipv4");
+  if (family === 6) return PRIVATE_ADDRESSES.check(normalized, "ipv6");
+  return false;
 }
 
 const defaultResolver: HostResolver = async (hostname) => {
@@ -178,7 +195,11 @@ export function validateDestinationUrlLiteral(
     }
   }
 
-  if (isIP(hostname) && isBlockedDestinationAddress(hostname)) {
+  if (
+    isIP(hostname) &&
+    (isBlockedDestinationAddress(hostname) ||
+      (policy.allowPrivateNetwork === false && isPrivateDestinationAddress(hostname)))
+  ) {
     throw new DestinationPolicyError(
       "destination_host_blocked",
       "The outbound destination address is blocked by policy.",
@@ -232,7 +253,9 @@ export async function resolveDestinationUrl(
   if (
     normalizedAddresses.some(
       ({ address, family }) =>
-        (family !== 4 && family !== 6) || isBlockedDestinationAddress(address),
+        (family !== 4 && family !== 6) ||
+        isBlockedDestinationAddress(address) ||
+        (policy.allowPrivateNetwork === false && isPrivateDestinationAddress(address)),
     )
   ) {
     throw new DestinationPolicyError(

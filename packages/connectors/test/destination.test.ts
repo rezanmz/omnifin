@@ -63,6 +63,25 @@ describe("outbound destination policy", () => {
     });
   });
 
+  it("can prohibit private address destinations for public-only egress", async () => {
+    for (const url of [
+      "https://10.20.30.40/image.jpg",
+      "https://[fd12:3456::20]/image.jpg",
+      "https://[::ffff:c0a8:1]/image.jpg",
+    ]) {
+      expect(() => validateDestinationUrlLiteral(url, { allowPrivateNetwork: false })).toThrowError(
+        expect.objectContaining({ code: "destination_host_blocked" }),
+      );
+    }
+
+    await expect(
+      resolveDestinationUrl("https://images.example.test/poster.jpg", {
+        allowPrivateNetwork: false,
+        resolveHost: async () => [{ address: "192.168.50.20", family: 4 }],
+      }),
+    ).rejects.toMatchObject({ code: "destination_host_blocked" });
+  });
+
   it.each([
     "0.0.0.0",
     "127.0.0.1",
