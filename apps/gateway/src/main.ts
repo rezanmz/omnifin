@@ -1,10 +1,12 @@
 import pino from "pino";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createApp } from "./app.js";
 import { createBootstrapLoggerOptions } from "./logger.js";
 import { asStartupError, startupFailureDetails } from "./startup-error.js";
 import { createRuntimeDrainCoordinator } from "./runtime/drain.js";
+import { databaseQuiescenceMarkerPath } from "./db/maintenance-lock.js";
 
 export const SHUTDOWN_WATCHDOG_MS = 18_000;
 
@@ -19,6 +21,11 @@ const shutdownDependencies: ShutdownDependencies = {
   clearTimeout,
   setTimeout,
 };
+
+export async function markDatabaseQuiescent(databaseUrl: string) {
+  if (databaseUrl === ":memory:") return;
+  await writeFile(databaseQuiescenceMarkerPath(databaseUrl), "", { mode: 0o600 });
+}
 
 export async function shutdownGateway(
   app: GatewayApp,
@@ -39,6 +46,7 @@ export async function shutdownGateway(
 
   try {
     await app.close();
+    await markDatabaseQuiescent(app.appConfig.databaseUrl);
   } finally {
     closureSettled = true;
     dependencies.clearTimeout(watchdog);

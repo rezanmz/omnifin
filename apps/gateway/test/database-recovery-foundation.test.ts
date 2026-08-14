@@ -16,10 +16,13 @@ import {
   initializeDatabaseKeyVerifier,
   openDatabase,
 } from "../src/db/client.js";
-import { databaseMaintenanceLockPath } from "../src/db/maintenance-lock.js";
+import {
+  databaseMaintenanceLockPath,
+  databaseQuiescenceMarkerPath,
+} from "../src/db/maintenance-lock.js";
 import {
   createDatabaseBackup,
-  restoreDatabaseBackup,
+  restoreDatabaseBackup as restoreDatabaseBackupInternal,
   restoreDatabaseBackupIntoEmptyTarget,
   sanitizeRestoredDatabase,
   verifyDatabaseBackup,
@@ -51,6 +54,15 @@ async function privateDirectory(prefix = "omnifin-recovery-") {
   const directory = await mkdtemp(path.join(tmpdir(), prefix));
   cleanupDirectories.push(directory);
   return directory;
+}
+
+async function markGatewayQuiescent(databasePath: string) {
+  await writeFile(databaseQuiescenceMarkerPath(databasePath), "", { mode: 0o600 });
+}
+
+async function restoreDatabaseBackup(...args: Parameters<typeof restoreDatabaseBackupInternal>) {
+  await markGatewayQuiescent(args[0].databasePath);
+  return restoreDatabaseBackupInternal(...args);
 }
 
 function createCurrentDatabase(databasePath: string) {

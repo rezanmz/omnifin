@@ -221,8 +221,9 @@ primary deployment. Supply the same encryption key as the selected backup, pin t
 image digest, and place the selected database and manifest in the private backup directory.
 
 The restore command intentionally requires downtime. It refuses to proceed without an
-explicit confirmation, refuses when the configured gateway health endpoint responds, and
-refuses when SQLite WAL or shared-memory sidecars show that storage is not quiescent.
+explicit confirmation, a private quiescence marker written by the gateway after a graceful
+shutdown, and no SQLite WAL or shared-memory sidecars. It also refuses whenever the configured
+gateway health endpoint responds. Stop the gateway with Compose rather than killing its process.
 
 ```sh
 docker compose stop web gateway
@@ -299,9 +300,9 @@ already occurred; in that case the command automatically reinstates the verified
 fails closed with both errors preserved.
 
 An interrupted restore can leave `omnifin.db.maintenance.lock` in the data volume. Gateway
-startup deliberately refuses that state. After confirming that the gateway is stopped and no
-restore process remains, clear only that marker through the maintenance command; do not remove
-database, WAL, or shared-memory files:
+startup deliberately refuses that state. After confirming that the gateway is stopped, its private
+quiescence marker remains present, and no restore process remains, clear only that lock through the
+maintenance command; do not remove database, WAL, shared-memory, or quiescence-marker files:
 
 ```sh
 docker compose run --rm --no-deps maintenance \
@@ -326,6 +327,10 @@ docker compose run --rm --no-deps maintenance \
   --confirm-gateway-stopped \
   --confirm-empty-target
 ```
+
+Because this target directory has no gateway database, `restore-empty` does not require a prior
+quiescence marker. Its empty-directory check and maintenance lock prevent a gateway from opening the
+target during publication.
 
 The source pair is fully verified and any supported v0.12-or-later prefix is migrated and key-checked
 in staging before the staged database receives sanitation and publication.

@@ -1,10 +1,14 @@
 import { once } from "node:events";
+import { lstat, mkdtemp, rm } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { createConnection } from "node:net";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import type { AppConfig } from "../src/config.js";
 import { openDatabase } from "../src/db/client.js";
+import { databaseQuiescenceMarkerPath } from "../src/db/maintenance-lock.js";
 import { shutdownGateway } from "../src/main.js";
 import { RuntimeDrainCoordinator } from "../src/runtime/drain.js";
 
@@ -416,6 +420,7 @@ describe("runtime drain", () => {
     const close = vi.fn(async () => undefined);
     const log = { error: vi.fn() };
     const app = {
+      appConfig: { databaseUrl: ":memory:" },
       close,
       log,
       runtimeDrain: coordinator,
@@ -431,6 +436,31 @@ describe("runtime drain", () => {
     expect(clearTimeout).toHaveBeenCalledWith(timer);
   });
 
+  it("records database quiescence only after the gateway closes", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "omnifin-gateway-shutdown-"));
+    const databaseUrl = path.join(directory, "omnifin.db");
+    const coordinator = new RuntimeDrainCoordinator();
+    const close = vi.fn(async () => {
+      await expect(lstat(databaseQuiescenceMarkerPath(databaseUrl))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+    const app = {
+      appConfig: { databaseUrl },
+      close,
+      log: { error: vi.fn() },
+      runtimeDrain: coordinator,
+    } as unknown as Parameters<typeof shutdownGateway>[0];
+
+    try {
+      await shutdownGateway(app, "SIGTERM");
+      await expect(lstat(databaseQuiescenceMarkerPath(databaseUrl))).resolves.toMatchObject({
+        mode: expect.any(Number),
+      });
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
   it("uses the watchdog only while app.close remains hung", async () => {
     const coordinator = new RuntimeDrainCoordinator();
     let release!: () => void;
@@ -442,6 +472,7 @@ describe("runtime drain", () => {
     );
     const log = { error: vi.fn() };
     const app = {
+      appConfig: { databaseUrl: ":memory:" },
       close,
       log,
       runtimeDrain: coordinator,
