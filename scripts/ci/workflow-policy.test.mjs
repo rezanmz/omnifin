@@ -92,6 +92,7 @@ test("v1 promotion assembles an exact-candidate evidence index from every gate a
   assert.ok(evidence.needs.includes("publish-candidate"));
   assert.ok(evidence.needs.includes("rehearse-upgrade"));
   assert.deepEqual(evidence.permissions, { actions: "read", contents: "write" });
+  assert.match(evidence.if, /needs\.release-coverage\.outputs\.profile == 'v1'/u);
   assert.equal(assemble.if, "needs.release-coverage.outputs.profile == 'v1'");
   assert.equal(assemble.env.CANDIDATE_DIGEST, "${{ needs.publish-candidate.outputs.digest }}");
   assert.equal(assemble.env.RELEASE_SHA, "${{ inputs.release_sha }}");
@@ -122,6 +123,8 @@ test("v1 promotion assembles an exact-candidate evidence index from every gate a
   assert.match(attach.with.script, /v1-evidence-tier-\$\{tier\}-\$\{context\.runId\}\.json/u);
   assert.match(attach.with.script, /createHash\("sha256"\)/u);
   assert.ok(promotion.needs.includes("validate-v1-evidence"));
+  assert.ok(promotion.needs.includes("release-coverage"));
+  assert.match(promotion.if, /needs\.release-coverage\.outputs\.profile != 'v1'/u);
   assert.match(promotion.if, /needs\.validate-v1-evidence\.result == 'success'/u);
 });
 
@@ -746,11 +749,15 @@ test("stable publication crosses optional live coverage only through explicit su
   for (const jobName of releaseChain) {
     const job = document.jobs[jobName];
     const dependencies = Array.isArray(job.needs) ? job.needs : [job.needs];
-    assert.match(job.if, /^\$\{\{ always\(\) && /u, `${jobName} must override skip propagation`);
+    assert.match(job.if, /always\(\) &&/u, `${jobName} must override skip propagation`);
     for (const dependency of dependencies) {
+      const expected =
+        jobName === "promote-stable" && dependency === "validate-v1-evidence"
+          ? /needs\.release-coverage\.outputs\.profile != 'v1'[\s\S]*needs\.validate-v1-evidence\.result == 'success'/u
+          : new RegExp(`needs\\.${dependency}\\.result == 'success'`, "u");
       assert.match(
         job.if,
-        new RegExp(`needs\\.${dependency}\\.result == 'success'`, "u"),
+        expected,
         `${jobName} must still fail closed when ${dependency} does not succeed`,
       );
     }
