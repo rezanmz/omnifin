@@ -10,10 +10,14 @@ import {
   createRetainedDatabaseBackup,
   resolveRestoreRootKey,
   restoreDatabaseBackup,
+  restoreDatabaseBackupIntoEmptyTarget,
   verifyDatabaseBackup,
 } from "../src/db/maintenance.js";
 import { openDatabase } from "../src/db/client.js";
-import { databaseMaintenanceLockPath } from "../src/db/maintenance-lock.js";
+import {
+  databaseMaintenanceLockPath,
+  databaseQuiescenceMarkerPath,
+} from "../src/db/maintenance-lock.js";
 
 const cleanupDirectories: string[] = [];
 
@@ -30,6 +34,10 @@ async function fixtureDirectory() {
   const directory = await mkdtemp(path.join(tmpdir(), "omnifin-backup-test-"));
   cleanupDirectories.push(directory);
   return directory;
+}
+
+async function markGatewayQuiescent(databasePath: string) {
+  await writeFile(databaseQuiescenceMarkerPath(databasePath), "", { mode: 0o600 });
 }
 
 function writeMarker(databasePath: string, marker: string) {
@@ -63,6 +71,20 @@ function readMarker(databasePath: string) {
 }
 
 describe("database backup maintenance", () => {
+  it("clears a recorded quiescence marker before reopening the database", async () => {
+    const directory = await fixtureDirectory();
+    const databasePath = path.join(directory, "omnifin.db");
+    await markGatewayQuiescent(databasePath);
+
+    const database = openDatabase(databasePath);
+    try {
+      await expect(lstat(databaseQuiescenceMarkerPath(databasePath))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      database.close();
+    }
+  });
   it.each([1, 366, 2.5, Number.NaN])(
     "rejects invalid retained-backup count %s before writing",
     async (retentionCount) => {
@@ -799,6 +821,7 @@ describe("database restore maintenance", () => {
     writeMarker(databasePath, "selected checkpoint");
     const selected = await createDatabaseBackup({ databasePath, outputPath: backupPath });
     writeMarker(databasePath, "state before restore");
+    await markGatewayQuiescent(databasePath);
 
     const restored = await restoreDatabaseBackup({
       backupPath,
@@ -830,6 +853,27 @@ describe("database restore maintenance", () => {
     ).rejects.toMatchObject({ code: "restore_confirmation_required" });
   });
 
+  it("requires a private clean-shutdown marker before replacing a database", async () => {
+    const directory = await fixtureDirectory();
+    const databasePath = path.join(directory, "omnifin.db");
+    const backupPath = path.join(directory, "selected.sqlite");
+    const rollbackOutputPath = path.join(directory, "pre-restore.sqlite");
+    writeMarker(databasePath, "selected checkpoint");
+    await createDatabaseBackup({ databasePath, outputPath: backupPath });
+    writeMarker(databasePath, "active state");
+
+    await expect(
+      restoreDatabaseBackup({
+        backupPath,
+        confirmedGatewayStopped: true,
+        databasePath,
+        rollbackOutputPath,
+      }),
+    ).rejects.toMatchObject({ code: "gateway_quiescence_unverified" });
+    expect(readMarker(databasePath)).toBe("active state");
+    await expect(lstat(rollbackOutputPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("rejects a tampered checkpoint before replacing the active database", async () => {
     const directory = await fixtureDirectory();
     const databasePath = path.join(directory, "omnifin.db");
@@ -839,6 +883,7 @@ describe("database restore maintenance", () => {
     await createDatabaseBackup({ databasePath, outputPath: backupPath });
     writeMarker(databasePath, "active state");
     await writeFile(backupPath, Buffer.from("tampered"), { flag: "a" });
+    await markGatewayQuiescent(databasePath);
 
     await expect(
       restoreDatabaseBackup({
@@ -863,6 +908,7 @@ describe("database restore maintenance", () => {
 
     try {
       const directory = await fixtureDirectory();
+      await markGatewayQuiescent(path.join(directory, "omnifin.db"));
       await expect(
         restoreDatabaseBackup({
           backupPath: path.join(directory, "selected.sqlite"),
@@ -882,11 +928,32 @@ describe("database restore maintenance", () => {
     }
   });
 
+  it("restores an empty target without a prior gateway marker", async () => {
+    const sourceDirectory = await fixtureDirectory();
+    const targetDirectory = await fixtureDirectory();
+    const sourceDatabasePath = path.join(sourceDirectory, "source.db");
+    const backupPath = path.join(sourceDirectory, "selected.sqlite");
+    const targetDatabasePath = path.join(targetDirectory, "restored.db");
+    writeMarker(sourceDatabasePath, "selected checkpoint");
+    await createDatabaseBackup({ databasePath: sourceDatabasePath, outputPath: backupPath });
+
+    await expect(
+      restoreDatabaseBackupIntoEmptyTarget({
+        backupPath,
+        confirmedEmptyTarget: true,
+        confirmedGatewayStopped: true,
+        databasePath: targetDatabasePath,
+      }),
+    ).resolves.toMatchObject({ restoredFileName: "restored.db" });
+    expect(readMarker(targetDatabasePath)).toBe("selected checkpoint");
+  });
+
   it("clears only a private stale maintenance lock after an explicit stopped-gateway confirmation", async () => {
     const directory = await fixtureDirectory();
     const databasePath = path.join(directory, "omnifin.db");
     const lockPath = databaseMaintenanceLockPath(databasePath);
     await writeFile(lockPath, "", { mode: 0o600 });
+    await markGatewayQuiescent(databasePath);
 
     await expect(
       clearDatabaseMaintenanceLock({
@@ -913,6 +980,7 @@ describe("database restore maintenance", () => {
     writeMarker(databasePath, "selected checkpoint");
     await createDatabaseBackup({ databasePath, outputPath: backupPath });
     await writeFile(`${databasePath}-wal`, "active", { mode: 0o600 });
+    await markGatewayQuiescent(databasePath);
 
     await expect(
       restoreDatabaseBackup({

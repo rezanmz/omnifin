@@ -18,7 +18,7 @@ import {
 import { chmodSync, constants, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { databaseMaintenanceLockPath } from "./maintenance-lock.js";
+import { databaseMaintenanceLockPath, databaseQuiescenceMarkerPath } from "./maintenance-lock.js";
 import {
   inspectDatabaseFile,
   migrationDirectory,
@@ -74,6 +74,7 @@ export type MaintenanceFailureCode =
   | "database_path_invalid"
   | "database_maintenance_active"
   | "gateway_still_running"
+  | "gateway_quiescence_unverified"
   | "maintenance_lock_missing"
   | "restore_confirmation_required"
   | "restore_failed"
@@ -879,14 +880,22 @@ export async function verifyDatabaseBackup(options: VerifyOptions): Promise<Back
   };
 }
 
-async function gatewayIsRunning(healthUrl: string | undefined) {
-  if (!healthUrl) return false;
+async function assertGatewayNotRunning(healthUrl: string | undefined) {
+  if (!healthUrl) return;
   try {
     await fetch(healthUrl, { signal: AbortSignal.timeout(2_000) });
-    return true;
-  } catch {
-    return false;
+    throw new MaintenanceError("gateway_still_running");
+  } catch (error) {
+    if (error instanceof MaintenanceError) throw error;
   }
+}
+
+async function assertGatewayStopped(databasePath: string, healthUrl: string | undefined) {
+  await assertGatewayNotRunning(healthUrl);
+  await assertRegularPrivateFile(
+    databaseQuiescenceMarkerPath(databasePath),
+    "gateway_quiescence_unverified",
+  );
 }
 
 async function assertDatabaseQuiescent(databasePath: string) {
@@ -2039,9 +2048,7 @@ export async function restoreDatabaseBackup(
   const maintenanceLock = await acquireMaintenanceLock(databasePath);
 
   try {
-    if (await gatewayIsRunning(options.gatewayHealthUrl)) {
-      throw new MaintenanceError("gateway_still_running");
-    }
+    await assertGatewayStopped(databasePath, options.gatewayHealthUrl);
     await assertDistinctPaths(databasePath, backupPath, rollbackOutputPath);
     const selected = await readAndValidateManifest(backupPath);
     await assertDatabaseQuiescent(databasePath);
@@ -2121,8 +2128,9 @@ export async function restoreDatabaseBackup(
 
 async function assertEmptyRestoreTarget(databasePath: string) {
   const directory = path.dirname(databasePath);
-  const scan = await readBoundedDirectoryEntries(directory, 1);
-  if (scan.entries.length > 0 || scan.exceeded) {
+  const quiescenceMarkerName = path.basename(databaseQuiescenceMarkerPath(databasePath));
+  const scan = await readBoundedDirectoryEntries(directory, 2);
+  if (scan.exceeded || scan.entries.some((entry) => entry !== quiescenceMarkerName)) {
     throw new MaintenanceError("restore_target_not_empty");
   }
   for (const candidate of [
@@ -2163,9 +2171,7 @@ export async function restoreDatabaseBackupIntoEmptyTarget(
   let published = false;
   let retainMaintenanceLock = false;
   try {
-    if (await gatewayIsRunning(options.gatewayHealthUrl)) {
-      throw new MaintenanceError("gateway_still_running");
-    }
+    await assertGatewayNotRunning(options.gatewayHealthUrl);
     await assertDistinctPaths(databasePath, backupPath);
     const selected = await readAndValidateManifest(backupPath);
     const sanitizedDatabaseSha256 = await stageSelectedBackup(
@@ -2221,9 +2227,7 @@ export async function clearDatabaseMaintenanceLock(
   if (!options.confirmedGatewayStopped) {
     throw new MaintenanceError("restore_confirmation_required");
   }
-  if (await gatewayIsRunning(options.gatewayHealthUrl)) {
-    throw new MaintenanceError("gateway_still_running");
-  }
+  await assertGatewayStopped(options.databasePath, options.gatewayHealthUrl);
 
   const databasePath = resolvedFilePath(options.databasePath, "database_path_invalid");
   await assertPrivateDirectory(path.dirname(databasePath));

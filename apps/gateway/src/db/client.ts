@@ -1,11 +1,11 @@
 import Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import * as schema from "./schema.js";
-import { databaseMaintenanceLockPath } from "./maintenance-lock.js";
+import { databaseMaintenanceLockPath, databaseQuiescenceMarkerPath } from "./maintenance-lock.js";
 import { asStartupError, StartupError } from "../startup-error.js";
 import { constantTimeTextEqual, databaseKeyVerifier } from "../security/crypto.js";
 import { createRetainedDatabaseBackup } from "./maintenance.js";
@@ -54,11 +54,22 @@ function restrictDatabaseFiles(databaseUrl: string) {
   }
 }
 
+function clearDatabaseQuiescenceMarker(databaseUrl: string) {
+  if (databaseUrl === ":memory:") return;
+  try {
+    unlinkSync(databaseQuiescenceMarkerPath(databaseUrl));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw new StartupError("database_initialization_failed", { cause: error });
+  }
+}
+
 export function openDatabase(databaseUrl: string): DatabaseHandle {
   ensureParentDirectory(databaseUrl);
   if (databaseUrl !== ":memory:" && existsSync(databaseMaintenanceLockPath(databaseUrl))) {
     throw new StartupError("database_maintenance_active");
   }
+  clearDatabaseQuiescenceMarker(databaseUrl);
   let sqlite: Database.Database;
   try {
     sqlite = new Database(databaseUrl);
