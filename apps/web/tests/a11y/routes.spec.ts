@@ -13,6 +13,7 @@ import {
   openManualReleaseWorkbench,
 } from "../fixtures/manual-release";
 import { expandOperationsDock } from "../fixtures/operations";
+import { expectRouteAccessible } from "../fixtures/route-accessibility";
 
 const supportedProjects = new Set(["chromium", "mobile", "tablet", "ten-foot"]);
 const routes = [
@@ -287,26 +288,7 @@ for (const route of routes) {
       !supportedProjects.has(testInfo.project.name),
       "Covered by representative Chromium viewports",
     );
-    await page.emulateMedia({ reducedMotion: "reduce" });
-    await page.goto(route.path);
-    await expect(page.locator("main")).toHaveCount(1);
-    await expect(page.locator("main")).toBeVisible();
-    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-    const deferredLoadingLabel = route.path.startsWith("/settings/audit")
-      ? "Loading operator audit trail"
-      : route.path.startsWith("/settings/users")
-        ? "Loading user access administration"
-        : route.path.startsWith("/settings/connectors")
-          ? "Loading service connections"
-          : route.path.startsWith("/calendar")
-            ? "Loading acquisition calendar"
-            : undefined;
-    if (deferredLoadingLabel) {
-      await page.getByLabel(deferredLoadingLabel).waitFor({ state: "hidden" });
-    }
-    await page.evaluate(() => document.fonts.ready);
-    const results = await new AxeBuilder({ page }).analyze();
-    expect(results.violations).toEqual([]);
+    await expectRouteAccessible(page, route.path);
   });
 }
 

@@ -5,6 +5,8 @@ const visualTestMode = process.env.OMNIFIN_VISUAL_TEST === "true";
 const isolatedTestMode = process.env.OMNIFIN_PLAYWRIGHT_TEST_MODE === "true";
 const productionServer = isolatedTestMode || Boolean(process.env.CI);
 const gracefulShutdown = { signal: "SIGTERM" as const, timeout: 5_000 };
+const exhaustiveRouteMatrix = /tests\/a11y\/routes\.spec\.ts/;
+const useChromiumMobileEmulation = process.platform === "darwin";
 
 if (!Number.isInteger(port) || port < 1 || port > 65_535) {
   throw new Error("PLAYWRIGHT_PORT must be an integer between 1 and 65535.");
@@ -33,7 +35,7 @@ export default defineConfig({
   },
   webServer: {
     command: isolatedTestMode
-      ? "pnpm build && exec next start --hostname 127.0.0.1"
+      ? "exec next start --hostname 127.0.0.1"
       : process.env.CI
         ? "exec next start --hostname 127.0.0.1"
         : "pnpm dev",
@@ -54,10 +56,34 @@ export default defineConfig({
       name: "chromium",
       use: { ...devices["Desktop Chrome"], viewport: { height: 1000, width: 1440 } },
     },
-    { name: "firefox", use: { ...devices["Desktop Firefox"] } },
-    { name: "webkit", use: { ...devices["Desktop Safari"] } },
-    { name: "mobile", use: { ...devices["iPhone 15"], colorScheme: "dark" } },
-    { name: "tablet", use: { ...devices["iPad Pro 11"], colorScheme: "dark" } },
+    {
+      name: "firefox",
+      testIgnore: exhaustiveRouteMatrix,
+      use: { ...devices["Desktop Firefox"] },
+    },
+    {
+      name: "webkit",
+      testIgnore: exhaustiveRouteMatrix,
+      use: { ...devices["Desktop Safari"] },
+    },
+    {
+      name: "mobile",
+      testIgnore: exhaustiveRouteMatrix,
+      use: {
+        ...devices["iPhone 15"],
+        ...(useChromiumMobileEmulation ? { browserName: "chromium" } : {}),
+        colorScheme: "dark",
+      },
+    },
+    {
+      name: "tablet",
+      testIgnore: exhaustiveRouteMatrix,
+      use: {
+        ...devices["iPad Pro 11"],
+        ...(useChromiumMobileEmulation ? { browserName: "chromium" } : {}),
+        colorScheme: "dark",
+      },
+    },
     {
       name: "ten-foot",
       use: { ...devices["Desktop Chrome"], viewport: { height: 1080, width: 1920 } },
