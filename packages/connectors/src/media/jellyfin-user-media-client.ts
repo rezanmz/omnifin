@@ -38,11 +38,14 @@ export const JELLYFIN_CONTINUE_WATCHING_LIMIT = 50;
 export const JELLYFIN_LIBRARY_BROWSE_LIMIT = 50;
 export const JELLYFIN_LIBRARY_EPISODE_LIMIT = 50;
 export const JELLYFIN_LIBRARY_EXTRAS_LIMIT = LIBRARY_EXTRAS_MAX_ITEMS;
-export const JELLYFIN_OWNERSHIP_LOOKUP_LIMIT = 2;
+export const JELLYFIN_OWNERSHIP_LOOKUP_PAGE_SIZE = 100;
 export const JELLYFIN_LIBRARY_SEASON_LIMIT = 100;
 export const JELLYFIN_VIEWING_HISTORY_LIMIT = 50;
 const JELLYFIN_VIEWING_HISTORY_SCAN_PAGE_SIZE = 100;
 const JELLYFIN_VIEWING_HISTORY_MAX_SCAN_PAGES = 20;
+export const JELLYFIN_OWNERSHIP_LOOKUP_MAX_PAGES = 20;
+export const JELLYFIN_OWNERSHIP_LOOKUP_MAX_ITEMS =
+  JELLYFIN_OWNERSHIP_LOOKUP_PAGE_SIZE * JELLYFIN_OWNERSHIP_LOOKUP_MAX_PAGES;
 const JELLYFIN_SEASON_COUNT_CONCURRENCY = 4;
 const JELLYFIN_SEASON_COUNT_FALLBACK_LIMIT = 50;
 const JELLYFIN_PLAYBACK_CONTEXT_LOOKAHEAD_LIMIT = 8;
@@ -235,14 +238,15 @@ const jellyfinOwnershipItemSchema = z.object({
   Id: jellyfinItemIdSchema,
   ProviderIds: z
     .record(z.string().trim().min(1).max(64), z.string().trim().min(1).max(128))
-    .refine((ids) => Object.keys(ids).length <= 32),
+    .refine((ids) => Object.keys(ids).length <= 32)
+    .nullish(),
   Type: z.enum(["Movie", "Series"]),
 });
 
 const jellyfinOwnershipResponseSchema = z.object({
-  Items: z.array(jellyfinOwnershipItemSchema).max(JELLYFIN_OWNERSHIP_LOOKUP_LIMIT),
-  StartIndex: z.literal(0).nullish(),
-  TotalRecordCount: z.int().nonnegative().max(JELLYFIN_OWNERSHIP_LOOKUP_LIMIT).nullish(),
+  Items: z.array(jellyfinOwnershipItemSchema).max(JELLYFIN_OWNERSHIP_LOOKUP_PAGE_SIZE),
+  StartIndex: z.int().nonnegative(),
+  TotalRecordCount: z.int().nonnegative().max(LIBRARY_BROWSE_MAX_TOTAL_RESULTS),
 });
 
 const jellyfinLibraryExtraItemSchema = z.object({
@@ -2010,56 +2014,91 @@ export class JellyfinUserMediaClient {
   ): Promise<JellyfinExactOwnershipResult> {
     const input = jellyfinExactOwnershipInputSchema.parse(rawInput);
     const expectedType = input.kind === "movie" ? "Movie" : "Series";
-    signal?.throwIfAborted();
-    let response: z.infer<typeof jellyfinOwnershipResponseSchema>;
-    try {
-      response = await this.#client.requestJson(
-        `Users/${input.userId}/Items`,
-        jellyfinOwnershipResponseSchema,
-        {
-          headers: { authorization: this.#authorization },
-          operation: "media.ownership",
-          query: {
-            AnyProviderIdEquals: `Tmdb.${input.tmdbId}`,
-            EnableImages: "false",
-            EnableTotalRecordCount: "true",
-            EnableUserData: "false",
-            Fields: "ProviderIds",
-            IncludeItemTypes: expectedType,
-            IsMissing: "false",
-            IsVirtualItem: "false",
-            Limit: String(JELLYFIN_OWNERSHIP_LOOKUP_LIMIT),
-            Recursive: "true",
-            StartIndex: "0",
-          },
-          ...(signal === undefined ? {} : { signal }),
-        },
-      );
-    } catch (error) {
+    const expectedTmdbId = String(input.tmdbId);
+    const scannedItemIds = new Set<string>();
+    let ownedItemId: string | null = null;
+    let startIndex = 0;
+    let totalResults: number | null = null;
+
+    while (true) {
       signal?.throwIfAborted();
-      throw error;
+      let response: z.infer<typeof jellyfinOwnershipResponseSchema>;
+      try {
+        response = await this.#client.requestJson(
+          `Users/${input.userId}/Items`,
+          jellyfinOwnershipResponseSchema,
+          {
+            headers: { authorization: this.#authorization },
+            operation: "media.ownership",
+            query: {
+              EnableImages: "false",
+              EnableTotalRecordCount: "true",
+              EnableUserData: "false",
+              Fields: "ProviderIds",
+              IncludeItemTypes: expectedType,
+              IsMissing: "false",
+              IsVirtualItem: "false",
+              Limit: String(JELLYFIN_OWNERSHIP_LOOKUP_PAGE_SIZE),
+              Recursive: "true",
+              StartIndex: String(startIndex),
+            },
+            ...(signal === undefined ? {} : { signal }),
+          },
+        );
+      } catch (error) {
+        signal?.throwIfAborted();
+        throw error;
+      }
+
+      if (response.StartIndex !== startIndex) {
+        throw this.#client.invalidResponse("media.ownership");
+      }
+      if (totalResults === null) {
+        totalResults = response.TotalRecordCount;
+        if (totalResults > JELLYFIN_OWNERSHIP_LOOKUP_MAX_ITEMS) {
+          throw this.#client.invalidResponse("media.ownership");
+        }
+      } else if (response.TotalRecordCount !== totalResults) {
+        throw this.#client.invalidResponse("media.ownership");
+      }
+
+      const expectedPageLength = Math.min(
+        JELLYFIN_OWNERSHIP_LOOKUP_PAGE_SIZE,
+        totalResults - startIndex,
+      );
+      if (expectedPageLength < 0 || response.Items.length !== expectedPageLength) {
+        throw this.#client.invalidResponse("media.ownership");
+      }
+
+      for (const item of response.Items) {
+        if (item.Type !== expectedType || scannedItemIds.has(item.Id)) {
+          throw this.#client.invalidResponse("media.ownership");
+        }
+        scannedItemIds.add(item.Id);
+
+        const tmdbIds = Object.entries(item.ProviderIds ?? {}).filter(
+          ([provider]) => provider.toLocaleLowerCase("en-US") === "tmdb",
+        );
+        const tmdbId = tmdbIds[0]?.[1];
+        if (tmdbIds.length > 1 || (tmdbId !== undefined && !/^[1-9]\d*$/u.test(tmdbId))) {
+          throw this.#client.invalidResponse("media.ownership");
+        }
+        if (tmdbId === expectedTmdbId) {
+          if (ownedItemId !== null) {
+            throw this.#client.invalidResponse("media.ownership");
+          }
+          ownedItemId = item.Id;
+        }
+      }
+
+      startIndex += response.Items.length;
+      if (startIndex === totalResults) {
+        return { itemId: ownedItemId, owned: ownedItemId !== null };
+      }
+      if (startIndex > totalResults || startIndex >= JELLYFIN_OWNERSHIP_LOOKUP_MAX_ITEMS) {
+        throw this.#client.invalidResponse("media.ownership");
+      }
     }
-    if (
-      response.Items.length > 1 ||
-      (response.TotalRecordCount !== null &&
-        response.TotalRecordCount !== undefined &&
-        response.TotalRecordCount !== response.Items.length)
-    ) {
-      throw this.#client.invalidResponse("media.ownership");
-    }
-    const item = response.Items[0];
-    if (!item) return { itemId: null, owned: false };
-    const tmdbIds = Object.entries(item.ProviderIds).filter(
-      ([provider]) => provider.toLocaleLowerCase("en-US") === "tmdb",
-    );
-    if (
-      item.Type !== expectedType ||
-      tmdbIds.length !== 1 ||
-      tmdbIds[0]?.[1] !== String(input.tmdbId)
-    ) {
-      throw this.#client.invalidResponse("media.ownership");
-    }
-    return { itemId: item.Id, owned: true };
   }
 
   async #readPersonIdentities(
