@@ -851,6 +851,33 @@ jobs:
             --output /backups/release-install.sqlite
           "${compose[@]}" run --rm --no-deps maintenance verify \
             --input /backups/release-install.sqlite
+      - name: Record clean-host installation evidence
+        env:
+          CANDIDATE_DIGEST: ${{ needs.publish-candidate.outputs.digest }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          mkdir --parents artifacts/release
+          node --input-type=module --eval '
+            import { writeFile } from "node:fs/promises";
+            const sourceSha = process.env.RELEASE_SHA;
+            const candidateDigest = process.env.CANDIDATE_DIGEST;
+            if (!/^[0-9a-f]{40}$/u.test(sourceSha)) throw new Error("invalid_source_sha");
+            if (!/^sha256:[0-9a-f]{64}$/u.test(candidateDigest)) throw new Error("invalid_candidate_digest");
+            await writeFile(
+              "artifacts/release/install.json",
+              `${JSON.stringify({ candidateDigest, checks: ["compose-config", "health", "recovery", "backup", "backup-verify"], schemaVersion: 1, sourceSha }, null, 2)}\n`,
+              { encoding: "utf8", mode: 0o644 },
+            );
+          '
+      - name: Upload sanitized clean-host installation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          if-no-files-found: error
+          name: omnifin-${{ inputs.version }}-install-rehearsal-${{ github.run_id }}
+          path: artifacts/release/install.json
+          retention-days: 30
       - name: Tear down the release installation
         if: always()
         run: |
@@ -1023,6 +1050,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
+      actions: read
       # Persist the normalized v1 record to the Release Please draft before
       # aliases move; Actions artifact retention alone is not durable evidence.
       contents: write
@@ -1036,31 +1064,78 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - name: Validate operator-provided v1 evidence
+      - name: Download Tier 1 fixture evidence
+        if: needs.release-coverage.outputs.profile == 'v1'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-fixture-integration-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence-downloads/fixture
+      - name: Download Tier 2 live evidence
+        if: needs.release-coverage.outputs.profile == 'v1'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-live-integration-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence-downloads/live
+      - name: Download Tier 3 AMD64 scan evidence
+        if: needs.release-coverage.outputs.profile == 'v1'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: omnifin-${{ inputs.version }}-candidate-scan-linux-amd64
+          path: evidence-downloads/scan-linux-amd64
+      - name: Download Tier 3 ARM64 scan evidence
+        if: needs.release-coverage.outputs.profile == 'v1'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: omnifin-${{ inputs.version }}-candidate-scan-linux-arm64
+          path: evidence-downloads/scan-linux-arm64
+      - name: Download Tier 4 installation evidence
+        if: needs.release-coverage.outputs.profile == 'v1'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: omnifin-${{ inputs.version }}-install-rehearsal-${{ github.run_id }}
+          path: evidence-downloads/install
+      - name: Download Tier 4 upgrade evidence
+        if: needs.release-coverage.outputs.profile == 'v1'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: omnifin-${{ inputs.version }}-upgrade-rehearsal
+          path: evidence-downloads/upgrade
+      - name: Assemble exact-candidate v1 evidence
         if: needs.release-coverage.outputs.profile == 'v1'
         env:
           CANDIDATE_DIGEST: ${{ needs.publish-candidate.outputs.digest }}
-          EVIDENCE_INDEX: ${{ vars.OMNIFIN_V1_EVIDENCE_INDEX }}
           RELEASE_SHA: ${{ inputs.release_sha }}
         run: |
           set -euo pipefail
-          test -n "$EVIDENCE_INDEX"
-          umask 077
-          printf '%s' "$EVIDENCE_INDEX" > evidence-index.input.json
-          node scripts/integration/release-evidence.mjs \
-            --input evidence-index.input.json \
-            --source-sha "$RELEASE_SHA" \
+          mkdir --parents evidence-inputs artifacts/release-evidence
+          install --mode 0600 evidence-downloads/fixture/fixture.json evidence-inputs/fixture.json
+          install --mode 0600 evidence-downloads/live/live.json evidence-inputs/live.json
+          install --mode 0600 \
+            evidence-downloads/scan-linux-amd64/trivy-release-candidate-linux-amd64.sarif \
+            evidence-inputs/scan-linux-amd64.sarif
+          install --mode 0600 \
+            evidence-downloads/scan-linux-arm64/trivy-release-candidate-linux-arm64.sarif \
+            evidence-inputs/scan-linux-arm64.sarif
+          install --mode 0600 evidence-downloads/install/install.json evidence-inputs/install.json
+          install --mode 0600 evidence-downloads/upgrade/upgrade-rehearsal.json evidence-inputs/upgrade.json
+          node scripts/integration/release-evidence-assembly.mjs \
             --candidate-digest "$CANDIDATE_DIGEST" \
-            --output artifacts/release-evidence/index.json
-      - name: Upload validated v1 evidence index
+            --input-directory evidence-inputs \
+            --output-directory artifacts/release-evidence \
+            --release-tag "${{ inputs.tag }}" \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" \
+            --source-sha "$RELEASE_SHA" \
+            --verified-at "$(date --utc +%F)"
+      - name: Upload validated v1 evidence records
         if: always() && needs.release-coverage.outputs.profile == 'v1'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           if-no-files-found: error
           name: v1-evidence-index-${{ github.run_id }}
-          path: artifacts/release-evidence/index.json
+          path: artifacts/release-evidence/
           retention-days: 90
-      - name: Attach durable v1 evidence index to the draft
+      - name: Attach durable v1 evidence records to the draft
         if: needs.release-coverage.outputs.profile == 'v1'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
@@ -1082,27 +1157,34 @@ jobs:
             if (!release?.draft || release.prerelease) {
               throw new Error(`Expected an unpublished, non-prerelease draft for ${process.env.RELEASE_TAG}.`);
             }
-            const indexName = `v1-evidence-index-${context.runId}.json`;
-            const checksumName = `${indexName}.sha256`;
-            const index = fs.readFileSync(path.join(process.env.EVIDENCE_DIRECTORY, "index.json"));
-            const checksum = Buffer.from(
-              `${crypto.createHash("sha256").update(index).digest("hex")}  ${indexName}\n`,
+            const tierNames = [1, 2, 3, 4].map(
+              (tier) => `v1-evidence-tier-${tier}-${context.runId}.json`,
             );
+            const indexName = `v1-evidence-index-${context.runId}.json`;
+            const index = fs.readFileSync(path.join(process.env.EVIDENCE_DIRECTORY, "index.json"));
+            const assets = [
+              ...tierNames.map((name) => [
+                name,
+                fs.readFileSync(path.join(process.env.EVIDENCE_DIRECTORY, name)),
+              ]),
+              [indexName, index],
+              [
+                `${indexName}.sha256`,
+                Buffer.from(`${crypto.createHash("sha256").update(index).digest("hex")}  ${indexName}\n`),
+              ],
+            ];
             const existing = await github.paginate(github.rest.repos.listReleaseAssets, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               release_id: release.id,
               per_page: 100,
             });
-            for (const name of [indexName, checksumName]) {
+            for (const [name] of assets) {
               if (existing.some((asset) => asset.name === name)) {
                 throw new Error(`Refusing to overwrite release asset ${name}.`);
               }
             }
-            for (const [name, data] of [
-              [indexName, index],
-              [checksumName, checksum],
-            ]) {
+            for (const [name, data] of assets) {
               await github.rest.repos.uploadReleaseAsset({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
