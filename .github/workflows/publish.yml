@@ -1000,9 +1000,68 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  validate-v1-evidence:
+    name: Validate exact-candidate v1 evidence
+    if: >-
+      ${{
+        always() &&
+        needs.release-coverage.result == 'success' &&
+        needs.publish-candidate.result == 'success' &&
+        needs.scan-candidate.result == 'success' &&
+        needs.verify-candidate.result == 'success' &&
+        needs.verify-install-bundle.result == 'success' &&
+        needs.rehearse-upgrade.result == 'success'
+      }}
+    needs:
+      - release-coverage
+      - publish-candidate
+      - scan-candidate
+      - verify-candidate
+      - verify-install-bundle
+      - rehearse-upgrade
+    environment: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out immutable release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.release_sha }}
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Validate operator-provided v1 evidence
+        if: needs.release-coverage.outputs.profile == 'v1'
+        env:
+          CANDIDATE_DIGEST: ${{ needs.publish-candidate.outputs.digest }}
+          EVIDENCE_INDEX: ${{ vars.OMNIFIN_V1_EVIDENCE_INDEX }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          test -n "$EVIDENCE_INDEX"
+          umask 077
+          printf '%s' "$EVIDENCE_INDEX" > evidence-index.input.json
+          node scripts/integration/release-evidence.mjs \
+            --input evidence-index.input.json \
+            --source-sha "$RELEASE_SHA" \
+            --candidate-digest "$CANDIDATE_DIGEST" \
+            --output artifacts/release-evidence/index.json
+      - name: Upload validated v1 evidence index
+        if: always() && needs.release-coverage.outputs.profile == 'v1'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          if-no-files-found: error
+          name: v1-evidence-index-${{ github.run_id }}
+          path: artifacts/release-evidence/index.json
+          retention-days: 90
+
   promote-stable:
     name: Promote verified digest to stable tags
-    if: ${{ always() && needs.validate-release-metadata.result == 'success' && needs.publish-candidate.result == 'success' && needs.scan-candidate.result == 'success' && needs.verify-candidate.result == 'success' && needs.verify-install-bundle.result == 'success' && needs.rehearse-upgrade.result == 'success' }}
+    if: ${{ always() && needs.validate-release-metadata.result == 'success' && needs.publish-candidate.result == 'success' && needs.scan-candidate.result == 'success' && needs.verify-candidate.result == 'success' && needs.verify-install-bundle.result == 'success' && needs.rehearse-upgrade.result == 'success' && needs.validate-v1-evidence.result == 'success' }}
     needs:
       - validate-release-metadata
       - publish-candidate
@@ -1010,6 +1069,7 @@ jobs:
       - verify-candidate
       - verify-install-bundle
       - rehearse-upgrade
+      - validate-v1-evidence
     environment: release
     runs-on: ubuntu-latest
     timeout-minutes: 15
