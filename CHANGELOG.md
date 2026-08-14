@@ -7,6 +7,25 @@
 * **auth:** add single-use administrator invitations with OIDC/Jellyfin onboarding proof,
   lifecycle auditing, and restore-safe replacement handling ([#335](https://github.com/rezanmz/omnifin/issues/335))
 
+## [0.18.0](https://github.com/rezanmz/omnifin/compare/v0.17.0...v0.18.0) (2026-08-14)
+
+
+### Features
+
+* **release:** gate v1 on candidate evidence ([#393](https://github.com/rezanmz/omnifin/issues/393)) ([6aff57c](https://github.com/rezanmz/omnifin/commit/6aff57c75ab7b9a98aa7a118043a30913b9026af))
+
+
+### Fixes
+
+* **connectors:** classify Sonarr monitoring reads ([#404](https://github.com/rezanmz/omnifin/issues/404)) ([1327a10](https://github.com/rezanmz/omnifin/commit/1327a1049c551db00fbb08fd071513342a6160ec))
+* **release:** assemble candidate evidence artifacts ([#405](https://github.com/rezanmz/omnifin/issues/405)) ([770ce98](https://github.com/rezanmz/omnifin/commit/770ce982f4d8bbe0e616db8bfae0de32d2c4a61d))
+* **release:** assemble v1 evidence from gate artifacts ([#406](https://github.com/rezanmz/omnifin/issues/406)) ([8bbd3c3](https://github.com/rezanmz/omnifin/commit/8bbd3c35cc98803d97a964c8a9fadce9a6f7d636))
+* **release:** mount key for rollback rehearsal ([#401](https://github.com/rezanmz/omnifin/issues/401)) ([d697df6](https://github.com/rezanmz/omnifin/commit/d697df660cbb954809627dfc7e96096534324d17))
+* **release:** require fixture evidence artifact ([#391](https://github.com/rezanmz/omnifin/issues/391)) ([23d2c10](https://github.com/rezanmz/omnifin/commit/23d2c100666b37811480afade45fb3528d8c41ef))
+* **release:** require semantic v1 evidence coverage ([#397](https://github.com/rezanmz/omnifin/issues/397)) ([dea7437](https://github.com/rezanmz/omnifin/commit/dea7437c2219fbf4569381899f15ded4844052b1))
+* **release:** retain v1 evidence with draft ([#399](https://github.com/rezanmz/omnifin/issues/399)) ([5f779e8](https://github.com/rezanmz/omnifin/commit/5f779e8d79b77b5a142592ab38661deb820da087))
+* **security:** patch image-size parser loops ([#389](https://github.com/rezanmz/omnifin/issues/389)) ([5c95036](https://github.com/rezanmz/omnifin/commit/5c9503633111b58a1501ca0b7a7a965a652f85d9))
+
 ## [0.17.0](https://github.com/rezanmz/omnifin/compare/v0.16.0...v0.17.0) (2026-08-14)
 
 
