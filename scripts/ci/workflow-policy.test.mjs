@@ -52,6 +52,16 @@ test("release automation remains in the reviewed pre-1.0 channel", () => {
   assert.match(packageDocument.version, /^0\.\d+\.\d+$/u);
 });
 
+test("strict release fixture evidence fails closed when its report is absent", () => {
+  const document = workflowDocument("publish.yml");
+  const validation = document.jobs["validate-source"];
+  const upload = namedStep(validation.steps, "Upload sanitized fixture release evidence");
+
+  assert.equal(upload.if, "always()");
+  assert.equal(upload.with.path, "artifacts/release-integration/fixture.json");
+  assert.equal(upload.with["if-no-files-found"], "error");
+});
+
 test("release pull requests are normalized through a verified exact-tree commit", () => {
   const document = workflowDocument("release-please.yml");
   const release = document.jobs.release;
