@@ -12,6 +12,65 @@ const sourceSha = "a".repeat(40);
 const candidateDigest = `sha256:${"b".repeat(64)}`;
 const options = { candidateDigest, sourceSha, today: "2026-08-14" };
 
+const requirements = {
+  1: {
+    claim: "Contract fixtures",
+    coverage: [
+      "parsing",
+      "normalization",
+      "authorization",
+      "malformed-responses",
+      "limits",
+      "timeouts",
+      "cancellation",
+      "operation-success",
+      "operation-failure",
+    ],
+  },
+  2: {
+    claim: "Digest-pinned disposable real upstreams",
+    coverage: [
+      "version-discovery",
+      "capability-discovery",
+      "authentication",
+      "representative-reads",
+      "safe-mutations",
+      "failure-behavior",
+      "recovery",
+      "deterministic-teardown",
+    ],
+  },
+  3: {
+    claim: "Exact-candidate verticals",
+    coverage: [
+      "identity",
+      "connector-use",
+      "representative-media",
+      "sse",
+      "mutations",
+      "backup-restore",
+      "migration",
+    ],
+  },
+  4: {
+    claim: "Real home-lab rehearsal",
+    coverage: [
+      "documented-install",
+      "tls-reverse-proxy",
+      "bootstrap",
+      "backup",
+      "empty-host-restore",
+      "upgrade",
+      "rollback",
+      "troubleshooting",
+      "real-network",
+      "sse-media-proxying",
+      "recovery-evidence",
+      "sanitized-diagnostics",
+    ],
+  },
+};
+
 function record(tier, architectures = STABLE_ARCHITECTURES) {
   return {
     architectures,
@@ -20,7 +79,8 @@ function record(tier, architectures = STABLE_ARCHITECTURES) {
       url: `https://github.com/rezanmz/omnifin/releases/download/v1.0.0/tier-${tier}.json`,
     },
     candidateDigest,
-    claim: `Tier ${tier} release claim`,
+    claim: requirements[tier].claim,
+    coverage: requirements[tier].coverage,
     expiresAt: "2026-08-15",
     limitations: "Sanitized diagnostic output excludes secrets and host paths.",
     owner: "release-maintainer",
@@ -35,6 +95,28 @@ function record(tier, architectures = STABLE_ARCHITECTURES) {
 function index(records = [record(1), record(2), record(3), record(4)]) {
   return { candidateDigest, records, schemaVersion: 1, sourceSha };
 }
+
+test("rejects arbitrary claims instead of documented tier semantics", () => {
+  const evidence = index();
+  evidence.records[3].claim = "A generic successful deployment";
+
+  assert.throws(
+    () => validateV1EvidenceIndex(evidence, options),
+    /must identify the documented Tier 4 evidence/u,
+  );
+});
+
+test("rejects Tier 4 evidence without the complete clean-host operator rehearsal", () => {
+  const evidence = index();
+  evidence.records[3].coverage = evidence.records[3].coverage.filter(
+    (item) => item !== "empty-host-restore",
+  );
+
+  assert.throws(
+    () => validateV1EvidenceIndex(evidence, options),
+    /must include every documented Tier 4 behavior/u,
+  );
+});
 
 test("accepts four exact-candidate evidence tiers with native stable architecture coverage", () => {
   const validated = validateV1EvidenceIndex(index(), options);
