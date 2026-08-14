@@ -11,7 +11,7 @@ const tierValues = new Set([1, 2, 3, 4]);
 
 export const STABLE_ARCHITECTURES = Object.freeze(["linux/amd64", "linux/arm64"]);
 
-const TIER_REQUIREMENTS = Object.freeze({
+export const V1_TIER_REQUIREMENTS = Object.freeze({
   1: Object.freeze({
     claim: "Contract fixtures",
     coverage: Object.freeze([
@@ -160,7 +160,7 @@ function validateArchitectures(value, label, expectedArchitectures) {
 }
 
 function validateTierCoverage(value, tier, label) {
-  const requirement = TIER_REQUIREMENTS[tier];
+  const requirement = V1_TIER_REQUIREMENTS[tier];
   if (value.claim !== requirement.claim) {
     throw new Error(`${label}.claim must identify the documented Tier ${tier} evidence.`);
   }
