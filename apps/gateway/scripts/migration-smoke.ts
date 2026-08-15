@@ -29,6 +29,7 @@ const requiredTables = [
   "external_mutation_dispatches",
   "external_mutation_target_locks",
   "invitations",
+  "jellyfin_invite_provisioning_operations",
   "jellyfin_provisioning_configs",
   "jellyfin_quick_connect_transactions",
   "library_artwork_searches",
@@ -732,11 +733,12 @@ function writeHistoricalMigrationFixture() {
     [34, "0034_external_mutation_journal"],
     [35, "0035_invitations"],
     [36, "0036_jellyfin_provisioning"],
+    [37, "0037_jellyfin_invite_provisioning"],
   ];
   assertCondition(
-    JSON.stringify(journal.entries.slice(-9).map(({ idx, tag }) => [idx, tag])) ===
+    JSON.stringify(journal.entries.slice(-10).map(({ idx, tag }) => [idx, tag])) ===
       JSON.stringify(expectedTail),
-    "Current migration journal must preserve the linear parent, saved-list, and playback-preference ancestry.",
+    "Current migration journal must preserve the linear parent, saved-list, playback-preference, and invite-provisioning ancestry.",
   );
   const snapshots = [27, 28, 29, 30].map(
     (index) =>
@@ -912,8 +914,9 @@ const {
   historicalMigrationTimestamp,
 } = writeHistoricalMigrationFixture();
 assertCondition(
-  currentMigrationTimestamp !== undefined && currentMigrationTag === "0036_jellyfin_provisioning",
-  "Current migration journal must end at migration 0036_jellyfin_provisioning.",
+  currentMigrationTimestamp !== undefined &&
+    currentMigrationTag === "0037_jellyfin_invite_provisioning",
+  "Current migration journal must end at migration 0037_jellyfin_invite_provisioning.",
 );
 
 try {
@@ -927,7 +930,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Fresh empty migration did not advance exactly through migration 0036.",
+      "Fresh empty migration did not advance exactly through migration 0037.",
     );
     assertInvitationMigration(database, "Fresh empty migration");
     const tables = database.sqlite
@@ -1411,7 +1414,7 @@ try {
           count: currentMigrationCount,
           latestMigrationTimestamp: currentMigrationTimestamp,
         }),
-      "Production migration did not advance the historical fixture exactly through migration 0036.",
+      "Production migration did not advance the historical fixture exactly through migration 0037.",
     );
     assertInvitationMigration(upgradeDatabase, "Historical upgrade migration");
     const reservations = upgradeDatabase.sqlite
@@ -1577,7 +1580,7 @@ try {
   }
 
   process.stdout.write(
-    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0036, retention, and collision-rollback paths.\n",
+    "Migration upgrade smoke passed for fresh, idempotent, historical-upgrade through 0037, retention, and collision-rollback paths.\n",
   );
 } finally {
   rmSync(temporaryDirectory, { force: true, recursive: true });
