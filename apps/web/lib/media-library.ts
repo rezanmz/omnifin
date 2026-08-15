@@ -3,6 +3,9 @@ import type {
   LibraryBrowseResponse,
   LibraryBrowseSort,
   LibraryConnectedActionsResponse,
+  LibraryRemovalCommitRequest,
+  LibraryRemovalOperation,
+  LibraryRemovalPreview,
   LibraryDownloadPrepareResponse,
   LibraryExtrasResponse,
   LibraryPlaybackStateMutationRequest,
@@ -169,6 +172,43 @@ export interface MediaLibraryClient {
     signal?: AbortSignal,
     idempotencyKey?: string,
   ): Promise<LibraryPlaybackStateMutationResponse>;
+  commitRemoval?(
+    referenceId: string,
+    request: LibraryRemovalCommitRequest,
+    signal?: AbortSignal,
+    idempotencyKey?: string,
+  ): Promise<LibraryRemovalOperation>;
+  loadRemovalEligibility?(signal?: AbortSignal): Promise<MediaDownloadEligibility>;
+  loadRemovalPreview?(referenceId: string, signal?: AbortSignal): Promise<LibraryRemovalPreview>;
+}
+
+async function removalSession(signal?: AbortSignal) {
+  const schemas = await contractSchemas();
+  const sessionResponse = await fetchLibraryResponse(
+    "/api/auth/session",
+    { headers: { accept: "application/json" } },
+    signal,
+  );
+  if (!sessionResponse.ok) throw await responseError(sessionResponse);
+  const session = schemas.auth.sessionResponseSchema.safeParse(await safeJson(sessionResponse));
+  if (session.success && session.data.principal !== null && session.data.csrfToken !== null) {
+    if (
+      session.data.principal.accountState === "active" &&
+      session.data.principal.permissions.includes("library.delete")
+    ) {
+      return { csrfToken: session.data.csrfToken, schemas };
+    }
+    throw new MediaLibraryClientError(
+      "forbidden",
+      "permission_denied",
+      "Your account cannot remove library titles.",
+    );
+  }
+  throw new MediaLibraryClientError(
+    "signed_out",
+    "authentication_required",
+    "Your session ended. Sign in again to remove a library title.",
+  );
 }
 
 const MEDIA_REFERENCE_PATTERN = /^media_[A-Za-z0-9_-]{22}$/u;
@@ -277,6 +317,65 @@ export const mediaLibraryClient: MediaLibraryClient = {
       schemas.libraryTitleDetailResponseSchema,
       signal,
     );
+  },
+  async loadRemovalEligibility(signal) {
+    try {
+      const { csrfToken } = await removalSession(signal);
+      return { snapshot: { csrfToken }, status: "ready" };
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      if (error instanceof MediaLibraryClientError) {
+        if (error.kind === "forbidden" || error.kind === "signed_out") {
+          return { status: error.kind };
+        }
+      }
+      return { status: "unavailable" };
+    }
+  },
+  async loadRemovalPreview(referenceId, signal) {
+    assertMediaReference(referenceId);
+    const schemas = (await contractSchemas()).library;
+    const preview = await fetchLibraryJson(
+      `/api/media/library/${referenceId}/removal-preview`,
+      schemas.libraryRemovalPreviewSchema,
+      signal,
+    );
+    if (preview.referenceId !== referenceId) {
+      throw new MediaLibraryClientError(
+        "invalid_response",
+        "invalid_response",
+        "The gateway prepared removal for a different library title.",
+      );
+    }
+    return preview;
+  },
+  async commitRemoval(referenceId, request, signal, idempotencyKey = crypto.randomUUID()) {
+    assertMediaReference(referenceId);
+    const { csrfToken, schemas } = await removalSession(signal);
+    const body = schemas.library.libraryRemovalCommitRequestSchema.parse(request);
+    const response = await fetchLibraryResponse(
+      `/api/media/library/${referenceId}/removals`,
+      {
+        body: JSON.stringify(body),
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "idempotency-key": idempotencyKey,
+          "x-omnifin-csrf": csrfToken,
+        },
+        method: "POST",
+      },
+      signal,
+    );
+    const operation = await parsedResponse(response, schemas.library.libraryRemovalOperationSchema);
+    if (operation.referenceId !== referenceId) {
+      throw new MediaLibraryClientError(
+        "invalid_response",
+        "invalid_response",
+        "The gateway removed a different library title.",
+      );
+    }
+    return operation;
   },
   async resolvePerson(referenceId, signal) {
     assertMediaReference(referenceId);
