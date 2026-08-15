@@ -7,9 +7,26 @@ import { LibraryTitleDrawer } from "./library-title-drawer";
 const series = mediaLibraryDemoItems.find(({ media }) => media.kind === "series")!;
 const movie = mediaLibraryDemoItems.find(({ media }) => media.kind === "movie")!;
 
+const connectedSeriesClient = {
+  ...mediaLibraryDemoClient,
+  loadConnectedActions: async (referenceId: string) => ({
+    actions: [
+      {
+        href: `/v1/media/library/${referenceId}/actions/sonarr`,
+        kind: "service_navigation" as const,
+        label: "Open in Sonarr",
+        service: "sonarr" as const,
+      },
+    ],
+    generatedAt: "2026-07-30T12:00:00.000Z",
+    mediaKind: "series" as const,
+    referenceId,
+  }),
+};
+
 const meta = {
   args: {
-    client: mediaLibraryDemoClient,
+    client: connectedSeriesClient,
     item: series,
     onClose: fn(),
     onPlay: fn(),
@@ -51,6 +68,9 @@ export const EpisodeDetailsOpen: Story = {
     expect(
       await within(episodeDetail).findByRole("button", { name: "View Mara Voss profile" }),
     ).toBeVisible();
+    expect(
+      await within(episodeDetail).findByRole("link", { name: "Open in Sonarr in a new tab" }),
+    ).toHaveAttribute("href", `/api/media/library/${series.media.id}/actions/sonarr`);
   },
 };
 
