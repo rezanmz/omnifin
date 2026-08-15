@@ -14,9 +14,10 @@ import {
   type ContinueWatchingLoadOutcome,
 } from "../lib/continue-watching";
 import type { MediaCardModel } from "../lib/dashboard-data";
-import type { PlaybackClient } from "../lib/playback";
+import { playbackClient, type PlaybackClient } from "../lib/playback";
 import { MediaRail } from "./media-rail";
 import theaterStyles from "./theater-player.module.css";
+import { NextUpRail } from "./next-up-rail";
 
 const TheaterPlayer = dynamic(
   () => import("./theater-player").then((module) => module.TheaterPlayer),
@@ -193,6 +194,14 @@ function ContinueWatchingRailContent({
           ? { statusMessage: "Showing saved progress · refresh interrupted" }
           : {})}
         title="Continue watching"
+      />
+      <NextUpRail
+        client={
+          playerClient?.loadContext ? { loadContext: playerClient.loadContext } : playbackClient
+        }
+        enabled={refreshAvailable && query.data.state === "complete"}
+        feed={query.data}
+        onSelect={setSelected}
       />
       {selected && (
         <TheaterPlayer

@@ -11,6 +11,7 @@ export interface MediaCardModel {
   positionSeconds?: number;
   progress?: number;
   requestable?: boolean;
+  selectable?: boolean;
   savedDiscoveryTarget?: SavedDiscoveryTargetIssueRequest;
   title: string;
 }
