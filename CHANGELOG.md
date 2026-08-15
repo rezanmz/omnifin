@@ -7,6 +7,26 @@
 * **auth:** add single-use administrator invitations with OIDC/Jellyfin onboarding proof,
   lifecycle auditing, and restore-safe replacement handling ([#335](https://github.com/rezanmz/omnifin/issues/335))
 
+## [0.19.0](https://github.com/rezanmz/omnifin/compare/v0.18.2...v0.19.0) (2026-08-15)
+
+
+### Features
+
+* **auth:** add provisioning user mutations ([#416](https://github.com/rezanmz/omnifin/issues/416)) ([1d2f322](https://github.com/rezanmz/omnifin/commit/1d2f3224cd4746f6c7171cbb03d128b9cdcd02e4))
+* **discovery:** rotate hero spotlight ([#417](https://github.com/rezanmz/omnifin/issues/417)) ([597c615](https://github.com/rezanmz/omnifin/commit/597c61585be219603e4d0e8611a4d8bc9190633e))
+* **gateway:** add durable invite provisioning operation ([#422](https://github.com/rezanmz/omnifin/issues/422)) ([637b0c4](https://github.com/rezanmz/omnifin/commit/637b0c47226b5d7a00c7b90baaf28986dd3f353c))
+* **gateway:** expose verified library references ([#426](https://github.com/rezanmz/omnifin/issues/426)) ([f2b579e](https://github.com/rezanmz/omnifin/commit/f2b579ead31497940c9ed919879d352d8ff01cf3))
+* **web:** add guarded library removal ([#435](https://github.com/rezanmz/omnifin/issues/435)) ([8403ead](https://github.com/rezanmz/omnifin/commit/8403ead4499abe9e40240cf82cea7890be95db47))
+* **web:** expose Sonarr action in episode details ([#428](https://github.com/rezanmz/omnifin/issues/428)) ([bf54a5b](https://github.com/rezanmz/omnifin/commit/bf54a5bd95822c7a10f89bfd1f3d4ce1b1e2db52))
+* **web:** suggest episode continuations ([#434](https://github.com/rezanmz/omnifin/issues/434)) ([db60c45](https://github.com/rezanmz/omnifin/commit/db60c45bb57732e70e9d2d2f7cd7805f320bc249))
+* **web:** unify owned discovery title details ([#433](https://github.com/rezanmz/omnifin/issues/433)) ([715bf42](https://github.com/rezanmz/omnifin/commit/715bf42267780c75952924b3b64e36924b062e50))
+
+
+### Fixes
+
+* **ci:** classify safe Jellyfin startup diagnostics ([#432](https://github.com/rezanmz/omnifin/issues/432)) ([c1f1323](https://github.com/rezanmz/omnifin/commit/c1f132324b07d111f628947789447d8b3f8b0e72))
+* **security:** bind Jellyfin provisioning credentials ([#419](https://github.com/rezanmz/omnifin/issues/419)) ([feaf321](https://github.com/rezanmz/omnifin/commit/feaf3212b0ddda85531749eb7fd42a245a99b73e))
+
 ## [0.18.2](https://github.com/rezanmz/omnifin/compare/v0.18.1...v0.18.2) (2026-08-15)
 
 
