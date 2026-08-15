@@ -170,6 +170,25 @@ test("builds a stage-specific failure report without retaining failure causes", 
   );
 });
 
+test("retains only allowlisted container-start diagnostics", () => {
+  const report = jellyfinFailureReport({
+    error: new JellyfinFixtureFailure("container_start_failed", {
+      cause: Object.assign(new Error("private Docker output"), {
+        stderr: "mkdir /private/config: read-only file system",
+      }),
+    }),
+    image: LATEST_IMAGE,
+    version: "10.11.11",
+  });
+
+  assert.deepEqual(report.error, {
+    code: "container_start_failed",
+    diagnostic: "filesystem_read_only",
+    stage: "container_start",
+  });
+  assert.doesNotMatch(JSON.stringify(report), /private Docker output|private\/config/u);
+});
+
 test("preserves the primary fixture failure and normalizes untrusted diagnostics", () => {
   const primary = new JellyfinFixtureFailure("server_readiness_failed");
   const retained = preserveFixtureFailure(
@@ -283,7 +302,8 @@ test("fails closed with bounded evidence after transient start retry exhaustion"
   const privateFailure = () =>
     new JellyfinFixtureFailure("container_start_failed", {
       cause: Object.assign(new Error("private-container-name"), {
-        stderr: "failed programming external connectivity: resource temporarily unavailable",
+        stderr:
+          "failed programming external connectivity: resource temporarily unavailable; permission denied /private",
       }),
     });
   let attempts = 0;
@@ -315,9 +335,13 @@ test("fails closed with bounded evidence after transient start retry exhaustion"
   });
   assert.deepEqual(report.error, {
     code: "container_start_retry_exhausted",
+    diagnostic: "permission_denied",
     stage: "container_start",
   });
-  assert.doesNotMatch(JSON.stringify(report), /private-container-name|external connectivity/u);
+  assert.doesNotMatch(
+    JSON.stringify(report),
+    /private-container-name|external connectivity|permission denied|private/u,
+  );
 });
 
 test("preserves retry exhaustion when final partial-container cleanup fails", async () => {
