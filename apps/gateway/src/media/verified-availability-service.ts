@@ -11,6 +11,7 @@ import { X509Certificate } from "node:crypto";
 
 import type { AppConfig } from "../config.js";
 import type { DatabaseHandle } from "../db/client.js";
+import { MediaReferenceService } from "./media-reference-service.js";
 import { EnvelopeCipher } from "../security/crypto.js";
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
@@ -57,6 +58,7 @@ interface StoredConnectorSecrets {
 export type VerifiedOwnershipEvidence =
   | {
       connectorRevision: number;
+      itemId?: string;
       linkId: string;
       linkRevision: number;
       state: "not_owned" | "owned";
@@ -79,10 +81,14 @@ export type VerifiedOwnershipEvidence =
       userId: string | null;
       userRevision: null;
     };
-
 export interface VerifiedAvailabilityInput {
   kind: "movie" | "series";
   tmdbId: number;
+}
+
+export interface VerifiedLibraryReferenceInput extends VerifiedAvailabilityInput {
+  title: string;
+  year: number | null;
 }
 
 export interface VerifiedAvailabilityClient {
@@ -128,7 +134,9 @@ export function reconcileVerifiedAvailability(
   seerrAvailability: DiscoveryAvailability,
   evidence: VerifiedOwnershipEvidence,
 ): DiscoveryAvailability {
-  if (evidence.state === "owned") return "available";
+  if (evidence.state === "owned") {
+    return seerrAvailability === "partial" ? "partial" : "available";
+  }
   if (evidence.state === "not_owned") {
     return seerrAvailability === "available" ? "unknown" : seerrAvailability;
   }
@@ -183,6 +191,7 @@ export class VerifiedAvailabilityService {
   readonly #cipher: EnvelopeCipher;
   readonly #createClient: NonNullable<VerifiedAvailabilityDependencies["createClient"]>;
   readonly #database: DatabaseHandle;
+  readonly #references: MediaReferenceService;
 
   public constructor(
     database: DatabaseHandle,
@@ -192,6 +201,7 @@ export class VerifiedAvailabilityService {
     this.#database = database;
     this.#cipher = new EnvelopeCipher(config.encryptionKey);
     this.#createClient = dependencies.createClient ?? defaultClient;
+    this.#references = new MediaReferenceService(database, config);
   }
 
   public async verifyOwnership(
@@ -242,17 +252,75 @@ export class VerifiedAvailabilityService {
           userRevision: source.userRevision,
         };
       }
+      if (ownership.owned) {
+        if (typeof ownership.itemId !== "string" || !IDENTIFIER_PATTERN.test(ownership.itemId)) {
+          return unavailableEvidence(userId);
+        }
+        return {
+          connectorRevision: source.connectorRevision,
+          itemId: ownership.itemId,
+          linkId: source.linkId,
+          linkRevision: source.linkRevision,
+          state: "owned",
+          userId,
+          userRevision: source.userRevision,
+        };
+      }
+      if (ownership.itemId !== null) return unavailableEvidence(userId);
       return {
         connectorRevision: source.connectorRevision,
         linkId: source.linkId,
         linkRevision: source.linkRevision,
-        state: ownership.owned ? "owned" : "not_owned",
+        state: "not_owned",
         userId,
         userRevision: source.userRevision,
       };
     } catch (error) {
       if (isAbort(error)) throw error;
       return unavailableEvidence(userId);
+    }
+  }
+
+  public async resolveOwnedLibraryReference(
+    input: VerifiedLibraryReferenceInput,
+    principal: SessionPrincipal,
+    signal?: AbortSignal,
+  ): Promise<string | null> {
+    const evidence = await this.verifyOwnership(input, principal, signal);
+    if (evidence.state !== "owned") return null;
+    try {
+      const current = this.#source(evidence.linkId, evidence.userId);
+      if (
+        evidence.itemId === undefined ||
+        !this.#isCurrent(current) ||
+        current.connectorRevision !== evidence.connectorRevision ||
+        current.linkRevision !== evidence.linkRevision ||
+        current.userRevision !== evidence.userRevision
+      ) {
+        return null;
+      }
+      const [referenceId] = this.#references.createOrRefresh(
+        {
+          linkId: evidence.linkId,
+          linkRevision: evidence.linkRevision,
+          userId: evidence.userId,
+        },
+        [
+          {
+            artwork: { backdropItemId: null, posterItemId: null },
+            episodeNumber: null,
+            itemId: evidence.itemId,
+            kind: input.kind,
+            seasonNumber: null,
+            title: input.title,
+            year: input.year,
+          },
+        ],
+      );
+      return referenceId ?? null;
+    } catch (error) {
+      if (isAbort(error)) throw error;
+      return null;
     }
   }
 

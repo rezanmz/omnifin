@@ -445,6 +445,50 @@ describe("discovery contracts", () => {
     ).toBe(false);
   });
 
+  it("allows only opaque library references on owned discovery details", () => {
+    const detail = {
+      artwork: { backdropPath: null, posterPath: null },
+      availability: "available",
+      cast: [],
+      crew: [],
+      genres: [],
+      id: "movie:603",
+      intelligence: {
+        ratings: [],
+        ratingsState: "empty",
+        recommendations: [],
+        recommendationsState: "empty",
+        trailers: [],
+      },
+      kind: "movie",
+      libraryReferenceId: "media_1234567890123456789012",
+      mediaRecordState: "present",
+      originalTitle: null,
+      overview: null,
+      productionStatus: null,
+      runtimeMinutes: 136,
+      source: "seerr",
+      tagline: null,
+      title: "The Matrix",
+      tmdbId: 603,
+      voteAverage: null,
+      voteCount: null,
+      year: 1999,
+    };
+    expect(
+      discoveryMediaDetailResponseSchema.safeParse({
+        generatedAt: "2026-07-28T20:00:00.000Z",
+        item: detail,
+      }).success,
+    ).toBe(true);
+    expect(
+      discoveryMediaDetailResponseSchema.safeParse({
+        generatedAt: "2026-07-28T20:00:00.000Z",
+        item: { ...detail, libraryReferenceId: "jellyfin-private-item-id" },
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects raw upstream fields and unbounded detail collections", () => {
     const detail = {
       artwork: { backdropPath: null, posterPath: null },

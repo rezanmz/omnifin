@@ -553,6 +553,11 @@ const discoveryMediaDetailBase = {
   artwork: discoveryFeedArtworkSchema,
   availability: discoveryAvailabilitySchema,
   mediaRecordState: discoveryMediaRecordStateSchema,
+  libraryReferenceId: z
+    .string()
+    .regex(/^media_[A-Za-z0-9_-]{22}$/u)
+    .nullable()
+    .optional(),
   cast: z.array(discoveryCastCreditSchema).max(DISCOVERY_DETAIL_MAX_CAST),
   crew: z.array(discoveryCrewCreditSchema).max(DISCOVERY_DETAIL_MAX_CREW),
   genres: z.array(z.string().trim().min(1).max(100)).max(20),

@@ -60,6 +60,7 @@ import {
   unavailableOwnershipEvidence,
   VerifiedAvailabilityService,
   type VerifiedAvailabilityInput,
+  type VerifiedLibraryReferenceInput,
   type VerifiedOwnershipEvidence,
 } from "../media/verified-availability-service.js";
 
@@ -120,6 +121,11 @@ export interface DiscoverySearchDependencies {
     principal: SessionPrincipal,
     signal?: AbortSignal,
   ) => Promise<VerifiedOwnershipEvidence>;
+  resolveOwnedLibraryReference?: (
+    input: VerifiedLibraryReferenceInput,
+    principal: SessionPrincipal,
+    signal?: AbortSignal,
+  ) => Promise<string | null>;
 }
 
 export type DiscoverySearchErrorReason =
@@ -268,6 +274,9 @@ export class DiscoverySearchService {
   readonly #database: DatabaseHandle;
   readonly #references: DiscoveryArtworkReferenceService;
   readonly #verifyOwnership: NonNullable<DiscoverySearchDependencies["verifyOwnership"]>;
+  readonly #resolveOwnedLibraryReference: NonNullable<
+    DiscoverySearchDependencies["resolveOwnedLibraryReference"]
+  >;
 
   public constructor(
     database: DatabaseHandle,
@@ -279,11 +288,14 @@ export class DiscoverySearchService {
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createAdapter = dependencies.createAdapter ?? ((input) => new SeerrAdapter(input));
     this.#references = new DiscoveryArtworkReferenceService(database, config, this.#clock);
-    if (dependencies.verifyOwnership) this.#verifyOwnership = dependencies.verifyOwnership;
-    else {
-      const availability = new VerifiedAvailabilityService(database, config);
-      this.#verifyOwnership = availability.verifyOwnership.bind(availability);
-    }
+    const availability = new VerifiedAvailabilityService(database, config);
+    this.#verifyOwnership =
+      dependencies.verifyOwnership ?? availability.verifyOwnership.bind(availability);
+    this.#resolveOwnedLibraryReference =
+      dependencies.resolveOwnedLibraryReference ??
+      (dependencies.verifyOwnership
+        ? async () => null
+        : availability.resolveOwnedLibraryReference.bind(availability));
   }
 
   public async feed(
@@ -586,10 +598,28 @@ export class DiscoverySearchService {
     );
     const [itemAvailability, ...recommendationAvailability] = reconciledAvailability;
     if (!itemAvailability) throw new DiscoverySearchError("connector_integrity_failure");
+    let libraryReferenceId: string | null = null;
+    if (itemAvailability.availability === "available") {
+      try {
+        libraryReferenceId = await this.#resolveOwnedLibraryReference(
+          {
+            kind: response.item.kind,
+            title: response.item.title,
+            tmdbId: response.item.tmdbId,
+            year: response.item.year,
+          },
+          principal,
+          signal,
+        );
+      } catch (error) {
+        if (isAbort(error)) throw error;
+      }
+    }
     return discoveryMediaDetailResponseSchema.parse({
       ...response,
       item: {
         ...response.item,
+        ...(libraryReferenceId === null ? {} : { libraryReferenceId }),
         availability: itemAvailability.availability,
         intelligence: {
           ...response.item.intelligence,
