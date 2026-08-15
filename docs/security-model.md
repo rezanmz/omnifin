@@ -75,21 +75,40 @@ application boundary; operators must still patch and isolate the host.
 | Destructive replay            | Idempotency keys or current-state preconditions, authorization, audit, safe confirmation UX       |
 | Supply-chain compromise       | Locked dependencies, pinned actions, review gates, CodeQL, SBOM, provenance, signatures           |
 
-### Temporary dependency exception
+### Temporary dependency exceptions
+
+These entries record current v0.x triage; neither is a v1 release exception. A v1
+candidate may retain one only after binding it to that candidate's source SHA, image
+digest, and durable proof that its production image excludes the development dependency.
 
 `GHSA-jmr9-qjv8-65gv` affects the development-only `extract-zip@2.0.1` transitively
 used by the Lighthouse/Puppeteer browser downloader. No fixed upstream release exists as
 of 2026-08-14. The repository carries `patches/extract-zip@2.0.1.patch`, which rejects
 absolute and extraction-root-escaping symlink targets before creation.
 
-| Field        | Record                                                                                                                                                                                              |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Finding      | `GHSA-jmr9-qjv8-65gv` / CVE-2026-56876; high; `extract-zip@2.0.1`                                                                                                                                   |
-| Reachability | The package is absent from the production image and runs only in developer or GitHub Actions Lighthouse browser setup. Exploitation requires a malicious Chromium archive accepted by that tooling. |
-| Controls     | Lockfile patch, HTTPS package/download transport, CI secret and dependency policy.                                                                                                                  |
-| Owner        | `@rezanmz`                                                                                                                                                                                          |
-| Review date  | 2026-08-14                                                                                                                                                                                          |
-| Expiry       | 2026-09-14; remove the exception when an upstream fixed release is available, or remove the dependency.                                                                                             |
+| Field        | Record                                                                                                                                                                                                                                                                                                              |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Finding      | `GHSA-jmr9-qjv8-65gv` / CVE-2026-56876; high; `extract-zip@2.0.1`                                                                                                                                                                                                                                                   |
+| Reachability | The package is absent from the production image and runs only in developer or GitHub Actions Lighthouse browser setup. Exploitation requires a malicious Chromium archive accepted by that tooling.                                                                                                                 |
+| Controls     | Lockfile patch; `scripts/ci/extract-zip-patch.test.mjs`; the protected deployment excludes dev dependencies; required CI execution and scheduled Dependabot/pnpm-audit review detect regression or an upstream fix. This exception ends when a fixed upstream version is locked or this dependency path is removed. |
+| Owner        | `@rezanmz`                                                                                                                                                                                                                                                                                                          |
+| Review date  | 2026-08-14                                                                                                                                                                                                                                                                                                          |
+| Expiry       | 2026-09-14; remove the exception when an upstream fixed release is available, or remove the dependency.                                                                                                                                                                                                             |
+
+`GHSA-w3rx-r6r6-pgpr` and `GHSA-5p2g-fcmc-qvqq` affect the development-only
+`image-size@2.0.2` transitively used by the Storybook Next.js Vite integration. No fixed
+upstream release exists as of 2026-08-14. The repository carries
+`patches/image-size@2.0.2.patch`, which rejects zero-sized ICNS entries and zero-sized
+HEIF or JXL boxes before an offset can stop advancing.
+
+| Field        | Record                                                                                                                                                                                                                                                                                                             |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Finding      | `GHSA-w3rx-r6r6-pgpr` and `GHSA-5p2g-fcmc-qvqq`; high; `image-size@2.0.2`                                                                                                                                                                                                                                          |
+| Reachability | The package is absent from the production image and runs only during developer or GitHub Actions Storybook builds. Exploitation requires crafted ICNS, HEIF, or JXL input accepted by the build-time parser.                                                                                                       |
+| Controls     | Lockfile patch; `scripts/ci/image-size-patch.test.mjs`; the protected deployment excludes dev dependencies; required CI execution and scheduled Dependabot/pnpm-audit review detect regression or an upstream fix. This exception ends when a fixed upstream version is locked or this dependency path is removed. |
+| Owner        | `@rezanmz`                                                                                                                                                                                                                                                                                                         |
+| Review date  | 2026-08-14                                                                                                                                                                                                                                                                                                         |
+| Expiry       | 2026-09-14; remove the exception when an upstream fixed release is available, or remove the dependency.                                                                                                                                                                                                            |
 
 ## Current connector-administration controls
 
