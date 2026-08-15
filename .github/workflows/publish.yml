@@ -350,10 +350,12 @@ jobs:
     if: >-
       ${{
         always() &&
+        needs.release-coverage.result == 'success' &&
         needs.validate-release-metadata.result == 'success' &&
         needs.validate-source.result == 'success'
       }}
     needs:
+      - release-coverage
       - validate-release-metadata
       - validate-source
     runs-on: ubuntu-latest

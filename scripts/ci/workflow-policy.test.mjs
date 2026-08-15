@@ -74,6 +74,7 @@ test("protected v1 live evidence binds the built candidate before source promoti
   assert.equal(run.env.RELEASE_SHA, "${{ inputs.release_sha }}");
   assert.match(run.run, /--candidate-digest "\$CANDIDATE_DIGEST"/u);
   assert.match(run.run, /--source-sha "\$RELEASE_SHA"/u);
+  assert.ok(build.needs.includes("release-coverage"));
   assert.ok(build.needs.includes("validate-source"));
   assert.equal(build.needs.includes("source-gate"), false);
   assert.ok(sourceGate.needs.includes("validate-live-source"));
