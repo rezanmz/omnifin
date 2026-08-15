@@ -55,6 +55,7 @@ import {
 } from "../lib/media-library";
 import { titleProviderHref, titleProviderLabel } from "../lib/title-provider-reference";
 import { SavedTitleActions } from "./saved-title-actions";
+import { LibraryRemovalAction } from "./library-removal-action";
 
 const MediaDetailDrawer = dynamic(() =>
   import("./media-detail-drawer").then((module) => module.MediaDetailDrawer),
@@ -1992,6 +1993,9 @@ export function LibraryTitleDrawer({
                     ) : null}
                     {detail!.media.kind === "movie" ? (
                       <OriginalMediaDownloadAction client={client} media={detail!.media} />
+                    ) : null}
+                    {detail!.media.kind === "movie" ? (
+                      <LibraryRemovalAction client={client} media={detail!.media} />
                     ) : null}
                     <ConnectedServiceActions actions={currentConnectedActions} />
                   </div>
