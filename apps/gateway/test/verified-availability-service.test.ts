@@ -7,13 +7,16 @@ import type { DiscoveryAvailability } from "@omnifin/contracts/discovery";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AppConfig } from "../src/config.js";
-import type { DatabaseHandle } from "../src/db/client.js";
+
+import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
+import { connectorConfigs, serviceIdentityLinks, users } from "../src/db/schema.js";
 import {
   reconcileVerifiedAvailability,
   unavailableOwnershipEvidence,
   VerifiedAvailabilityService,
   type VerifiedOwnershipEvidence,
 } from "../src/media/verified-availability-service.js";
+import { MediaReferenceService } from "../src/media/media-reference-service.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const now = new Date("2026-08-08T12:00:00.000Z");
@@ -145,10 +148,80 @@ function serviceHarness(
   return { readExactOwnership, service };
 }
 
+function referenceHarness() {
+  const appConfig = config();
+  const database = openDatabase(":memory:");
+  database.migrate();
+  const cipher = new EnvelopeCipher(appConfig.encryptionKey);
+  database.db
+    .insert(users)
+    .values({
+      createdAt: now,
+      displayName: "Viewer",
+      id: "viewer-user",
+      role: "viewer",
+      roleSource: "manual",
+      status: "active",
+      updatedAt: now,
+    })
+    .run();
+  database.db
+    .insert(connectorConfigs)
+    .values({
+      baseUrl: "https://jellyfin.example.test/",
+      capabilitySnapshotJson: JSON.stringify({ schemaVersion: 1 }),
+      createdAt: now,
+      displayName: "Jellyfin",
+      enabled: true,
+      encryptedCredentials: cipher.encrypt(
+        JSON.stringify({ credentials: { kind: "none" }, schemaVersion: 1 }),
+        "connector_credentials:jellyfin:jellyfin-main",
+      ),
+      healthState: "healthy",
+      id: "jellyfin-main",
+      insecureHttpApproved: false,
+      tlsPolicy: "strict",
+      type: "jellyfin",
+      updatedAt: now,
+    })
+    .run();
+  database.db
+    .insert(serviceIdentityLinks)
+    .values({
+      connectorId: "jellyfin-main",
+      createdAt: now,
+      deviceId: "viewer-device",
+      encryptedAccessToken: cipher.encrypt(
+        "private-access-token",
+        "service_identity_access_token:jellyfin:viewer-link",
+      ),
+      externalDisplayName: "Viewer",
+      externalServerId: "server-1",
+      externalUserId: "jellyfin-user-1",
+      externalUsername: "viewer",
+      healthState: "linked",
+      id: "viewer-link",
+      lastVerifiedAt: now,
+      revision: 4,
+      service: "jellyfin",
+      tokenCreatedAt: now,
+      updatedAt: now,
+      userId: "viewer-user",
+    })
+    .run();
+  const service = new VerifiedAvailabilityService(database, appConfig, {
+    createClient: vi.fn(() => ({
+      readExactOwnership: async () => ({ itemId: "jellyfin-owned-item", owned: true }),
+    })),
+  });
+  return { appConfig, database, service };
+}
+
 describe("verified availability", () => {
   it.each([
     ["available", "owned", "available"],
     ["unavailable", "owned", "available"],
+    ["partial", "owned", "partial"],
     ["available", "not_owned", "unknown"],
     ["partial", "not_owned", "partial"],
     ["requested", "not_owned", "requested"],
@@ -198,5 +271,34 @@ describe("verified availability", () => {
     await expect(
       service.verifyOwnership({ kind: "movie", tmdbId: 550 }, principal()),
     ).resolves.toEqual(unavailableOwnershipEvidence("viewer-user"));
+  });
+  it("creates an opaque library reference only while exact ownership remains current", async () => {
+    const { database, service } = referenceHarness();
+    try {
+      const referenceId = await service.resolveOwnedLibraryReference(
+        { kind: "movie", title: "The Matrix", tmdbId: 603, year: 1999 },
+        principal(),
+      );
+      expect(referenceId).toMatch(/^media_[A-Za-z0-9_-]{22}$/u);
+
+      expect(
+        new MediaReferenceService(database, config()).resolve(
+          { linkId: "viewer-link", linkRevision: 4, userId: "viewer-user" },
+          referenceId!,
+        ),
+      ).toMatchObject({ itemId: "jellyfin-owned-item" });
+
+      database.sqlite
+        .prepare("update service_identity_links set revision = revision + 1 where id = ?")
+        .run("viewer-link");
+      expect(() =>
+        new MediaReferenceService(database, config()).resolve(
+          { linkId: "viewer-link", linkRevision: 5, userId: "viewer-user" },
+          referenceId!,
+        ),
+      ).toThrow("no longer available");
+    } finally {
+      database.close();
+    }
   });
 });

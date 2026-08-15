@@ -28,7 +28,10 @@ import {
 import type { DiscoverySearchError } from "../src/discovery/search-service.js";
 import { connectorConfigs, users } from "../src/db/schema.js";
 import { openDatabase, type DatabaseHandle } from "../src/db/client.js";
-import type { VerifiedOwnershipEvidence } from "../src/media/verified-availability-service.js";
+import type {
+  VerifiedLibraryReferenceInput,
+  VerifiedOwnershipEvidence,
+} from "../src/media/verified-availability-service.js";
 import { EnvelopeCipher } from "../src/security/crypto.js";
 
 const now = new Date("2026-07-27T06:00:00.000Z");
@@ -129,6 +132,7 @@ const normalizedDetailResponse: DiscoveryMediaDetailResponse = {
   item: {
     artwork: { backdropPath: null, posterPath: null },
     availability: "unknown",
+    libraryReferenceId: null,
     cast: [{ character: "Neo", name: "Keanu Reeves", personId: 6384, profilePath: null }],
     crew: [{ name: "Lana Wachowski", personId: 9340, role: "Director" }],
     genres: ["Action", "Science Fiction"],
@@ -224,6 +228,11 @@ function harness(
       principal: SessionPrincipal,
       signal?: AbortSignal,
     ) => Promise<VerifiedOwnershipEvidence>;
+    resolveOwnedLibraryReference?: (
+      input: VerifiedLibraryReferenceInput,
+      principal: SessionPrincipal,
+      signal?: AbortSignal,
+    ) => Promise<string | null>;
     withArtwork?: boolean;
     withBrowse?: boolean;
     withConnector?: boolean;
@@ -339,10 +348,14 @@ function harness(
         userRevision: now.getTime(),
       })),
   );
+  const resolveOwnedLibraryReference = vi.fn(
+    options.resolveOwnedLibraryReference ?? (async () => null),
+  );
   const service = new DiscoverySearchService(database, config, {
     clock: () => now,
     createAdapter,
     verifyOwnership,
+    resolveOwnedLibraryReference,
   });
   return {
     config,
@@ -357,6 +370,7 @@ function harness(
     search,
     service,
     verifyOwnership,
+    resolveOwnedLibraryReference,
   };
 }
 
@@ -926,16 +940,60 @@ describe("discovery search service", () => {
     }
   });
 
-  it("reconciles detail recommendations and person credits with exact ownership", async () => {
+  it("returns an opaque library reference only for an exactly owned title", async () => {
     const test = harness({
-      verifyOwnership: async (input) => ({
+      resolveOwnedLibraryReference: async () => "media_1234567890123456789012",
+      verifyOwnership: async () => ({
         connectorRevision: now.getTime(),
+        itemId: "jellyfin-owned-item",
         linkId: "viewer-link",
         linkRevision: 0,
-        state: input.tmdbId === 603 || input.tmdbId === 1_000 ? "owned" : "not_owned",
+        state: "owned",
         userId: "viewer-user",
         userRevision: now.getTime(),
       }),
+    });
+    try {
+      const response = await test.service.detail(
+        { kind: "movie", tmdbId: 603 },
+        { language: "en" },
+        { principal: principal() },
+      );
+      expect(response.item.libraryReferenceId).toBe("media_1234567890123456789012");
+      expect(test.resolveOwnedLibraryReference).toHaveBeenCalledWith(
+        { kind: "movie", title: "The Matrix", tmdbId: 603, year: 1999 },
+        principal(),
+        undefined,
+      );
+      expect(JSON.stringify(response)).not.toContain("jellyfin-owned-item");
+    } finally {
+      test.database.close();
+    }
+  });
+
+  it("reconciles detail recommendations and person credits with exact ownership", async () => {
+    const test = harness({
+      verifyOwnership: async (input) => {
+        if (input.tmdbId === 603 || input.tmdbId === 1_000) {
+          return {
+            connectorRevision: now.getTime(),
+            itemId: "jellyfin-owned-item",
+            linkId: "viewer-link",
+            linkRevision: 0,
+            state: "owned" as const,
+            userId: "viewer-user",
+            userRevision: now.getTime(),
+          };
+        }
+        return {
+          connectorRevision: now.getTime(),
+          linkId: "viewer-link",
+          linkRevision: 0,
+          state: "not_owned" as const,
+          userId: "viewer-user",
+          userRevision: now.getTime(),
+        };
+      },
     });
     test.detail.mockResolvedValueOnce({
       artwork: { backdropPath: null, castProfilePaths: [null], posterPath: null },
