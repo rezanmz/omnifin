@@ -3392,3 +3392,242 @@ export const operationalFailures = sqliteTable(
     ),
   ],
 );
+
+export const jellyfinInviteProvisioningOperations = sqliteTable(
+  "jellyfin_invite_provisioning_operations",
+  {
+    id: text("id").primaryKey(),
+    invitationId: text("invitation_id")
+      .notNull()
+      .references(() => invitations.id, { onDelete: "restrict" }),
+    connectorId: text("connector_id")
+      .notNull()
+      .references(() => connectorConfigs.id, { onDelete: "restrict" }),
+    connectorRevision: text("connector_revision").notNull(),
+    connectorInstanceGeneration: integer("connector_instance_generation").notNull(),
+    connectorConfigGeneration: integer("connector_config_generation").notNull(),
+    connectorInstanceIdentityHash: text("connector_instance_identity_hash"),
+    fingerprintHash: text("fingerprint_hash").notNull(),
+    templateIdentifier: text("template_identifier").notNull(),
+    state: text("state", {
+      enum: [
+        "reserved",
+        "creating",
+        "created",
+        "policy_pending",
+        "succeeded",
+        "failed",
+        "uncertain",
+        "reconcile_required",
+      ],
+    })
+      .notNull()
+      .default("reserved"),
+    leaseOwner: text("lease_owner"),
+    leaseExpiresAt: integer("lease_expires_at", { mode: "timestamp_ms" }),
+    createAttemptCount: integer("create_attempt_count").notNull().default(0),
+    creatingAt: integer("creating_at", { mode: "timestamp_ms" }),
+    provisionedUserId: text("provisioned_user_id"),
+    provisionedAt: integer("provisioned_at", { mode: "timestamp_ms" }),
+    policyPendingAt: integer("policy_pending_at", { mode: "timestamp_ms" }),
+    policyCompletedAt: integer("policy_completed_at", { mode: "timestamp_ms" }),
+    reconcileRequiredAt: integer("reconcile_required_at", { mode: "timestamp_ms" }),
+    uncertainAt: integer("uncertain_at", { mode: "timestamp_ms" }),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+    failureCode: text("failure_code"),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("jellyfin_invite_provisioning_operations_invitation_unique").on(table.invitationId),
+    index("jellyfin_invite_provisioning_operations_state_lease_idx").on(
+      table.state,
+      table.leaseExpiresAt,
+    ),
+    index("jellyfin_invite_provisioning_operations_connector_generation_idx").on(
+      table.connectorId,
+      table.connectorInstanceGeneration,
+      table.connectorConfigGeneration,
+    ),
+    check(
+      "jellyfin_invite_provisioning_operations_id_check",
+      sql`length(${table.id}) = 58
+        and substr(${table.id}, 1, 36) = 'jellyfin_invite_provision_operation_'
+        and substr(${table.id}, 37) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "jellyfin_invite_provisioning_operations_invitation_check",
+      sql`length(${table.invitationId}) between 8 and 128
+        and substr(${table.invitationId}, 1, 7) = 'invite_'
+        and substr(${table.invitationId}, 8) not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "jellyfin_invite_provisioning_operations_snapshot_check",
+      sql`length(${table.connectorId}) between 1 and 128
+        and length(${table.connectorRevision}) between 16 and 128
+        and ${table.connectorRevision} not glob '*[^A-Za-z0-9_-]*'
+        and typeof(${table.connectorInstanceGeneration}) = 'integer'
+        and ${table.connectorInstanceGeneration} between 0 and 9007199254740991
+        and typeof(${table.connectorConfigGeneration}) = 'integer'
+        and ${table.connectorConfigGeneration} between 0 and 9007199254740991
+        and (${table.connectorInstanceIdentityHash} is null
+          or (length(${table.connectorInstanceIdentityHash}) = 43
+            and ${table.connectorInstanceIdentityHash} not glob '*[^A-Za-z0-9_-]*'))`,
+    ),
+    check(
+      "jellyfin_invite_provisioning_operations_fingerprint_check",
+      sql`length(${table.fingerprintHash}) in (22, 43)
+        and ${table.fingerprintHash} not glob '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "jellyfin_invite_provisioning_operations_template_check",
+      sql`length(${table.templateIdentifier}) between 1 and 128
+        and ${table.templateIdentifier} not glob '*[^A-Za-z0-9._:-]*'`,
+    ),
+    check(
+      "jellyfin_invite_provisioning_operations_provisioned_user_check",
+      sql`${table.provisionedUserId} is null
+        or (length(${table.provisionedUserId}) between 1 and 256
+          and ${table.provisionedUserId} not glob '*[^A-Za-z0-9._:-]*')`,
+    ),
+    check(
+      "jellyfin_invite_provisioning_operations_state_check",
+      sql`${table.state} in ('reserved', 'creating', 'created', 'policy_pending',
+        'succeeded', 'failed', 'uncertain', 'reconcile_required')`,
+    ),
+    check(
+      "jellyfin_invite_provisioning_operations_attempt_count_check",
+      sql`typeof(${table.createAttemptCount}) = 'integer'
+        and ${table.createAttemptCount} between 0 and 2147483647`,
+    ),
+    check(
+      "jellyfin_invite_provisioning_operations_state_invariants_check",
+      sql`(
+          ${table.state} = 'reserved'
+          and length(${table.leaseOwner}) between 1 and 128
+          and ${table.leaseExpiresAt} is not null
+          and ${table.createAttemptCount} = 0
+          and ${table.creatingAt} is null
+          and ${table.provisionedUserId} is null
+          and ${table.provisionedAt} is null
+          and ${table.policyPendingAt} is null
+          and ${table.policyCompletedAt} is null
+          and ${table.reconcileRequiredAt} is null
+          and ${table.uncertainAt} is null
+          and ${table.completedAt} is null
+          and ${table.failureCode} is null
+        ) or (
+          ${table.state} = 'creating'
+          and ${table.leaseOwner} is null
+          and ${table.leaseExpiresAt} is null
+          and ${table.createAttemptCount} between 1 and 2147483647
+          and ${table.creatingAt} is not null
+          and ${table.provisionedUserId} is null
+          and ${table.provisionedAt} is null
+          and ${table.policyPendingAt} is null
+          and ${table.policyCompletedAt} is null
+          and ${table.reconcileRequiredAt} is null
+          and ${table.uncertainAt} is null
+          and ${table.completedAt} is null
+          and ${table.failureCode} is null
+        ) or (
+          ${table.state} = 'created'
+          and ${table.leaseOwner} is null
+          and ${table.leaseExpiresAt} is null
+          and ${table.createAttemptCount} between 1 and 2147483647
+          and ${table.creatingAt} is not null
+          and ${table.provisionedUserId} is not null
+          and ${table.provisionedAt} is not null
+          and ${table.policyPendingAt} is null
+          and ${table.policyCompletedAt} is null
+          and ${table.reconcileRequiredAt} is null
+          and ${table.uncertainAt} is null
+          and ${table.completedAt} is null
+          and ${table.failureCode} is null
+        ) or (
+          ${table.state} = 'policy_pending'
+          and ${table.leaseOwner} is null
+          and ${table.leaseExpiresAt} is null
+          and ${table.createAttemptCount} between 1 and 2147483647
+          and ${table.creatingAt} is not null
+          and ${table.provisionedUserId} is not null
+          and ${table.provisionedAt} is not null
+          and ${table.policyPendingAt} is not null
+          and ${table.policyCompletedAt} is null
+          and ${table.reconcileRequiredAt} is null
+          and ${table.uncertainAt} is null
+          and ${table.completedAt} is null
+          and ${table.failureCode} is null
+        ) or (
+          ${table.state} = 'succeeded'
+          and ${table.leaseOwner} is null
+          and ${table.leaseExpiresAt} is null
+          and ${table.createAttemptCount} between 1 and 2147483647
+          and ${table.creatingAt} is not null
+          and ${table.provisionedUserId} is not null
+          and ${table.provisionedAt} is not null
+          and ${table.policyPendingAt} is not null
+          and ${table.policyCompletedAt} is not null
+          and ${table.reconcileRequiredAt} is null
+          and ${table.uncertainAt} is null
+          and ${table.completedAt} is not null
+          and ${table.failureCode} is null
+        ) or (
+          ${table.state} = 'failed'
+          and ${table.leaseOwner} is null
+          and ${table.leaseExpiresAt} is null
+          and ${table.createAttemptCount} = 0
+          and ${table.creatingAt} is null
+          and ${table.provisionedUserId} is null
+          and ${table.provisionedAt} is null
+          and ${table.policyPendingAt} is null
+          and ${table.policyCompletedAt} is null
+          and ${table.reconcileRequiredAt} is null
+          and ${table.uncertainAt} is null
+          and ${table.completedAt} is not null
+          and length(${table.failureCode}) between 1 and 64
+        ) or (
+          ${table.state} = 'reconcile_required'
+          and ${table.leaseOwner} is null
+          and ${table.leaseExpiresAt} is null
+          and ${table.createAttemptCount} between 1 and 2147483647
+          and ${table.creatingAt} is not null
+          and ${table.reconcileRequiredAt} is not null
+          and ${table.uncertainAt} is null
+          and ${table.completedAt} is null
+          and length(${table.failureCode}) between 1 and 64
+        ) or (
+          ${table.state} = 'uncertain'
+          and ${table.leaseOwner} is null
+          and ${table.leaseExpiresAt} is null
+          and ${table.createAttemptCount} between 1 and 2147483647
+          and ${table.creatingAt} is not null
+          and ${table.reconcileRequiredAt} is not null
+          and ${table.uncertainAt} is not null
+          and ${table.completedAt} is not null
+          and length(${table.failureCode}) between 1 and 64
+        )`,
+    ),
+    check(
+      "jellyfin_invite_provisioning_operations_timestamp_order_check",
+      sql`${table.createdAt} >= 0
+        and ${table.createdAt} <= ${table.updatedAt}
+        and (${table.leaseExpiresAt} is null or ${table.leaseExpiresAt} >= ${table.createdAt})
+        and (${table.creatingAt} is null or ${table.creatingAt} >= ${table.createdAt})
+        and (${table.provisionedAt} is null or ${table.provisionedAt} >= ${table.creatingAt})
+        and ((${table.provisionedUserId} is null and ${table.provisionedAt} is null)
+          or (${table.provisionedUserId} is not null and ${table.provisionedAt} is not null))
+        and (${table.policyPendingAt} is null
+          or (${table.provisionedAt} is not null
+            and ${table.policyPendingAt} >= ${table.provisionedAt}))
+        and (${table.policyCompletedAt} is null
+          or (${table.policyPendingAt} is not null
+            and ${table.policyCompletedAt} >= ${table.policyPendingAt}))
+        and (${table.reconcileRequiredAt} is null
+          or ${table.reconcileRequiredAt} >= ${table.creatingAt})
+        and (${table.uncertainAt} is null
+          or (${table.uncertainAt} >= ${table.reconcileRequiredAt}
+            and ${table.uncertainAt} >= ${table.creatingAt}))
+        and (${table.completedAt} is null or ${table.completedAt} >= ${table.createdAt})`,
+    ),
+  ],
+);
