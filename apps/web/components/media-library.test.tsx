@@ -210,6 +210,10 @@ describe("MediaLibrary", () => {
 
   it("opens title details first, then starts private playback only from an explicit action", async () => {
     const user = userEvent.setup();
+    const client = {
+      ...mediaLibraryDemoClient,
+      loadTitle: vi.fn(mediaLibraryDemoClient.loadTitle),
+    };
     const playbackClient = {
       prepare: vi.fn(async () => ({
         canManageLibrary: false,
@@ -234,6 +238,7 @@ describe("MediaLibrary", () => {
       libraryScreen(
         <MediaLibrary
           initialOutcome={readyMediaLibraryOutcome}
+          client={client}
           live={false}
           playbackClient={playbackClient}
         />,
@@ -245,6 +250,7 @@ describe("MediaLibrary", () => {
     });
     await user.click(trigger);
     expect(await screen.findByRole("dialog", { name: "Ember Coast details" })).toBeVisible();
+    await waitFor(() => expect(client.loadTitle).toHaveBeenCalledTimes(1));
     expect(screen.getByText("The horizon remembers.")).toBeVisible();
     expect(screen.getByText("Mara Voss")).toBeVisible();
     await user.click(screen.getByText("Media information"));
@@ -295,6 +301,7 @@ describe("MediaLibrary", () => {
 
     await user.click(screen.getByRole("button", { name: "Resume movie" }));
     expect(await screen.findByRole("dialog", { name: "Ember Coast" })).toBeVisible();
+    expect(client.loadTitle).toHaveBeenCalledTimes(1);
     await waitFor(() =>
       expect(playbackClient.prepare).toHaveBeenCalledWith(
         `media_${"a".repeat(22)}`,

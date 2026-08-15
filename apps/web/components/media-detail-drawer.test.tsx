@@ -15,8 +15,9 @@ import {
   type DiscoveryPersonCreditsClient,
   type DiscoveryPersonDetailClient,
 } from "../lib/media-details";
+import { mediaLibraryDemoClient, mediaLibraryDemoItems } from "../lib/media-library-demo";
+import { DiscoveryTitleDrawer } from "./discovery-title-drawer";
 import { MediaDetailDrawer } from "./media-detail-drawer";
-
 const movie: DiscoveryMovieResult = {
   availability: "unavailable",
   mediaRecordState: "absent",
@@ -267,6 +268,41 @@ describe("media detail drawer", () => {
     expect(screen.getByRole("button", { name: /The Matrix Reloaded/iu })).toBeVisible();
     expect(screen.getByRole("button", { name: "Watch Later" })).toBeVisible();
     expect(screen.queryByText(/raw-|jellyfin|serviceUrl/iu)).not.toBeInTheDocument();
+    expect(load).toHaveBeenCalledWith(
+      { kind: "movie", tmdbId: 603 },
+      { language: expect.stringMatching(/^[a-z]{2}(?:-[A-Z]{2})?$/u) },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("hands an exact owned discovery reference to the canonical library drawer", async () => {
+    const owned = mediaLibraryDemoItems.find(({ media }) => media.kind === "movie")!;
+    const referenceId = owned.media.id;
+    const detailResponse: DiscoveryMediaDetailResponse = {
+      ...movieResponse,
+      item: {
+        ...movieResponse.item,
+        availability: "available",
+        libraryReferenceId: referenceId,
+      },
+    };
+    const load = vi.fn<DiscoveryMediaDetailClient["load"]>(async () => detailResponse);
+    const loadTitle = vi.fn(mediaLibraryDemoClient.loadTitle);
+
+    render(
+      <DiscoveryTitleDrawer
+        client={client(load)}
+        libraryClient={{ ...mediaLibraryDemoClient, loadTitle }}
+        media={{ ...movie, availability: "available", mediaRecordState: "present" }}
+        onOpenChange={vi.fn()}
+        open
+      />,
+    );
+
+    await waitFor(() =>
+      expect(loadTitle).toHaveBeenCalledWith(referenceId, expect.any(AbortSignal)),
+    );
+    expect(await screen.findByRole("heading", { name: owned.media.title })).toBeVisible();
     expect(load).toHaveBeenCalledWith(
       { kind: "movie", tmdbId: 603 },
       { language: expect.stringMatching(/^[a-z]{2}(?:-[A-Z]{2})?$/u) },

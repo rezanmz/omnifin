@@ -57,8 +57,8 @@ const RequestComposer = dynamic(
   () => import("./request-composer").then((module) => module.RequestComposer),
   { ssr: false },
 );
-const MediaDetailDrawer = dynamic(
-  () => import("./media-detail-drawer").then((module) => module.MediaDetailDrawer),
+const DiscoveryTitleDrawer = dynamic(
+  () => import("./discovery-title-drawer").then((module) => module.DiscoveryTitleDrawer),
   { ssr: false },
 );
 
@@ -1004,7 +1004,7 @@ export function GlobalSearch({
           )}
         </section>
       ) : null}
-      <MediaDetailDrawer
+      <DiscoveryTitleDrawer
         {...(detailClient ? { client: detailClient } : {})}
         {...(personClient ? { personClient } : {})}
         key={detailMedia?.id ?? (detailPerson ? `person:${detailPerson.tmdbId}` : "media-detail")}

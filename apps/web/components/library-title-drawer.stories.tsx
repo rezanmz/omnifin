@@ -27,10 +27,14 @@ const connectedSeriesClient = {
 const meta = {
   args: {
     client: connectedSeriesClient,
-    item: series,
     onClose: fn(),
     onPlay: fn(),
     open: true,
+    selection: {
+      kind: series.media.kind,
+      referenceId: series.media.id,
+      title: series.media.title,
+    },
   },
   component: LibraryTitleDrawer,
   parameters: { layout: "fullscreen" },
@@ -75,7 +79,13 @@ export const EpisodeDetailsOpen: Story = {
 };
 
 export const OwnedMoviePersonProfile: Story = {
-  args: { item: movie },
+  args: {
+    selection: {
+      kind: movie.media.kind,
+      referenceId: movie.media.id,
+      title: movie.media.title,
+    },
+  },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement.ownerDocument.body);
     const libraryDialog = await canvas.findByRole("dialog", { name: "Ember Coast details" });
@@ -113,7 +123,11 @@ export const AdminOriginalFile: Story = {
         };
       },
     },
-    item: movie,
+    selection: {
+      kind: movie.media.kind,
+      referenceId: movie.media.id,
+      title: movie.media.title,
+    },
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement.ownerDocument.body);

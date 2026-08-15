@@ -12,10 +12,14 @@ const movie = mediaLibraryDemoItems.find((item) => item.media.kind === "movie")!
 const meta = {
   args: {
     client: mediaLibraryDemoClient,
-    item: series,
     onClose: fn(),
     onPlay: fn(),
     open: true,
+    selection: {
+      kind: series.media.kind,
+      referenceId: series.media.id,
+      title: series.media.title,
+    },
   },
   component: LibraryTitleDrawer,
   decorators: [
@@ -55,7 +59,13 @@ export const SeriesHierarchy: Story = {
 };
 
 export const MovieDetails: Story = {
-  args: { item: movie },
+  args: {
+    selection: {
+      kind: movie.media.kind,
+      referenceId: movie.media.id,
+      title: movie.media.title,
+    },
+  },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement.ownerDocument.body);
     await waitFor(() => expect(canvas.getByRole("heading", { name: "Ember Coast" })).toBeVisible());

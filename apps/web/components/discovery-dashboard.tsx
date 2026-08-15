@@ -35,8 +35,8 @@ import { MediaRail } from "./media-rail";
 import type { DetailMedia } from "./media-detail-drawer";
 import type { RequestableMedia } from "./request-composer";
 
-const MediaDetailDrawer = dynamic(
-  () => import("./media-detail-drawer").then((module) => module.MediaDetailDrawer),
+const DiscoveryTitleDrawer = dynamic(
+  () => import("./discovery-title-drawer").then((module) => module.DiscoveryTitleDrawer),
   { ssr: false },
 );
 const RequestComposer = dynamic(
@@ -517,7 +517,7 @@ function DiscoveryDashboardContent({
         </p>
       ) : null}
       {detailMedia ? (
-        <MediaDetailDrawer
+        <DiscoveryTitleDrawer
           {...(detailClient ? { client: detailClient } : {})}
           key={detailMedia.id}
           media={detailMedia}

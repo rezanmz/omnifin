@@ -651,7 +651,6 @@ function MediaLibraryContent({
       {selected ? (
         <LibraryTitleDrawer
           client={client}
-          item={selected}
           onClose={() => {
             const selectedId = selected.media.id;
             setSelected(null);
@@ -663,6 +662,11 @@ function MediaLibraryContent({
           }}
           onPlay={(selection) => setPlaying(selection)}
           open
+          selection={{
+            kind: selected.media.kind,
+            referenceId: selected.media.id,
+            title: selected.media.title,
+          }}
         />
       ) : null}
 
