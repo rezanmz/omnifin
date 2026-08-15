@@ -104,6 +104,15 @@ upstream environment has been provisioned. Release profiles that require live ev
 protected configuration. All live entries intentionally remain pending; no live support baseline
 is claimed.
 
+A strict live probe report is operational diagnostics, not Tier 2 evidence by
+itself. Stable-v1 assembly accepts `live.json` only when it is a versioned
+semantic report bound to the exact source SHA. It must name every upstream,
+their sanitized versions and verified capabilities, an accountable owner,
+stable architecture, bounded verification/expiry dates, every Tier 2 outcome,
+and safe limitations. The current read-only probes do not emit that report and
+therefore cannot make a v1 matrix ready; the isolated live harness must first
+exercise and record mutations, failure/recovery, and teardown.
+
 `.github/workflows/compatibility.yml` is a separate secret-free latest-stable canary. It resolves
 only reviewed upstream repositories and stable tag formats, selects the newest stable version tag,
 binds that exact tag to an immutable digest before any pull, and reuses these harnesses in disposable

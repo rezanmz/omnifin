@@ -9,6 +9,7 @@ import {
   validateV1EvidenceIndex,
 } from "./release-evidence.mjs";
 import { validateHomeLabEvidence } from "./home-lab-evidence.mjs";
+import { validateLiveEvidence } from "./live-evidence.mjs";
 
 const REQUIRED_OPTIONS = Object.freeze([
   "--candidate-digest",
@@ -80,28 +81,37 @@ export async function assembleV1Evidence(options) {
   const outputDirectory = resolve(options.outputDirectory);
 
   const inputs = {};
+  let liveEvidence;
   let homeLabEvidence;
   for (const [name, path] of Object.entries(inputFiles)) {
     const data = await readFile(resolve(path));
     if (data.length === 0) throw new Error(`Evidence input ${name} is empty.`);
-    if (name === "home-lab.json") {
+    if (name === "live.json" || name === "home-lab.json") {
       let decoded;
       try {
         decoded = new TextDecoder("utf-8", { fatal: true }).decode(data);
       } catch {
-        throw new Error("Home-lab evidence must be valid UTF-8.");
+        throw new Error(
+          `${name === "live.json" ? "Live" : "Home-lab"} evidence must be valid UTF-8.`,
+        );
       }
       let report;
       try {
         report = JSON.parse(decoded);
       } catch {
-        throw new Error("Home-lab evidence must be valid JSON.");
+        throw new Error(
+          `${name === "live.json" ? "Live" : "Home-lab"} evidence must be valid JSON.`,
+        );
       }
-      homeLabEvidence = validateHomeLabEvidence(report, {
-        candidateDigest,
-        sourceSha,
-        today: verifiedAt,
-      });
+      if (name === "live.json") {
+        liveEvidence = validateLiveEvidence(report, { sourceSha, today: verifiedAt });
+      } else {
+        homeLabEvidence = validateHomeLabEvidence(report, {
+          candidateDigest,
+          sourceSha,
+          today: verifiedAt,
+        });
+      }
     }
     inputs[name] = checksum(data);
   }
@@ -123,13 +133,15 @@ export async function assembleV1Evidence(options) {
       flag: "wx",
       mode: 0o644,
     });
+    const tierTwo = tier === 2;
     const tierFour = tier === 4;
     records.push({
-      architectures:
-        tier === 3
-          ? [...STABLE_ARCHITECTURES]
-          : tierFour
-            ? [homeLabEvidence.architecture]
+      architectures: tierTwo
+        ? [liveEvidence.architecture]
+        : tierFour
+          ? [homeLabEvidence.architecture]
+          : tier === 3
+            ? [...STABLE_ARCHITECTURES]
             : ["linux/amd64"],
       artifact: {
         sha256: checksum(artifactData),
@@ -138,14 +150,35 @@ export async function assembleV1Evidence(options) {
       candidateDigest,
       claim: V1_TIER_REQUIREMENTS[tier].claim,
       coverage: [...V1_TIER_REQUIREMENTS[tier].coverage],
-      expiresAt: tierFour ? homeLabEvidence.expiresAt : verifiedAt,
-      limitations: "Sanitized diagnostics exclude secrets and host paths.",
-      owner: tierFour ? homeLabEvidence.owner : "release-maintainer",
+      expiresAt: tierTwo
+        ? liveEvidence.expiresAt
+        : tierFour
+          ? homeLabEvidence.expiresAt
+          : verifiedAt,
+      limitations: tierTwo
+        ? liveEvidence.limitations
+        : "Sanitized diagnostics exclude secrets and host paths.",
+      owner: tierTwo ? liveEvidence.owner : tierFour ? homeLabEvidence.owner : "release-maintainer",
       result: "passed",
       sourceSha,
       tier,
-      upstream: tierFour ? homeLabEvidence.upstream : { fixtureRevision: sourceSha },
-      verifiedAt: tierFour ? homeLabEvidence.verifiedAt : verifiedAt,
+      upstream: tierTwo
+        ? {
+            versions: Object.fromEntries(
+              Object.entries(liveEvidence.services).map(([service, evidence]) => [
+                service,
+                evidence.version,
+              ]),
+            ),
+          }
+        : tierFour
+          ? homeLabEvidence.upstream
+          : { fixtureRevision: sourceSha },
+      verifiedAt: tierTwo
+        ? liveEvidence.verifiedAt
+        : tierFour
+          ? homeLabEvidence.verifiedAt
+          : verifiedAt,
     });
   }
   const index = validateV1EvidenceIndex(
