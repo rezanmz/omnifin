@@ -70,12 +70,18 @@ export interface PlayableLibrarySelection {
   startPositionSeconds?: number;
 }
 
+export interface LibraryTitleSelection {
+  kind: LibraryBrowseItem["media"]["kind"];
+  referenceId: string;
+  title: string;
+}
+
 export interface LibraryTitleDrawerProperties {
   client: MediaLibraryClient;
-  item: LibraryBrowseItem | null;
   onClose: () => void;
   onPlay: (selection: PlayableLibrarySelection) => void;
   open: boolean;
+  selection: LibraryTitleSelection | null;
 }
 
 type TitleState =
@@ -1448,10 +1454,10 @@ function EpisodeList({
 
 export function LibraryTitleDrawer({
   client,
-  item,
   onClose,
   onPlay,
   open,
+  selection,
 }: LibraryTitleDrawerProperties) {
   const dialogReference = useRef<HTMLDialogElement>(null);
   const [attempt, setAttempt] = useState(0);
@@ -1474,7 +1480,8 @@ export function LibraryTitleDrawer({
   const [seasonNumber, setSeasonNumber] = useState<number | null>(null);
   const [selectedSourceReferenceId, setSelectedSourceReferenceId] = useState<string | null>(null);
   const [titleState, setTitleState] = useState<TitleState | null>(null);
-  const referenceId = item?.media.id ?? "none";
+  const referenceId = selection?.referenceId ?? "none";
+  const selectionKind = selection?.kind ?? null;
   const requestKey = `${referenceId}:${attempt}`;
   const extrasRequestKey = `${referenceId}:${extrasAttempt}`;
 
@@ -1542,11 +1549,11 @@ export function LibraryTitleDrawer({
   }, [open]);
 
   useEffect(() => {
-    if (!open || !item) return;
+    if (!open || referenceId === "none") return;
     const controller = new AbortController();
     let current = true;
     const request = client.loadTitle
-      ? client.loadTitle(item.media.id, controller.signal)
+      ? client.loadTitle(referenceId, controller.signal)
       : Promise.reject(
           new MediaLibraryClientError(
             "unavailable",
@@ -1570,12 +1577,12 @@ export function LibraryTitleDrawer({
       current = false;
       controller.abort();
     };
-  }, [client, item, open, requestKey]);
+  }, [client, open, referenceId, requestKey]);
 
   const visibleTitleState = useMemo(() => {
-    if (!open || !item || titleState?.requestKey !== requestKey) return null;
+    if (!open || referenceId === "none" || titleState?.requestKey !== requestKey) return null;
     return titleState;
-  }, [item, open, requestKey, titleState]);
+  }, [open, referenceId, requestKey, titleState]);
   const currentConnectedActions =
     connectedActions?.requestKey === requestKey ? connectedActions.actions : [];
   const detail = visibleTitleState?.kind === "ready" ? visibleTitleState.detail : null;
@@ -1585,13 +1592,18 @@ export function LibraryTitleDrawer({
     ) ?? detail?.movie?.mediaSources[0];
 
   useEffect(() => {
-    if (!open || !item || detail?.media.id !== item.media.id || !client.loadConnectedActions) {
+    if (
+      !open ||
+      referenceId === "none" ||
+      detail?.media.id !== referenceId ||
+      !client.loadConnectedActions
+    ) {
       return;
     }
     const controller = new AbortController();
     let current = true;
     void client
-      .loadConnectedActions(item.media.id, controller.signal)
+      .loadConnectedActions(referenceId, controller.signal)
       .then((response) => {
         if (current) {
           setConnectedActions({
@@ -1608,14 +1620,14 @@ export function LibraryTitleDrawer({
       current = false;
       controller.abort();
     };
-  }, [client, detail, item, open, requestKey]);
+  }, [client, detail, open, referenceId, requestKey]);
 
   useEffect(() => {
-    if (!open || !item || detail?.media.id !== item.media.id) return;
+    if (!open || referenceId === "none" || detail?.media.id !== referenceId) return;
     const controller = new AbortController();
     let current = true;
     const request = client.loadExtras
-      ? client.loadExtras(item.media.id, { limit: 12 }, controller.signal)
+      ? client.loadExtras(referenceId, { limit: 12 }, controller.signal)
       : Promise.reject(
           new MediaLibraryClientError(
             "unavailable",
@@ -1659,7 +1671,7 @@ export function LibraryTitleDrawer({
       current = false;
       controller.abort();
     };
-  }, [client, detail, extrasRequestKey, item, open]);
+  }, [client, detail, extrasRequestKey, open, referenceId]);
 
   const recommendedSeason =
     detail?.seasons.find((season) => season.playedEpisodeCount < season.episodeCount) ??
@@ -1669,18 +1681,19 @@ export function LibraryTitleDrawer({
       ? seasonNumber
       : (recommendedSeason?.seasonNumber ?? null);
   const episodeRequestKey = `${referenceId}:${activeSeasonNumber ?? "none"}:${episodeAttempt}`;
-
   useEffect(() => {
-    if (!open || !item || item.media.kind !== "series" || activeSeasonNumber === null) return;
+    if (
+      !open ||
+      referenceId === "none" ||
+      selectionKind !== "series" ||
+      activeSeasonNumber === null
+    ) {
+      return;
+    }
     const controller = new AbortController();
     let current = true;
     const request = client.loadSeasonEpisodes
-      ? client.loadSeasonEpisodes(
-          item.media.id,
-          activeSeasonNumber,
-          { limit: 30 },
-          controller.signal,
-        )
+      ? client.loadSeasonEpisodes(referenceId, activeSeasonNumber, { limit: 30 }, controller.signal)
       : Promise.reject(
           new MediaLibraryClientError(
             "unavailable",
@@ -1712,12 +1725,12 @@ export function LibraryTitleDrawer({
       current = false;
       controller.abort();
     };
-  }, [activeSeasonNumber, client, episodeRequestKey, item, open]);
+  }, [activeSeasonNumber, client, episodeRequestKey, open, referenceId, selectionKind]);
 
   async function loadMoreEpisodes() {
     const nextCursor = episodeState?.kind === "ready" ? episodeState.nextCursor : null;
     if (
-      !item ||
+      referenceId === "none" ||
       activeSeasonNumber === null ||
       !client.loadSeasonEpisodes ||
       episodeState?.kind !== "ready" ||
@@ -1730,7 +1743,7 @@ export function LibraryTitleDrawer({
     setEpisodeState({ ...currentState, loadingMore: true });
     try {
       const response: LibrarySeasonEpisodesResponse = await client.loadSeasonEpisodes(
-        item.media.id,
+        referenceId,
         activeSeasonNumber,
         {
           cursor: nextCursor,
@@ -1759,7 +1772,7 @@ export function LibraryTitleDrawer({
   async function loadMoreExtras() {
     const nextCursor = extrasState?.kind === "ready" ? extrasState.nextCursor : null;
     if (
-      !item ||
+      referenceId === "none" ||
       !client.loadExtras ||
       extrasState?.kind !== "ready" ||
       !nextCursor ||
@@ -1770,7 +1783,7 @@ export function LibraryTitleDrawer({
     const currentState = extrasState;
     setExtrasState({ ...currentState, loadingMore: true });
     try {
-      const response: LibraryExtrasResponse = await client.loadExtras(item.media.id, {
+      const response: LibraryExtrasResponse = await client.loadExtras(referenceId, {
         cursor: nextCursor,
         limit: 12,
       });
@@ -1835,16 +1848,14 @@ export function LibraryTitleDrawer({
     });
   }
 
-  if (!item) return null;
-  const episodePanelId = `library-title-${item.media.id}-episodes`;
+  if (!selection) return null;
+  const episodePanelId = `library-title-${selection.referenceId}-episodes`;
   const activeSeasonTabId =
     activeSeasonNumber === null
       ? undefined
-      : `library-title-${item.media.id}-season-${activeSeasonNumber}`;
+      : `library-title-${selection.referenceId}-season-${activeSeasonNumber}`;
   const artworkPath = sameOriginMediaPath(
-    detail?.media.artwork.backdropPath ??
-      item.media.artwork.backdropPath ??
-      item.media.artwork.posterPath,
+    detail?.media.artwork.backdropPath ?? detail?.media.artwork.posterPath ?? null,
   );
   const visibleEpisodeState = episodeState?.requestKey === episodeRequestKey ? episodeState : null;
   const visibleExtrasState = extrasState?.requestKey === extrasRequestKey ? extrasState : null;
@@ -1852,7 +1863,7 @@ export function LibraryTitleDrawer({
   return (
     <>
       <dialog
-        aria-label={`${item.media.title} details`}
+        aria-label={`${selection.title} details`}
         className="media-detail library-title"
         onCancel={(event) => {
           event.preventDefault();
@@ -1872,7 +1883,7 @@ export function LibraryTitleDrawer({
               <div>
                 <span>Library title</span>
                 <small>
-                  {item.media.kind === "series" ? "Series and seasons" : "Movie details"}
+                  {selection.kind === "series" ? "Series and seasons" : "Movie details"}
                 </small>
               </div>
             </div>
@@ -1891,7 +1902,7 @@ export function LibraryTitleDrawer({
           </p>
           <div className="media-detail__scroll">
             {!visibleTitleState ? (
-              <TitleSkeleton title={item.media.title} />
+              <TitleSkeleton title={selection.title} />
             ) : visibleTitleState.kind === "error" ? (
               <ErrorState
                 message={visibleTitleState.message}
@@ -2050,7 +2061,7 @@ export function LibraryTitleDrawer({
                               data-selected={
                                 activeSeasonNumber === season.seasonNumber || undefined
                               }
-                              id={`library-title-${item.media.id}-season-${season.seasonNumber}`}
+                              id={`library-title-${selection.referenceId}-season-${season.seasonNumber}`}
                               key={season.seasonNumber}
                               onClick={() => {
                                 setSeasonNumber(season.seasonNumber);
@@ -2139,7 +2150,7 @@ export function LibraryTitleDrawer({
         onOpenChange={(nextOpen) => {
           if (!nextOpen) {
             setPersonProfile(null);
-            setPersonAnnouncement(`Returned to ${item.media.title} details.`);
+            setPersonAnnouncement(`Returned to ${selection.title} details.`);
           }
         }}
         open={personProfile !== null}

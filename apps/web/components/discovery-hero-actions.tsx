@@ -8,8 +8,8 @@ import { useRef, useState } from "react";
 import { discoveryItemIsRequestable, discoveryItemMedia } from "../lib/discovery-presentation";
 import { DirectionalNavigationGroup } from "./directional-navigation-group";
 
-const MediaDetailDrawer = dynamic(
-  () => import("./media-detail-drawer").then((module) => module.MediaDetailDrawer),
+const DiscoveryTitleDrawer = dynamic(
+  () => import("./discovery-title-drawer").then((module) => module.DiscoveryTitleDrawer),
   { ssr: false },
 );
 const RequestComposer = dynamic(
@@ -67,7 +67,7 @@ export function DiscoveryHeroActions({ item }: { item: DiscoveryFeedItem }) {
         ) : null}
       </DirectionalNavigationGroup>
       {detailOpen ? (
-        <MediaDetailDrawer
+        <DiscoveryTitleDrawer
           media={media}
           onOpenChange={(nextOpen) => {
             setDetailOpen(nextOpen);

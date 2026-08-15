@@ -73,6 +73,11 @@ export interface MediaDetailDrawerProperties {
   client?: DiscoveryMediaDetailClient;
   media: DetailMedia | null;
   onOpenChange: (open: boolean) => void;
+  onOpenOwnedLibrary?: (selection: {
+    kind: "movie" | "series";
+    referenceId: string;
+    title: string;
+  }) => void;
   onRequest?: (media: DetailMedia) => void;
   open: boolean;
   person?: DetailPerson | null;
@@ -803,6 +808,7 @@ export function MediaDetailDrawer({
   client = discoveryMediaDetailClient,
   media,
   onOpenChange,
+  onOpenOwnedLibrary,
   onRequest,
   open,
   person = null,
@@ -858,7 +864,21 @@ export function MediaDetailDrawer({
         controller.signal,
       )
       .then((response) => {
-        if (current) setState({ detail: response.item, kind: "ready", requestKey });
+        if (!current) return;
+        const libraryReferenceId = response.item.libraryReferenceId;
+        if (
+          onOpenOwnedLibrary &&
+          response.item.availability === "available" &&
+          libraryReferenceId
+        ) {
+          onOpenOwnedLibrary({
+            kind: response.item.kind,
+            referenceId: libraryReferenceId,
+            title: response.item.title,
+          });
+          return;
+        }
+        setState({ detail: response.item, kind: "ready", requestKey });
       })
       .catch((error: unknown) => {
         if (!current || (error instanceof DOMException && error.name === "AbortError")) return;
@@ -872,7 +892,7 @@ export function MediaDetailDrawer({
       current = false;
       controller.abort();
     };
-  }, [activeMedia, client, open, personId, requestKey]);
+  }, [activeMedia, client, onOpenOwnedLibrary, open, personId, requestKey]);
 
   useEffect(() => {
     if (!open || personId === null) return;
