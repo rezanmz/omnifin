@@ -120,6 +120,88 @@
   z-index: 8;
 }
 
+.discovery-hero-carousel {
+  position: relative;
+}
+
+.discovery-hero-carousel__controls {
+  align-items: center;
+  background: rgb(7 13 9 / 58%);
+  border: 1px solid rgb(255 255 255 / 15%);
+  border-radius: 999px;
+  box-shadow:
+    0 8px 24px rgb(0 0 0 / 24%),
+    inset 0 1px 0 rgb(255 255 255 / 14%);
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  position: absolute;
+  right: 20px;
+  top: 20px;
+  z-index: 12;
+}
+
+.discovery-hero-carousel__dots {
+  align-items: center;
+  display: flex;
+  gap: 5px;
+}
+
+.discovery-hero-carousel__step,
+.discovery-hero-carousel__dot {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--paper-0);
+  cursor: pointer;
+  display: inline-flex;
+  justify-content: center;
+  min-height: 40px;
+  min-width: 40px;
+  padding: 0;
+  transition:
+    background-color 150ms ease-out,
+    transform 120ms ease-out;
+}
+
+.discovery-hero-carousel__step {
+  border-radius: 50%;
+}
+
+.discovery-hero-carousel__dot {
+  min-width: 14px;
+  position: relative;
+}
+
+.discovery-hero-carousel__dot::after {
+  background: rgb(255 255 255 / 48%);
+  border-radius: 999px;
+  content: "";
+  height: 5px;
+  transition:
+    background-color 150ms ease-out,
+    transform 150ms ease-out,
+    width 150ms ease-out;
+  width: 5px;
+}
+
+.discovery-hero-carousel__dot[data-active="true"]::after {
+  background: var(--acid);
+  width: 18px;
+}
+
+.discovery-hero-carousel__step:hover,
+.discovery-hero-carousel__dot:hover,
+.discovery-hero-carousel__step:focus-visible,
+.discovery-hero-carousel__dot:focus-visible {
+  background: rgb(255 255 255 / 12%);
+}
+
+.discovery-hero-carousel__step:active,
+.discovery-hero-carousel__dot:active {
+  transform: scale(0.96);
+}
+
 .hero-spotlight__art {
   background:
     radial-gradient(

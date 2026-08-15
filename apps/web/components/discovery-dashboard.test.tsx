@@ -1,5 +1,5 @@
 import type { DiscoveryFeedResponse } from "@omnifin/contracts/discovery";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -98,6 +98,62 @@ describe("DiscoveryDashboard", () => {
       { language: expect.stringMatching(/^[a-z]{2}(?:-[A-Z]{2})?$/u) },
       expect.any(AbortSignal),
     );
+  });
+
+  it("rotates the five ranked spotlight candidates through labelled controls", async () => {
+    const user = userEvent.setup();
+    render(
+      <DiscoveryDashboard
+        initialFeed={demoDiscoveryFeed}
+        live={false}
+        showContinueWatching={false}
+      />,
+    );
+
+    expect(screen.getByRole("group", { name: "Featured discovery" })).toHaveAttribute(
+      "aria-roledescription",
+      "carousel",
+    );
+    expect(screen.getByRole("button", { name: "Show The Far Meridian" })).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Show next featured title" }));
+
+    expect(screen.getByRole("heading", { level: 1, name: "The Quiet Archive" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Show The Quiet Archive" })).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+  });
+
+  it("auto-rotates the hero without moving it while a control has focus", () => {
+    vi.useFakeTimers();
+    try {
+      render(
+        <DiscoveryDashboard
+          initialFeed={demoDiscoveryFeed}
+          live={false}
+          showContinueWatching={false}
+        />,
+      );
+      const next = screen.getByRole("button", { name: "Show next featured title" });
+      next.focus();
+
+      act(() => {
+        vi.advanceTimersByTime(16_000);
+      });
+      expect(screen.getByRole("heading", { level: 1, name: "The Far Meridian" })).toBeVisible();
+
+      act(() => next.blur());
+      act(() => {
+        vi.advanceTimersByTime(8_000);
+      });
+      expect(screen.getByRole("heading", { level: 1, name: "The Quiet Archive" })).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("omits saved actions for unknown discovery titles", () => {

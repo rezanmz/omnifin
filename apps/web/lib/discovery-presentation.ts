@@ -54,12 +54,21 @@ export function discoveryItemIsRequestable(item: DiscoveryFeedItem) {
   });
 }
 
+export function discoverySpotlightItems(feed: DiscoveryFeedResponse): readonly DiscoveryFeedItem[] {
+  const items: DiscoveryFeedItem[] = [];
+  const itemIds = new Set<string>();
+  const trending = feed.rails.find((rail) => rail.kind === "trending")?.items ?? [];
+  for (const item of [...trending, ...feed.rails.flatMap((rail) => rail.items)]) {
+    if (itemIds.has(item.id)) continue;
+    itemIds.add(item.id);
+    items.push(item);
+    if (items.length === 5) break;
+  }
+  return items;
+}
+
 export function discoverySpotlightItem(feed: DiscoveryFeedResponse) {
-  return (
-    feed.rails.find(({ kind }) => kind === "trending")?.items[0] ??
-    feed.rails.flatMap((rail) => rail.items)[0] ??
-    null
-  );
+  return discoverySpotlightItems(feed)[0] ?? null;
 }
 
 export function discoverySpotlightHero(item: DiscoveryFeedItem): DashboardModel["hero"] {
