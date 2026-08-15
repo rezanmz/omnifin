@@ -316,4 +316,50 @@ describe("JellyfinProvisioningAdminClient", () => {
       }),
     ).rejects.toMatchObject({ code: "response_invalid" });
   });
+
+  it("creates a user then applies the complete selected policy with administrator authorization", async () => {
+    const mock = createMockTransport([
+      jsonResponse({ Id: "created-user", Name: "Riley", Policy: policy("10.11") }, { status: 200 }),
+      new Response(null, { status: 204 }),
+    ]);
+    const client = new JellyfinProvisioningAdminClient(target(mock.transport));
+    const selectedPolicy = policy("10.11", { EnableContentDownloading: false });
+
+    await expect(
+      client.createUser({
+        accessToken: "server-api-key",
+        deviceId: "device-1",
+        password: "temporary-private-password",
+        username: "Riley",
+      }),
+    ).resolves.toMatchObject({ Id: "created-user", Name: "Riley" });
+    await expect(
+      client.replaceUserPolicy({
+        accessToken: "server-api-key",
+        deviceId: "device-1",
+        policy: selectedPolicy,
+        protocolVersion: "10.11",
+        userId: "created-user",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(mock.requests.map((request) => request.url.pathname)).toEqual([
+      "/base/Users/New",
+      "/base/Users/created-user/Policy",
+    ]);
+    expect(mock.requests[0]?.init).toMatchObject({ method: "POST" });
+    expect(JSON.parse(Buffer.from(mock.requests[0]!.init.body!).toString("utf8"))).toEqual({
+      Name: "Riley",
+      Password: "temporary-private-password",
+    });
+    expect(mock.requests[1]?.init).toMatchObject({ method: "POST" });
+    expect(JSON.parse(Buffer.from(mock.requests[1]!.init.body!).toString("utf8"))).toEqual({
+      ...selectedPolicy,
+      MaxParentalRating: null,
+      MaxParentalSubRating: null,
+    });
+    for (const request of mock.requests) {
+      expect(request.init.headers.get("authorization")).toContain('Token="server-api-key"');
+    }
+  });
 });

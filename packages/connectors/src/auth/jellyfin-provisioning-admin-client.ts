@@ -150,6 +150,16 @@ const authKeysResponseSchema = z.strictObject({
   TotalRecordCount: z.int().nonnegative().max(1_000_000).optional(),
 });
 
+const createdUserSchema = z.object({
+  Id: z.string().trim().min(1).max(256),
+  Name: z.string().trim().min(1).max(160),
+});
+
+const createUserRequestSchema = z.strictObject({
+  password: z.string().min(1).max(4_096),
+  username: z.string().trim().min(1).max(160),
+});
+export type JellyfinProvisioningCreatedUser = z.infer<typeof createdUserSchema>;
 export type JellyfinProvisioningAdminUser = z.infer<typeof authenticationUserSchema>;
 export type JellyfinProvisioningAuthentication = z.infer<typeof authenticationSchema>;
 
@@ -201,6 +211,57 @@ export class JellyfinProvisioningAdminClient {
       },
       method: "POST",
       operation: "provisioning_admin_password_authentication",
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    });
+  }
+
+  public createUser(input: {
+    accessToken: string;
+    deviceId: string;
+    password: string;
+    signal?: AbortSignal;
+    username: string;
+  }): Promise<JellyfinProvisioningCreatedUser> {
+    const request = createUserRequestSchema.parse({
+      password: input.password,
+      username: input.username,
+    });
+    return this.#client.requestJson("Users/New", createdUserSchema, {
+      body: JSON.stringify({ Name: request.username, Password: request.password }),
+      headers: {
+        "content-type": "application/json",
+        authorization: jellyfinAuthorization({
+          accessToken: input.accessToken,
+          deviceId: input.deviceId,
+        }),
+      },
+      method: "POST",
+      operation: "provisioning_user_create",
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    });
+  }
+
+  public async replaceUserPolicy(input: {
+    accessToken: string;
+    deviceId: string;
+    policy: Record<string, unknown>;
+    protocolVersion: JellyfinProvisioningProtocolVersion;
+    signal?: AbortSignal;
+    userId: string;
+  }): Promise<void> {
+    const policy = policySchemaForVersion(input.protocolVersion).parse(input.policy);
+    await this.#client.requestBytes(`Users/${encodeURIComponent(input.userId)}/Policy`, {
+      body: JSON.stringify(policy),
+      headers: {
+        "content-type": "application/json",
+        authorization: jellyfinAuthorization({
+          accessToken: input.accessToken,
+          deviceId: input.deviceId,
+        }),
+      },
+      method: "POST",
+      operation: "provisioning_user_policy_replace",
+      requiredStatus: 204,
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     });
   }
