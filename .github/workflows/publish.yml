@@ -1110,6 +1110,51 @@ jobs:
         with:
           name: omnifin-${{ inputs.version }}-upgrade-rehearsal
           path: evidence-downloads/upgrade
+      - name: Download Tier 4 home-lab evidence
+        if: needs.release-coverage.outputs.profile == 'v1'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        with:
+          script: |
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const release = releases.find(
+              (candidate) => candidate.tag_name === process.env.RELEASE_TAG,
+            );
+            if (!release?.draft || release.prerelease) {
+              throw new Error(`Expected an unpublished, non-prerelease draft for ${process.env.RELEASE_TAG}.`);
+            }
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              per_page: 100,
+            });
+            const reports = assets.filter(
+              (asset) => asset.name === "v1-home-lab-report.json" && asset.state === "uploaded" && asset.size > 0,
+            );
+            if (reports.length !== 1) {
+              throw new Error("Expected exactly one uploaded v1-home-lab-report.json asset on the release draft.");
+            }
+            const response = await github.rest.repos.getReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              asset_id: reports[0].id,
+              headers: { accept: "application/octet-stream" },
+            });
+            const outputDirectory = path.join(process.env.GITHUB_WORKSPACE, "evidence-downloads", "home-lab");
+            fs.mkdirSync(outputDirectory, { recursive: true, mode: 0o700 });
+            fs.writeFileSync(path.join(outputDirectory, "home-lab.json"), Buffer.from(response.data), {
+              flag: "wx",
+              mode: 0o600,
+            });
+
       - name: Assemble exact-candidate v1 evidence
         if: needs.release-coverage.outputs.profile == 'v1'
         env:
@@ -1128,6 +1173,8 @@ jobs:
             evidence-inputs/scan-linux-arm64.sarif
           install --mode 0600 evidence-downloads/install/install.json evidence-inputs/install.json
           install --mode 0600 evidence-downloads/upgrade/upgrade-rehearsal.json evidence-inputs/upgrade.json
+          install --mode 0600 evidence-downloads/home-lab/home-lab.json evidence-inputs/home-lab.json
+          install --mode 0600 evidence-downloads/home-lab/home-lab.json artifacts/release-evidence/home-lab.json
           node scripts/integration/release-evidence-assembly.mjs \
             --candidate-digest "$CANDIDATE_DIGEST" \
             --input-directory evidence-inputs \
@@ -1171,12 +1218,15 @@ jobs:
               (tier) => `v1-evidence-tier-${tier}-${context.runId}.json`,
             );
             const indexName = `v1-evidence-index-${context.runId}.json`;
+            const homeLabName = `v1-home-lab-report-${context.runId}.json`;
+            const homeLab = fs.readFileSync(path.join(process.env.EVIDENCE_DIRECTORY, "home-lab.json"));
             const index = fs.readFileSync(path.join(process.env.EVIDENCE_DIRECTORY, "index.json"));
             const assets = [
               ...tierNames.map((name) => [
                 name,
                 fs.readFileSync(path.join(process.env.EVIDENCE_DIRECTORY, name)),
               ]),
+              [homeLabName, homeLab],
               [indexName, index],
               [
                 `${indexName}.sha256`,
@@ -1243,6 +1293,109 @@ jobs:
       contents: write
       packages: write
     steps:
+      - name: Check out immutable release source
+        if: needs.release-coverage.outputs.profile == 'v1'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.release_sha }}
+      - name: Revalidate durable v1 evidence
+        if: needs.release-coverage.outputs.profile == 'v1'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          CANDIDATE_DIGEST: ${{ needs.publish-candidate.outputs.digest }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        with:
+          script: |
+            const crypto = require("node:crypto");
+            const path = require("node:path");
+            const { pathToFileURL } = require("node:url");
+            const { validateV1EvidenceIndex } = await import(
+              pathToFileURL(
+                path.join(process.env.GITHUB_WORKSPACE, "scripts/integration/release-evidence.mjs"),
+              ).href,
+            );
+            const decode = (data, label) => {
+              try {
+                return new TextDecoder("utf-8", { fatal: true }).decode(data);
+              } catch {
+                throw new Error(`${label} must be valid UTF-8.`);
+              }
+            };
+            const parse = (data, label) => {
+              try {
+                return JSON.parse(decode(data, label));
+              } catch (error) {
+                if (error instanceof SyntaxError) throw new Error(`${label} must be valid JSON.`);
+                throw error;
+              }
+            };
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const release = releases.find(
+              (candidate) => candidate.tag_name === process.env.RELEASE_TAG,
+            );
+            if (!release?.draft || release.prerelease) {
+              throw new Error(`Expected an unpublished, non-prerelease draft for ${process.env.RELEASE_TAG}.`);
+            }
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              per_page: 100,
+            });
+            const readAsset = async (name) => {
+              const matches = assets.filter(
+                (asset) => asset.name === name && asset.state === "uploaded" && asset.size > 0,
+              );
+              if (matches.length !== 1) throw new Error(`Expected exactly one uploaded ${name} asset.`);
+              const response = await github.rest.repos.getReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                asset_id: matches[0].id,
+                headers: { accept: "application/octet-stream" },
+              });
+              return Buffer.from(response.data);
+            };
+            const indexName = `v1-evidence-index-${context.runId}.json`;
+            const homeLabName = `v1-home-lab-report-${context.runId}.json`;
+            const [indexData, checksumData, homeLabData] = await Promise.all([
+              readAsset(indexName),
+              readAsset(`${indexName}.sha256`),
+              readAsset(homeLabName),
+            ]);
+            const expectedChecksum = `${crypto.createHash("sha256").update(indexData).digest("hex")}  ${indexName}\n`;
+            if (decode(checksumData, `${indexName}.sha256`) !== expectedChecksum) {
+              throw new Error("The durable v1 evidence index checksum does not match.");
+            }
+            const index = parse(indexData, indexName);
+            const validated = validateV1EvidenceIndex(index, {
+              candidateDigest: process.env.CANDIDATE_DIGEST,
+              sourceSha: process.env.RELEASE_SHA,
+            });
+            const tierFourName = `v1-evidence-tier-4-${context.runId}.json`;
+            const tierFourData = await readAsset(tierFourName);
+            const tierFour = parse(tierFourData, tierFourName);
+            const tierFourRecord = validated.records.find((record) => record.tier === 4);
+            if (
+              tierFour?.sourceSha !== process.env.RELEASE_SHA ||
+              tierFour?.candidateDigest !== process.env.CANDIDATE_DIGEST ||
+              !Array.isArray(tierFour?.inputs) ||
+              tierFourRecord?.artifact.sha256 !== crypto.createHash("sha256").update(tierFourData).digest("hex")
+            ) {
+              throw new Error("The durable Tier 4 evidence record does not match the exact candidate.");
+            }
+            const homeLabInput = tierFour.inputs.filter((input) => input?.name === "home-lab.json");
+            if (
+              homeLabInput.length !== 1 ||
+              homeLabInput[0].sha256 !== crypto.createHash("sha256").update(homeLabData).digest("hex")
+            ) {
+              throw new Error("The durable Tier 4 evidence record does not bind the immutable home-lab report.");
+            }
       - name: Recheck draft and monotonic release order
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:

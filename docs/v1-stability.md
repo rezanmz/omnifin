@@ -123,6 +123,23 @@ retained only in an expiring job log is insufficient. Expiry cannot be open-ende
 evidence expires at the declared date or earlier when its source, harness, candidate
 digest, covered upstream version, or relevant deployment assumption changes.
 
+### Tier 4 external report
+
+Before the v1 evidence job runs, the accountable home-lab operator uploads exactly one
+`v1-home-lab-report.json` asset to the matching unpublished Release Please draft. The
+draft asset is the durable input; a workflow log, moving tag, issue comment, or hosted
+clean-runner report cannot substitute for it. The workflow downloads that exact asset,
+binds it to the candidate evidence index by checksum, and retains the hosted install and
+upgrade reports only as supporting evidence.
+
+The report has schema version `1` and contains only the exact candidate `sourceSha` and
+`candidateDigest`, one stable `architecture`, `verifiedAt` and bounded `expiresAt` dates,
+an accountable `owner`, non-empty upstream `versions`, `result: "passed"`, and the exact
+Tier 4 coverage list. Its deployment declaration is fixed to `type: "home-lab"`,
+`network: "real"`, and `tls: "reverse-proxy"`. The report must contain no credentials,
+hostnames, IP addresses, or unsanitized diagnostics. Missing, duplicate, malformed, stale,
+wrong-candidate, or incomplete reports fail promotion closed.
+
 ## Security exceptions
 
 No high or critical security finding may remain untriaged. When a fix is unavailable,

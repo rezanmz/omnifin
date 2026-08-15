@@ -8,6 +8,7 @@ import {
   V1_TIER_REQUIREMENTS,
   validateV1EvidenceIndex,
 } from "./release-evidence.mjs";
+import { validateHomeLabEvidence } from "./home-lab-evidence.mjs";
 
 const REQUIRED_OPTIONS = Object.freeze([
   "--candidate-digest",
@@ -31,7 +32,7 @@ export const V1_EVIDENCE_INPUTS = Object.freeze({
   1: Object.freeze(["fixture.json"]),
   2: Object.freeze(["live.json"]),
   3: Object.freeze(["scan-linux-amd64.sarif", "scan-linux-arm64.sarif"]),
-  4: Object.freeze(["install.json", "upgrade.json"]),
+  4: Object.freeze(["install.json", "upgrade.json", "home-lab.json"]),
 });
 
 function checksum(value) {
@@ -79,9 +80,29 @@ export async function assembleV1Evidence(options) {
   const outputDirectory = resolve(options.outputDirectory);
 
   const inputs = {};
+  let homeLabEvidence;
   for (const [name, path] of Object.entries(inputFiles)) {
     const data = await readFile(resolve(path));
     if (data.length === 0) throw new Error(`Evidence input ${name} is empty.`);
+    if (name === "home-lab.json") {
+      let decoded;
+      try {
+        decoded = new TextDecoder("utf-8", { fatal: true }).decode(data);
+      } catch {
+        throw new Error("Home-lab evidence must be valid UTF-8.");
+      }
+      let report;
+      try {
+        report = JSON.parse(decoded);
+      } catch {
+        throw new Error("Home-lab evidence must be valid JSON.");
+      }
+      homeLabEvidence = validateHomeLabEvidence(report, {
+        candidateDigest,
+        sourceSha,
+        today: verifiedAt,
+      });
+    }
     inputs[name] = checksum(data);
   }
 
@@ -102,8 +123,14 @@ export async function assembleV1Evidence(options) {
       flag: "wx",
       mode: 0o644,
     });
+    const tierFour = tier === 4;
     records.push({
-      architectures: tier === 3 ? [...STABLE_ARCHITECTURES] : ["linux/amd64"],
+      architectures:
+        tier === 3
+          ? [...STABLE_ARCHITECTURES]
+          : tierFour
+            ? [homeLabEvidence.architecture]
+            : ["linux/amd64"],
       artifact: {
         sha256: checksum(artifactData),
         url: evidenceUrl(repository, releaseTag, artifactName),
@@ -111,14 +138,14 @@ export async function assembleV1Evidence(options) {
       candidateDigest,
       claim: V1_TIER_REQUIREMENTS[tier].claim,
       coverage: [...V1_TIER_REQUIREMENTS[tier].coverage],
-      expiresAt: verifiedAt,
+      expiresAt: tierFour ? homeLabEvidence.expiresAt : verifiedAt,
       limitations: "Sanitized diagnostics exclude secrets and host paths.",
-      owner: "release-maintainer",
+      owner: tierFour ? homeLabEvidence.owner : "release-maintainer",
       result: "passed",
       sourceSha,
       tier,
-      upstream: { fixtureRevision: sourceSha },
-      verifiedAt,
+      upstream: tierFour ? homeLabEvidence.upstream : { fixtureRevision: sourceSha },
+      verifiedAt: tierFour ? homeLabEvidence.verifiedAt : verifiedAt,
     });
   }
   const index = validateV1EvidenceIndex(
