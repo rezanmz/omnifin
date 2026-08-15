@@ -60,7 +60,7 @@ export function NextUpRail({ feed, onSelect, playbackClient }: NextUpRailPropert
     const accentByReference = new Map(
       continueWatchingCards(feed).map((card) => [card.id, card.accent]),
     );
-    const seen = new Set<string>();
+    const seen = new Set(feed.items.map((item) => item.media.id));
     return (query.data ?? []).flatMap(({ context, item }) => {
       if (context.nextState !== "ready" || context.nextEpisode === null) return [];
       const next = context.nextEpisode;
@@ -82,5 +82,5 @@ export function NextUpRail({ feed, onSelect, playbackClient }: NextUpRailPropert
   }, [feed, query.data]);
 
   if (cards.length === 0) return null;
-  return <MediaRail items={cards} onSelect={onSelect} title="Next up" />;
+  return <MediaRail items={cards} onSelect={onSelect} selectAction="play" title="Next up" />;
 }

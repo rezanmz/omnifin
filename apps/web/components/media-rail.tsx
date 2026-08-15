@@ -16,6 +16,7 @@ export function MediaRail({
   onRequest,
   onSelect,
   onViewAll,
+  selectAction,
   className,
   statusMessage,
   title,
@@ -27,6 +28,7 @@ export function MediaRail({
   onRequest?: (item: MediaCardModel) => void;
   onSelect?: (item: MediaCardModel) => void;
   onViewAll?: () => void;
+  selectAction?: "details" | "play";
   className?: string;
   statusMessage?: string;
   title: string;
@@ -79,6 +81,7 @@ export function MediaRail({
           {items.map((item, index) => {
             const watchedPercent =
               typeof item.progress === "number" ? Math.round(item.progress * 100) : undefined;
+            const isPlaybackAction = selectAction === "play" || watchedPercent !== undefined;
             const progressDescriptionId = `${headingId}-${item.id}-progress`;
             const artworkPath = item.artworkPath
               ? /^(?:\/api\/media\/media_[A-Za-z0-9_-]{22}\/images\/(?:backdrop|poster)|\/api\/discovery\/artwork\/discovery_art_[A-Za-z0-9_-]{22})$/u.test(
@@ -116,10 +119,10 @@ export function MediaRail({
                 {onSelect ? (
                   <span className="media-card__overlay" aria-hidden="true">
                     <span className="media-card__play">
-                      {watchedPercent === undefined ? (
-                        <PanelRightOpen size={16} />
-                      ) : (
+                      {isPlaybackAction ? (
                         <Play fill="currentColor" size={16} />
+                      ) : (
+                        <PanelRightOpen size={16} />
                       )}
                     </span>
                   </span>
@@ -156,9 +159,11 @@ export function MediaRail({
                       watchedPercent === undefined ? undefined : progressDescriptionId
                     }
                     aria-label={
-                      watchedPercent === undefined
-                        ? `View details for ${item.title}`
-                        : `Resume ${item.title}`
+                      watchedPercent !== undefined
+                        ? `Resume ${item.title}`
+                        : isPlaybackAction
+                          ? `Play ${item.title}`
+                          : `View details for ${item.title}`
                     }
                     className="media-card__action"
                     data-directional-item

@@ -166,6 +166,7 @@ describe("ContinueWatchingRail", () => {
   });
 
   it("suggests one ready next episode from each bounded in-progress episode", async () => {
+    const user = userEvent.setup();
     const loadContext = vi.fn(async (referenceId: string) => {
       expect(referenceId).toBe(`media_${"b".repeat(22)}`);
       return {
@@ -215,12 +216,90 @@ describe("ContinueWatchingRail", () => {
       />,
     );
 
-    expect(await screen.findByRole("heading", { name: "Next up" })).toBeVisible();
-    expect(
-      screen.getByRole("button", { name: "View details for The Long Meridian" }),
-    ).toBeVisible();
+    const nextUp = await screen.findByRole("button", { name: "Play The Long Meridian" });
+    expect(nextUp).toBeVisible();
     expect(screen.getByText("Northern Lights · S2E4")).toBeVisible();
+    await user.click(nextUp);
+    await waitFor(() =>
+      expect(playbackClient.prepare).toHaveBeenCalledWith(
+        `media_${"n".repeat(22)}`,
+        0,
+        expect.any(AbortSignal),
+        expect.objectContaining({ mode: "auto" }),
+      ),
+    );
     expect(loadContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not repeat an episode that is already resumable", async () => {
+    const firstReferenceId = `media_${"b".repeat(22)}`;
+    const loadContext = vi.fn(async (mediaReferenceId: string) => ({
+      currentDurationSeconds: 2_700,
+      generatedAt: "2026-07-28T12:30:00.000Z",
+      mediaReferenceId,
+      nextEpisode:
+        mediaReferenceId === firstReferenceId
+          ? {
+              artworkPath: `/v1/media/media_${"c".repeat(22)}/images/poster`,
+              durationSeconds: 2_700,
+              episodeNumber: 4,
+              mediaReferenceId: `media_${"c".repeat(22)}`,
+              seasonNumber: 2,
+              seriesTitle: "Northern Lights",
+              title: "Already watching",
+            }
+          : {
+              artworkPath: `/v1/media/media_${"n".repeat(22)}/images/poster`,
+              durationSeconds: 2_700,
+              episodeNumber: 5,
+              mediaReferenceId: `media_${"n".repeat(22)}`,
+              seasonNumber: 2,
+              seriesTitle: "Northern Lights",
+              title: "New episode",
+            },
+      nextState: "ready" as const,
+      segments: [],
+      segmentsState: "empty" as const,
+    }));
+    const sourceItem = demoContinueWatchingFeed.items[1]!;
+    const feed: ContinueWatchingResponse = {
+      ...demoContinueWatchingFeed,
+      items: [
+        demoContinueWatchingFeed.items[0]!,
+        { ...sourceItem, media: { ...sourceItem.media, kind: "episode" } },
+      ],
+    };
+    const playbackClient = {
+      loadContext,
+      prepare: vi.fn(async () => ({
+        canManageLibrary: false,
+        csrfToken: "rail_playback_csrf_0123456789abcdefghijklmnop",
+        session: playbackSession,
+      })),
+      report: vi.fn(async (_sessionId, request) => ({
+        acceptedAt: "2026-07-28T12:30:00.000Z",
+        positionSeconds: request.positionSeconds,
+        sessionId: playbackSessionId,
+        state: "stopped" as const,
+      })),
+      reportIssue: vi.fn(async (_sessionId, request) => ({
+        category: request.category,
+        createdAt: "2026-07-28T12:30:00.000Z",
+        id: `issue_${"i".repeat(22)}`,
+        positionSeconds: request.positionSeconds,
+        status: "open" as const,
+      })),
+    };
+    render(
+      <ContinueWatchingRail
+        initialOutcome={{ feed, status: "ready" }}
+        live={false}
+        playbackClient={playbackClient}
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Play New episode" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Play Already watching" })).not.toBeInTheDocument();
   });
 
   it("bounds next-up context checks to eight in-progress episodes", async () => {
