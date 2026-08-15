@@ -562,6 +562,21 @@ describe("MediaLibrary", () => {
 
   it("keeps a series as one title and exposes its episodes inside a season hierarchy", async () => {
     const user = userEvent.setup();
+    const series = mediaLibraryDemoItems.find(({ media }) => media.title === "Northern Lights")!;
+    const loadConnectedActions = vi.fn(async (referenceId: string) => ({
+      actions: [
+        {
+          href: `/v1/media/library/${referenceId}/actions/sonarr`,
+          kind: "service_navigation" as const,
+          label: "Open in Sonarr",
+          service: "sonarr" as const,
+        },
+      ],
+      generatedAt: readyMediaLibraryOutcome.feed.generatedAt,
+      mediaKind: "series" as const,
+      referenceId,
+    }));
+    const client = { ...mediaLibraryDemoClient, loadConnectedActions };
     const playbackClient = {
       prepare: vi.fn(async () => ({
         canManageLibrary: false,
@@ -588,6 +603,7 @@ describe("MediaLibrary", () => {
     render(
       libraryScreen(
         <MediaLibrary
+          client={client}
           initialOutcome={readyMediaLibraryOutcome}
           live={false}
           playbackClient={playbackClient}
@@ -629,6 +645,16 @@ describe("MediaLibrary", () => {
     expect(episodeDetail).toHaveTextContent("Mara Voss");
     expect(episodeDetail).toHaveTextContent("Ari Chen");
     expect(within(episodeDetail).getByRole("button", { name: "Resume episode" })).toBeVisible();
+    const sonarrAction = await within(episodeDetail).findByRole("link", {
+      name: "Open in Sonarr in a new tab",
+    });
+    expect(sonarrAction).toHaveAttribute(
+      "href",
+      `/api/media/library/${series.media.id}/actions/sonarr`,
+    );
+    expect(sonarrAction).toHaveAttribute("target", "_blank");
+    expect(sonarrAction).toHaveAttribute("rel", "noopener noreferrer");
+    expect(loadConnectedActions).toHaveBeenCalledWith(series.media.id, expect.any(AbortSignal));
     seasonTwo.focus();
     await user.keyboard("{ArrowLeft}");
     expect(seasonOne).toHaveFocus();

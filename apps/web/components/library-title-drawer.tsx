@@ -359,14 +359,20 @@ function PlaybackActions({
   );
 }
 
-function ConnectedServiceActions({ actions }: { actions: LibraryConnectedAction[] }) {
+function ConnectedServiceActions({
+  actions,
+  ariaLabel = "Connected services",
+}: {
+  actions: LibraryConnectedAction[];
+  ariaLabel?: string;
+}) {
   const safeActions = actions.flatMap((action) => {
     const href = sameOriginMediaPath(action.href);
     return href === undefined ? [] : [{ ...action, href }];
   });
   if (safeActions.length === 0) return null;
   return (
-    <nav aria-label="Connected services" className="library-title__connected-actions">
+    <nav aria-label={ariaLabel} className="library-title__connected-actions">
       {safeActions.map((action) => (
         <a
           aria-label={`${action.label} in a new tab`}
@@ -1134,6 +1140,7 @@ function EpisodeArtwork({ episode }: { episode: LibrarySeasonEpisode }) {
 
 function EpisodeDetail({
   client,
+  connectedActions,
   episode,
   onInspectPerson,
   onPlaybackChange,
@@ -1141,6 +1148,7 @@ function EpisodeDetail({
   resolvingReferenceId,
 }: {
   client: MediaLibraryClient;
+  connectedActions: LibraryConnectedAction[];
   episode: LibrarySeasonEpisode;
   onInspectPerson: (credit: InspectableCredit) => void;
   onPlaybackChange: (playback: LibraryPlaybackState) => void;
@@ -1305,6 +1313,10 @@ function EpisodeDetail({
         onPlay={onPlay}
         playback={episode.playback}
       />
+      <ConnectedServiceActions
+        actions={connectedActions}
+        ariaLabel="Parent series connected services"
+      />
       <OriginalMediaDownloadAction client={client} media={episode.media} />
     </section>
   );
@@ -1312,6 +1324,7 @@ function EpisodeDetail({
 
 function EpisodeList({
   client,
+  connectedActions,
   onLoadMore,
   onInspectPerson,
   onPlaybackChange,
@@ -1320,6 +1333,7 @@ function EpisodeList({
   state,
 }: {
   client: MediaLibraryClient;
+  connectedActions: LibraryConnectedAction[];
   onLoadMore: () => void;
   onInspectPerson: (credit: InspectableCredit) => void;
   onPlaybackChange: (episode: LibrarySeasonEpisode, playback: LibraryPlaybackState) => void;
@@ -1395,6 +1409,7 @@ function EpisodeList({
               {expanded ? (
                 <EpisodeDetail
                   client={client}
+                  connectedActions={connectedActions}
                   episode={episode}
                   onInspectPerson={onInspectPerson}
                   onPlaybackChange={(playback) => onPlaybackChange(episode, playback)}
@@ -1561,6 +1576,8 @@ export function LibraryTitleDrawer({
     if (!open || !item || titleState?.requestKey !== requestKey) return null;
     return titleState;
   }, [item, open, requestKey, titleState]);
+  const currentConnectedActions =
+    connectedActions?.requestKey === requestKey ? connectedActions.actions : [];
   const detail = visibleTitleState?.kind === "ready" ? visibleTitleState.detail : null;
   const selectedMovieSource =
     detail?.movie?.mediaSources.find(
@@ -1965,11 +1982,7 @@ export function LibraryTitleDrawer({
                     {detail!.media.kind === "movie" ? (
                       <OriginalMediaDownloadAction client={client} media={detail!.media} />
                     ) : null}
-                    <ConnectedServiceActions
-                      actions={
-                        connectedActions?.requestKey === requestKey ? connectedActions.actions : []
-                      }
-                    />
+                    <ConnectedServiceActions actions={currentConnectedActions} />
                   </div>
                 </section>
 
@@ -2094,6 +2107,7 @@ export function LibraryTitleDrawer({
                           ) : (
                             <EpisodeList
                               client={client}
+                              connectedActions={currentConnectedActions}
                               onLoadMore={() => void loadMoreEpisodes()}
                               onInspectPerson={(credit) => void inspectPerson(credit)}
                               onPlaybackChange={updateEpisodePlayback}
