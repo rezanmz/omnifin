@@ -3,7 +3,7 @@ import {
   jellyfinProvisioningTemplatesResponseSchema,
 } from "@omnifin/contracts/connectors";
 import { describe, expect, it, vi } from "vitest";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 
 import { createApp } from "../src/app.js";
 import { JellyfinProvisioningService } from "../src/connectors/jellyfin-provisioning-service.js";
@@ -38,6 +38,12 @@ function config(): AppConfig {
   };
 }
 
+const jellyfinServerId = "fixture-jellyfin-server";
+const jellyfinIdentityHash = createHmac("sha256", config().encryptionKey)
+  .update("omnifin:v1:connector-instance-identity\0", "utf8")
+  .update(jellyfinServerId, "utf8")
+  .digest("base64url");
+
 async function harness() {
   let sessionId = 0;
   let sessionToken = 0;
@@ -51,6 +57,10 @@ async function harness() {
         Name: "Administrator",
         Policy: { IsAdministrator: true, IsDisabled: false, EnableAllFolders: true },
       },
+    })),
+    readPublicSystemInfo: vi.fn(async () => ({
+      protocolVersion: "10.11" as const,
+      serverId: jellyfinServerId,
     })),
     validateAdministratorCredential: vi.fn(async () => ({ protocolVersion: "10.11" as const })),
     listTemplateUsers: vi.fn(async () => [
@@ -123,7 +133,7 @@ async function harness() {
       healthState: "healthy",
       id: "jellyfin-home",
       instanceGeneration: 0,
-      instanceIdentityHash: "i".repeat(43),
+      instanceIdentityHash: jellyfinIdentityHash,
       updatedAt: now,
       type: "jellyfin",
     })
@@ -231,6 +241,7 @@ describe("Jellyfin provisioning configuration routes", () => {
         validationState: "valid",
       });
       expect(fakeClient.authenticateAdministrator).toHaveBeenCalledTimes(1);
+      expect(fakeClient.readPublicSystemInfo).toHaveBeenCalledTimes(1);
       expect(fakeClient.readTemplateUser).toHaveBeenCalledWith(
         expect.objectContaining({
           accessToken: "validated-admin-access-token",
@@ -247,7 +258,7 @@ describe("Jellyfin provisioning configuration routes", () => {
           encrypted.value,
           `jellyfin_provisioning:jellyfin-home:${createHash("sha256")
             .update("jellyfin\0jellyfin-home\0" + "0", "utf8")
-            .digest("base64url")}:0:${"i".repeat(43)}`,
+            .digest("base64url")}:0:${jellyfinIdentityHash}`,
         ),
       ) as { template: { policy: { AccessSchedules: Array<Record<string, unknown>> } } };
       expect(stored.template.policy.AccessSchedules).toEqual([
@@ -295,6 +306,70 @@ describe("Jellyfin provisioning configuration routes", () => {
       });
       expect(templates.body).not.toContain("IsAdministrator");
       expect(templates.body).not.toContain("EnableAllFolders");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("refuses provisioning credentials on an HTTP connector before calling Jellyfin", async () => {
+    const { app, fakeClient, session } = await harness();
+    try {
+      app.database.sqlite
+        .prepare(
+          "update connector_configs set base_url = ?, insecure_http_approved = 1 where id = ?",
+        )
+        .run("http://jellyfin.example.test/", "jellyfin-home");
+
+      const response = await app.inject({
+        body: {
+          credential: { apiKey: "private-key", kind: "replace_api_key" },
+          enabled: true,
+          revision: 0,
+          templateUserId: "template-user",
+        },
+        headers: headers(session),
+        method: "PUT",
+        url: "/v1/admin/connectors/jellyfin-home/jellyfin-provisioning",
+      });
+
+      expect(response.statusCode).toBe(422);
+      expect(fakeClient.validateAdministratorCredential).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("binds administrator credential validation to the configured Jellyfin instance", async () => {
+    const { app, fakeClient, session } = await harness();
+    try {
+      const expectedServerId = "expected-jellyfin-server";
+      const identityHash = createHmac("sha256", config().encryptionKey)
+        .update("omnifin:v1:connector-instance-identity\0", "utf8")
+        .update(expectedServerId, "utf8")
+        .digest("base64url");
+      app.database.sqlite
+        .prepare("update connector_configs set instance_identity_hash = ? where id = ?")
+        .run(identityHash, "jellyfin-home");
+
+      const response = await app.inject({
+        body: {
+          credential: { apiKey: "private-key", kind: "replace_api_key" },
+          enabled: true,
+          revision: 0,
+          templateUserId: "template-user",
+        },
+        headers: headers(session),
+        method: "PUT",
+        url: "/v1/admin/connectors/jellyfin-home/jellyfin-provisioning",
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      const calls = fakeClient.validateAdministratorCredential.mock.calls as unknown as Array<
+        [{ verifyServerIdentity?: (serverId: string) => boolean }]
+      >;
+      const call = calls[0]?.[0];
+      expect(call?.verifyServerIdentity?.("unexpected-jellyfin-server")).toBe(false);
+      expect(call?.verifyServerIdentity?.(expectedServerId)).toBe(true);
     } finally {
       await app.close();
     }
