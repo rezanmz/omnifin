@@ -107,6 +107,25 @@ describe("JellyfinProvisioningAdminClient", () => {
       "/base/Auth/Keys",
     ]);
   });
+  it("stops before sending an administrator credential when the public server identity is rejected", async () => {
+    const mock = createMockTransport([
+      jsonResponse({ Id: "unexpected-server", ServerName: "Replacement", Version: "10.11.11" }),
+      jsonResponse({ Items: [], StartIndex: 0, TotalRecordCount: 0 }),
+    ]);
+    const client = new JellyfinProvisioningAdminClient(target(mock.transport));
+
+    await expect(
+      client.validateAdministratorCredential({
+        accessToken: "server-api-key",
+        credentialKind: "api_key",
+        deviceId: "device-1",
+        verifyServerIdentity: (serverId) => serverId === "expected-server",
+      }),
+    ).rejects.toMatchObject({ name: "JellyfinProvisioningServerIdentityError" });
+    expect(mock.requests.map((request) => request.url.pathname)).toEqual([
+      "/base/System/Info/Public",
+    ]);
+  });
 
   it("rejects an ordinary user token submitted as an API key", async () => {
     const mock = createMockTransport([

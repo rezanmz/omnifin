@@ -21,6 +21,13 @@ export class JellyfinProvisioningUnsupportedVersionError extends Error {
   }
 }
 
+export class JellyfinProvisioningServerIdentityError extends Error {
+  public constructor() {
+    super("The Jellyfin server identity does not match the configured connector.");
+    this.name = "JellyfinProvisioningServerIdentityError";
+  }
+}
+
 const authenticationPolicySchema = z
   .record(z.string().min(1).max(128), z.unknown())
   .superRefine((policy, context) => {
@@ -139,7 +146,10 @@ const authenticationSchema = z.object({
   User: authenticationUserSchema,
 });
 
-const publicSystemInfoSchema = z.object({ Version: z.string().trim().min(1).max(128) });
+const publicSystemInfoSchema = z.object({
+  Id: z.string().trim().min(1).max(256),
+  Version: z.string().trim().min(1).max(128),
+});
 const authenticationInfoSchema = z.object({
   AccessToken: z.string().min(1).max(4_096),
   IsActive: z.boolean().optional(),
@@ -162,6 +172,11 @@ const createUserRequestSchema = z.strictObject({
 export type JellyfinProvisioningCreatedUser = z.infer<typeof createdUserSchema>;
 export type JellyfinProvisioningAdminUser = z.infer<typeof authenticationUserSchema>;
 export type JellyfinProvisioningAuthentication = z.infer<typeof authenticationSchema>;
+
+export interface JellyfinProvisioningServerInfo {
+  readonly protocolVersion: JellyfinProvisioningProtocolVersion;
+  readonly serverId: string;
+}
 
 function protocolVersionFor(version: string): JellyfinProvisioningProtocolVersion {
   const match = /^(\d+)\.(\d+)(?:\.|$)/u.exec(version);
@@ -195,6 +210,20 @@ export class JellyfinProvisioningAdminClient {
       ...(config.transport === undefined ? {} : { transport: config.transport }),
       ...(config.lane === undefined ? {} : { lane: config.lane }),
     });
+  }
+
+  public async readPublicSystemInfo(
+    input: { signal?: AbortSignal } = {},
+  ): Promise<JellyfinProvisioningServerInfo> {
+    const systemInfo = await this.#client.requestJson(
+      "System/Info/Public",
+      publicSystemInfoSchema,
+      {
+        operation: "provisioning_server_version",
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      },
+    );
+    return { protocolVersion: protocolVersionFor(systemInfo.Version), serverId: systemInfo.Id };
   }
 
   public authenticateAdministrator(input: {
@@ -279,6 +308,7 @@ export class JellyfinProvisioningAdminClient {
     credentialKind: JellyfinProvisioningCredentialKind;
     deviceId: string;
     signal?: AbortSignal;
+    verifyServerIdentity?: (serverId: string) => boolean;
   }): Promise<JellyfinProvisioningValidation> {
     return this.#validateAdministratorCredential(input);
   }
@@ -341,20 +371,17 @@ export class JellyfinProvisioningAdminClient {
     credentialKind: JellyfinProvisioningCredentialKind;
     deviceId: string;
     signal?: AbortSignal;
+    verifyServerIdentity?: (serverId: string) => boolean;
   }): Promise<JellyfinProvisioningValidation> {
     const authorization = jellyfinAuthorization({
       accessToken: input.accessToken,
       deviceId: input.deviceId,
     });
-    const systemInfo = await this.#client.requestJson(
-      "System/Info/Public",
-      publicSystemInfoSchema,
-      {
-        operation: "provisioning_server_version",
-        ...(input.signal === undefined ? {} : { signal: input.signal }),
-      },
-    );
-    const protocolVersion = protocolVersionFor(systemInfo.Version);
+    const systemInfo = await this.readPublicSystemInfo(input);
+    if (input.verifyServerIdentity && !input.verifyServerIdentity(systemInfo.serverId)) {
+      throw new JellyfinProvisioningServerIdentityError();
+    }
+    const protocolVersion = systemInfo.protocolVersion;
     const authKeys = await this.#client.requestJson("Auth/Keys", authKeysResponseSchema, {
       headers: {
         authorization,

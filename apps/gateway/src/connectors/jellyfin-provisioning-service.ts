@@ -8,7 +8,7 @@ import {
 } from "@omnifin/contracts/connectors";
 import type { SessionPrincipal } from "@omnifin/contracts/auth";
 import { eq } from "drizzle-orm";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 
 import {
   JellyfinProvisioningAdminClient,
@@ -280,6 +280,7 @@ export class JellyfinProvisioningService {
         accessToken: this.#accessToken(stored.credential),
         credentialKind: stored.credential.kind,
         deviceId: DEVICE_ID,
+        verifyServerIdentity: (serverId) => this.#serverIdentityMatches(connector, serverId),
       });
       users = await this.#client(connector).listTemplateUsers({
         accessToken: this.#accessToken(stored.credential),
@@ -341,12 +342,17 @@ export class JellyfinProvisioningService {
           ReturnType<JellyfinProvisioningAdminClient["authenticateAdministrator"]>
         >;
         try {
+          const systemInfo = await client.readPublicSystemInfo();
+          if (!this.#serverIdentityMatches(connector, systemInfo.serverId)) {
+            throw new JellyfinProvisioningError("binding_invalid");
+          }
           result = await client.authenticateAdministrator({
             deviceId: DEVICE_ID,
             password: credential.password,
             username: credential.username,
           });
         } catch (error) {
+          if (error instanceof JellyfinProvisioningError) throw error;
           throw new JellyfinProvisioningError("upstream_validation_failed", { cause: error });
         }
         this.#assertAdministrator(result.User);
@@ -360,6 +366,7 @@ export class JellyfinProvisioningService {
             accessToken: this.#accessToken(storedCredential!),
             credentialKind: storedCredential!.kind,
             deviceId: DEVICE_ID,
+            verifyServerIdentity: (serverId) => this.#serverIdentityMatches(connector, serverId),
           })
         ).protocolVersion;
       } catch (error) {
@@ -394,6 +401,7 @@ export class JellyfinProvisioningService {
               accessToken: this.#accessToken(storedCredential!),
               credentialKind: storedCredential!.kind,
               deviceId: DEVICE_ID,
+              verifyServerIdentity: (serverId) => this.#serverIdentityMatches(connector, serverId),
             })
           ).protocolVersion;
         } catch (error) {
@@ -587,6 +595,9 @@ export class JellyfinProvisioningService {
   #target(connector: ConnectorRow): ConnectorTargetConfig {
     let parsed: { tlsCaCertificatePem?: unknown };
     try {
+      if (new URL(connector.baseUrl).protocol !== "https:") {
+        throw new JellyfinProvisioningError("configuration_invalid");
+      }
       const envelope = JSON.parse(
         this.#cipher.decrypt(
           connector.encryptedCredentials,
@@ -596,17 +607,19 @@ export class JellyfinProvisioningService {
       if (
         envelope.credentials !== undefined &&
         (envelope.credentials as { kind?: unknown }).kind !== "none"
-      )
+      ) {
         throw new Error("jellyfin-credentials");
+      }
       parsed = envelope;
     } catch (error) {
+      if (error instanceof JellyfinProvisioningError) throw error;
       throw new JellyfinProvisioningError("storage_failure", { cause: error });
     }
     return {
       connectorId: connector.id,
       displayName: connector.id,
       baseUrl: connector.baseUrl,
-      insecureHttpApproved: connector.insecureHttpApproved === 1,
+      insecureHttpApproved: false,
       tlsPolicy: connector.tlsPolicy === "allow_self_signed" ? "allow_self_signed" : "strict",
       ...(typeof parsed.tlsCaCertificatePem === "string"
         ? { tlsCaCertificatePem: parsed.tlsCaCertificatePem }
@@ -616,6 +629,18 @@ export class JellyfinProvisioningService {
 
   #client(connector: ConnectorRow) {
     return this.#createClient(this.#target(connector));
+  }
+
+  #serverIdentityMatches(connector: ConnectorRow, serverId: string) {
+    return (
+      connector.instanceIdentityHash !== null &&
+      serverId.length >= 1 &&
+      serverId.length <= 256 &&
+      createHmac("sha256", this.#config.encryptionKey)
+        .update("omnifin:v1:connector-instance-identity\0", "utf8")
+        .update(serverId, "utf8")
+        .digest("base64url") === connector.instanceIdentityHash
+    );
   }
 
   #accessToken(credential: StoredCredential) {
