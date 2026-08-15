@@ -23,12 +23,12 @@ import {
   discoveryAvailabilityLabel as availabilityLabel,
   discoveryItemIsRequestable as requestable,
   discoveryItemMedia as itemMedia,
-  discoverySpotlightItem,
-  discoverySpotlightHero,
+  discoverySpotlightItems,
 } from "../lib/discovery-presentation";
 import type { DiscoveryMediaDetailClient } from "../lib/media-details";
 import type { MediaRequestClient } from "../lib/media-requests";
 import { DirectionalNavigationGroup } from "./directional-navigation-group";
+import { DiscoveryHeroCarousel } from "./discovery-hero-carousel";
 import { HeroSpotlight } from "./hero-spotlight";
 import { LazyContinueWatchingRail } from "./lazy-continue-watching-rail";
 import { MediaRail } from "./media-rail";
@@ -445,17 +445,12 @@ function DiscoveryDashboardContent({
     );
   }
 
-  const spotlightItem = discoverySpotlightItem(data);
-  const spotlightArtworkPath =
-    spotlightItem?.artwork.backdropPath ?? spotlightItem?.artwork.posterPath ?? null;
+  const spotlightItems = discoverySpotlightItems(data);
   return (
     <>
-      {spotlightArtworkPath && !suppressHero ? (
-        <link as="image" fetchPriority="high" href={spotlightArtworkPath} rel="preload" />
-      ) : null}
-      {suppressHero ? null : spotlightItem ? (
-        <HeroSpotlight
-          actionRegion={
+      {suppressHero ? null : spotlightItems.length > 0 ? (
+        <DiscoveryHeroCarousel
+          actionRegion={(spotlightItem) => (
             <DirectionalNavigationGroup className="hero-spotlight__actions">
               <button
                 className="button button--primary"
@@ -478,9 +473,8 @@ function DiscoveryDashboardContent({
                 </button>
               ) : null}
             </DirectionalNavigationGroup>
-          }
-          artworkPath={spotlightArtworkPath}
-          hero={discoverySpotlightHero(spotlightItem)}
+          )}
+          items={spotlightItems}
         />
       ) : (
         <HeroSpotlight hero={FALLBACK_HERO} />
