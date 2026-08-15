@@ -2,6 +2,7 @@ import { SERVICES } from "./readiness.mjs";
 import { STABLE_ARCHITECTURES, V1_TIER_REQUIREMENTS } from "./release-evidence.mjs";
 
 const sourceShaPattern = /^[0-9a-f]{40}$/u;
+const digestPattern = /^sha256:[0-9a-f]{64}$/u;
 const datePattern = /^\d{4}-\d{2}-\d{2}$/u;
 const safeIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u;
 const safeVersionPattern = /^[A-Za-z0-9][A-Za-z0-9_.+-]{0,127}$/u;
@@ -81,10 +82,13 @@ function validateServices(value) {
   }
   return services;
 }
-
 export function validateLiveEvidence(value, options) {
-  if (!isRecord(options) || !sourceShaPattern.test(options.sourceSha)) {
-    throw new Error("Live evidence validation requires an exact source SHA.");
+  if (
+    !isRecord(options) ||
+    !sourceShaPattern.test(options.sourceSha) ||
+    !digestPattern.test(options.candidateDigest)
+  ) {
+    throw new Error("Live evidence validation requires an exact source SHA and candidate digest.");
   }
   const today = requireDate(
     options.today ?? new Date().toISOString().slice(0, 10),
@@ -92,6 +96,7 @@ export function validateLiveEvidence(value, options) {
   );
   const expectedKeys = [
     "architecture",
+    "candidateDigest",
     "expiresAt",
     "limitations",
     "owner",
@@ -107,6 +112,9 @@ export function validateLiveEvidence(value, options) {
   }
   if (value.sourceSha !== options.sourceSha) {
     throw new Error("Live evidence sourceSha must match the exact candidate source SHA.");
+  }
+  if (value.candidateDigest !== options.candidateDigest) {
+    throw new Error("Live evidence candidateDigest must match the exact candidate digest.");
   }
   if (!STABLE_ARCHITECTURES.includes(value.architecture)) {
     throw new Error("Live evidence architecture must be a supported stable architecture.");
@@ -130,16 +138,25 @@ export function validateLiveEvidence(value, options) {
   ) {
     throw new Error("Live evidence limitations must be a safe bounded description.");
   }
+  const services = validateServices(value.services);
+  const verifiedCoverage = validateCoverage(value.verifiedCoverage);
+  const serviceCapabilities = new Set(
+    Object.values(services).flatMap((service) => service.capabilities),
+  );
+  if (verifiedCoverage.some((capability) => !serviceCapabilities.has(capability))) {
+    throw new Error("Live evidence capabilities must support every claimed Tier 2 behavior.");
+  }
   return {
     architecture: value.architecture,
+    candidateDigest: options.candidateDigest,
     expiresAt,
     limitations: value.limitations,
     owner: requireSafeIdentifier(value.owner, "Live evidence owner"),
     result: "passed",
     schemaVersion: 1,
-    services: validateServices(value.services),
+    services,
     sourceSha: options.sourceSha,
     verifiedAt,
-    verifiedCoverage: validateCoverage(value.verifiedCoverage),
+    verifiedCoverage,
   };
 }

@@ -14,6 +14,7 @@ const candidateDigest = `sha256:${"b".repeat(64)}`;
 function liveEvidence() {
   return {
     architecture: "linux/amd64",
+    candidateDigest,
     expiresAt: "2026-09-13",
     limitations: "Sanitized reports omit credentials and host data",
     owner: "integration-operator",
@@ -106,6 +107,16 @@ test("assembles four checksum-bound candidate evidence tiers from gate artifacts
     assert.deepEqual(index.records[1].upstream.versions.jellyfin, "1.2.3");
     assert.deepEqual(index.records[3].architectures, ["linux/arm64"]);
     assert.match(index.records[3].artifact.url, /releases\/download\/v1\.0\.0\//u);
+    const tierTwo = JSON.parse(
+      await readFile(
+        path.join(value.directory, "output", "v1-evidence-tier-2-123456789.json"),
+        "utf8",
+      ),
+    );
+    assert.deepEqual(
+      tierTwo.liveEvidence.services.oidc.capabilities,
+      [...LIVE_EVIDENCE_COVERAGE].sort(),
+    );
     const tierFour = JSON.parse(
       await readFile(
         path.join(value.directory, "output", "v1-evidence-tier-4-123456789.json"),
@@ -188,6 +199,10 @@ test("rejects malformed or unbound live evidence before creating a v1 index", as
         report: { ...liveEvidence(), sourceSha: "c".repeat(40) },
       },
       {
+        name: "wrong candidate digest",
+        report: { ...liveEvidence(), candidateDigest: `sha256:${"c".repeat(64)}` },
+      },
+      {
         name: "unsafe owner",
         report: { ...liveEvidence(), owner: "https://operator.invalid" },
       },
@@ -202,6 +217,18 @@ test("rejects malformed or unbound live evidence before creating a v1 index", as
       {
         name: "missing capability coverage",
         report: { ...liveEvidence(), verifiedCoverage: ["version-discovery"] },
+      },
+      {
+        name: "unsupported aggregate capability claim",
+        report: {
+          ...liveEvidence(),
+          services: Object.fromEntries(
+            SERVICES.map((service) => [
+              service,
+              { capabilities: ["version-discovery"], result: "passed", version: "1.2.3" },
+            ]),
+          ),
+        },
       },
       {
         name: "failed service",

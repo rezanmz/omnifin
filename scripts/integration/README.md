@@ -106,7 +106,7 @@ is claimed.
 
 A strict live probe report is operational diagnostics, not Tier 2 evidence by
 itself. Stable-v1 assembly accepts `live.json` only when it is a versioned
-semantic report bound to the exact source SHA. It must name every upstream,
+semantic report bound to the exact source SHA and candidate digest. It must name every upstream,
 their sanitized versions and verified capabilities, an accountable owner,
 stable architecture, bounded verification/expiry dates, every Tier 2 outcome,
 and safe limitations. The current read-only probes do not emit that report and

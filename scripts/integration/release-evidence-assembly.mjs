@@ -104,7 +104,11 @@ export async function assembleV1Evidence(options) {
         );
       }
       if (name === "live.json") {
-        liveEvidence = validateLiveEvidence(report, { sourceSha, today: verifiedAt });
+        liveEvidence = validateLiveEvidence(report, {
+          candidateDigest,
+          sourceSha,
+          today: verifiedAt,
+        });
       } else {
         homeLabEvidence = validateHomeLabEvidence(report, {
           candidateDigest,
@@ -120,12 +124,15 @@ export async function assembleV1Evidence(options) {
   const records = [];
   for (const tier of [1, 2, 3, 4]) {
     const artifactName = `v1-evidence-tier-${tier}-${runId}.json`;
+    const tierTwo = tier === 2;
+    const tierFour = tier === 4;
     const artifact = {
       candidateDigest,
       inputs: V1_EVIDENCE_INPUTS[tier].map((name) => ({ name, sha256: inputs[name] })),
       schemaVersion: 1,
       sourceSha,
       tier,
+      ...(tierTwo ? { liveEvidence } : {}),
     };
     const artifactData = `${JSON.stringify(artifact, null, 2)}\n`;
     await writeFile(resolve(outputDirectory, artifactName), artifactData, {
@@ -133,8 +140,6 @@ export async function assembleV1Evidence(options) {
       flag: "wx",
       mode: 0o644,
     });
-    const tierTwo = tier === 2;
-    const tierFour = tier === 4;
     records.push({
       architectures: tierTwo
         ? [liveEvidence.architecture]

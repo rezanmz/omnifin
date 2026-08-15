@@ -62,6 +62,23 @@ test("strict release fixture evidence fails closed when its report is absent", (
   assert.equal(upload.with["if-no-files-found"], "error");
 });
 
+test("protected v1 live evidence binds the built candidate before source promotion", () => {
+  const document = workflowDocument("publish.yml");
+  const build = document.jobs["build-candidate"];
+  const live = document.jobs["validate-live-source"];
+  const sourceGate = document.jobs["source-gate"];
+  const run = namedStep(live.steps, "Run required strict live release matrix");
+
+  assert.ok(live.needs.includes("build-candidate"));
+  assert.equal(run.env.CANDIDATE_DIGEST, "${{ needs.build-candidate.outputs.digest }}");
+  assert.equal(run.env.RELEASE_SHA, "${{ inputs.release_sha }}");
+  assert.match(run.run, /--candidate-digest "\$CANDIDATE_DIGEST"/u);
+  assert.match(run.run, /--source-sha "\$RELEASE_SHA"/u);
+  assert.ok(build.needs.includes("validate-source"));
+  assert.equal(build.needs.includes("source-gate"), false);
+  assert.ok(sourceGate.needs.includes("validate-live-source"));
+});
+
 test("release pull requests are normalized through a verified exact-tree commit", () => {
   const document = workflowDocument("release-please.yml");
   const release = document.jobs.release;
