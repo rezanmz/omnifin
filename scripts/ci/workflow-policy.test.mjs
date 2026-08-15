@@ -87,6 +87,8 @@ test("v1 promotion assembles an exact-candidate evidence index from every gate a
   const assemble = namedStep(evidence.steps, "Assemble exact-candidate v1 evidence");
   const upload = namedStep(evidence.steps, "Upload validated v1 evidence records");
   const attach = namedStep(evidence.steps, "Attach durable v1 evidence records to the draft");
+  const homeLab = namedStep(evidence.steps, "Download Tier 4 home-lab evidence");
+  const revalidate = namedStep(promotion.steps, "Revalidate durable v1 evidence");
 
   assert.equal(evidence.environment, "release");
   assert.ok(evidence.needs.includes("publish-candidate"));
@@ -101,6 +103,12 @@ test("v1 promotion assembles an exact-candidate evidence index from every gate a
   assert.match(assemble.run, /scan-linux-arm64\.sarif/u);
   assert.match(assemble.run, /install\.json/u);
   assert.match(assemble.run, /upgrade\.json/u);
+  assert.match(assemble.run, /home-lab\.json/u);
+  assert.equal(homeLab.if, "needs.release-coverage.outputs.profile == 'v1'");
+  assert.match(homeLab.with.script, /repos\.listReleaseAssets/u);
+  assert.match(homeLab.with.script, /repos\.getReleaseAsset/u);
+  assert.match(homeLab.with.script, /v1-home-lab-report\.json/u);
+
   assert.doesNotMatch(JSON.stringify(evidence), /OMNIFIN_V1_EVIDENCE_INDEX/u);
   for (const name of [
     "Download Tier 1 fixture evidence",
@@ -109,14 +117,20 @@ test("v1 promotion assembles an exact-candidate evidence index from every gate a
     "Download Tier 3 ARM64 scan evidence",
     "Download Tier 4 installation evidence",
     "Download Tier 4 upgrade evidence",
+    "Download Tier 4 home-lab evidence",
   ]) {
     assert.equal(
       namedStep(evidence.steps, name).if,
       "needs.release-coverage.outputs.profile == 'v1'",
     );
   }
+  assert.match(attach.with.script, /v1-home-lab-report-\$\{context\.runId\}\.json/u);
   assert.equal(upload.with["if-no-files-found"], "error");
   assert.equal(attach.if, "needs.release-coverage.outputs.profile == 'v1'");
+  assert.equal(revalidate.if, "needs.release-coverage.outputs.profile == 'v1'");
+  assert.match(revalidate.with.script, /repos\.getReleaseAsset/u);
+  assert.match(revalidate.with.script, /validateV1EvidenceIndex/u);
+  assert.match(revalidate.with.script, /v1-home-lab-report-\$\{context\.runId\}\.json/u);
   assert.equal(attach.env.RELEASE_TAG, "${{ inputs.tag }}");
   assert.match(attach.with.script, /repos\.listReleaseAssets/u);
   assert.match(attach.with.script, /repos\.uploadReleaseAsset/u);
