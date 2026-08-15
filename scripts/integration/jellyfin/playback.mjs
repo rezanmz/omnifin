@@ -53,6 +53,13 @@ const TRANSIENT_CONTAINER_START_PATTERNS = [
   /resource temporarily unavailable/iu,
 ];
 
+const CONTAINER_START_DIAGNOSTICS = Object.freeze([
+  ["filesystem_read_only", /read-only file system/iu],
+  ["permission_denied", /operation not permitted|permission denied/iu],
+  ["container_user_invalid", /unable to find user|no matching entries in passwd file/iu],
+  ["entrypoint_invalid", /exec format error|executable file not found/iu],
+]);
+
 const REPORTABLE_FAILURE_CODES = new Set([
   "authentication_invalid",
   "compatibility_report_invalid",
@@ -200,11 +207,22 @@ export function preserveFixtureFailure(primaryError, cleanupError) {
 }
 
 function dockerFailureText(error) {
-  const cause = error instanceof JellyfinFixtureFailure ? error.cause : error;
-  if (!cause || typeof cause !== "object" || !("stderr" in cause)) return "";
-  if (typeof cause.stderr === "string") return cause.stderr.slice(0, 16_384);
-  if (cause.stderr instanceof Uint8Array) {
-    return new TextDecoder().decode(cause.stderr.subarray(0, 16_384));
+  let cause = error;
+  const seen = new Set();
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (cause instanceof JellyfinFixtureFailure) {
+      cause = cause.cause;
+      continue;
+    }
+    if (!cause || typeof cause !== "object" || seen.has(cause)) return "";
+    seen.add(cause);
+    if ("stderr" in cause) {
+      if (typeof cause.stderr === "string") return cause.stderr.slice(0, 16_384);
+      if (cause.stderr instanceof Uint8Array) {
+        return new TextDecoder().decode(cause.stderr.subarray(0, 16_384));
+      }
+    }
+    cause = "cause" in cause ? cause.cause : undefined;
   }
   return "";
 }
@@ -223,6 +241,15 @@ function isTransientContainerStartFailure(error) {
   if (TRANSIENT_CONTAINER_START_CODES.has(causeCode)) return true;
   const diagnostic = dockerFailureText(error);
   return TRANSIENT_CONTAINER_START_PATTERNS.some((pattern) => pattern.test(diagnostic));
+}
+
+function containerStartDiagnostic(error) {
+  const code = reportableFailureCode(error);
+  if (code !== "container_start_failed" && code !== "container_start_retry_exhausted") {
+    return undefined;
+  }
+  const diagnostic = dockerFailureText(error);
+  return CONTAINER_START_DIAGNOSTICS.find(([, pattern]) => pattern.test(diagnostic))?.[0];
 }
 
 export async function startContainerWithRetry(start, cleanup, options = {}) {
@@ -391,11 +418,13 @@ export function jellyfinFailureReport(input) {
   const failure = normalizedFixtureFailure(input.error);
   const code = reportableFailureCode(failure);
   const cleanupCode = failure.cleanupCode;
+  const diagnostic = containerStartDiagnostic(failure);
   return {
     error: {
       ...(typeof cleanupCode === "string" && TEARDOWN_FAILURE_CODES.has(cleanupCode)
         ? { cleanupCode }
         : {}),
+      ...(diagnostic ? { diagnostic } : {}),
       code,
       stage: failureStage(code),
     },

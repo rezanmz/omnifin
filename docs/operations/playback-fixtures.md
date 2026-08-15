@@ -46,8 +46,10 @@ or host-port allocation failure may receive one retry after 250 milliseconds. Th
 force-removes any partial container before retrying and again after retry exhaustion; stable
 configuration and policy failures stop immediately. Public evidence exposes only the bounded
 `container_start_failed`, `container_start_retry_exhausted`, and applicable cleanup categories.
-Raw daemon diagnostics, runner paths, generated container names, ports, and network identifiers
-remain private.
+When an allowlisted Docker error pattern identifies a startup precondition, it may additionally
+record one of `filesystem_read_only`, `permission_denied`, `container_user_invalid`, or
+`entrypoint_invalid`; all other diagnostics remain unreported. Raw daemon diagnostics, runner
+paths, generated container names, ports, and network identifiers remain private.
 
 Each version completes the first-run flow with ephemeral credentials and then calls
 Omnifin's production identity, user-media, and playback connectors. The gate requires public version
