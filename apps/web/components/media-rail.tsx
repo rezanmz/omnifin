@@ -77,6 +77,7 @@ export function MediaRail({
           tabIndex={onSelect ? undefined : 0}
         >
           {items.map((item, index) => {
+            const selectable = onSelect !== undefined && item.selectable !== false;
             const watchedPercent =
               typeof item.progress === "number" ? Math.round(item.progress * 100) : undefined;
             const progressDescriptionId = `${headingId}-${item.id}-progress`;
@@ -113,7 +114,7 @@ export function MediaRail({
                   <span className="media-card__number">{String(index + 1).padStart(2, "0")}</span>
                   <span className="media-card__flare" />
                 </span>
-                {onSelect ? (
+                {selectable ? (
                   <span className="media-card__overlay" aria-hidden="true">
                     <span className="media-card__play">
                       {watchedPercent === undefined ? (
@@ -150,7 +151,7 @@ export function MediaRail({
                 key={item.id}
                 style={{ "--card-accent": item.accent } as CardStyle}
               >
-                {onSelect ? (
+                {selectable ? (
                   <button
                     aria-describedby={
                       watchedPercent === undefined ? undefined : progressDescriptionId
@@ -162,9 +163,9 @@ export function MediaRail({
                     }
                     className="media-card__action"
                     data-directional-item
-                    data-interactive="true"
                     data-media-id={item.id}
-                    onClick={() => onSelect(item)}
+                    data-interactive="true"
+                    onClick={() => onSelect?.(item)}
                     type="button"
                   >
                     {cardContent}
