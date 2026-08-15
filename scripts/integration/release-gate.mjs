@@ -7,12 +7,31 @@ import { readReadinessLedger } from "./readiness.mjs";
 import { coverageForVersion, readReleaseCoverage } from "./release-coverage.mjs";
 import { runIntegration } from "./run.mjs";
 
+const sourceShaPattern = /^[0-9a-f]{40}$/u;
+const digestPattern = /^sha256:[0-9a-f]{64}$/u;
+
 function parseArguments(arguments_) {
-  const options = { mode: null, output: null, version: null };
+  const options = {
+    candidateDigest: null,
+    mode: null,
+    output: null,
+    sourceSha: null,
+    version: null,
+  };
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index];
     if (argument === "--help") return { help: true };
-    if (argument === "--version") {
+    if (argument === "--candidate-digest") {
+      options.candidateDigest = arguments_[++index];
+      if (!options.candidateDigest || !digestPattern.test(options.candidateDigest)) {
+        throw new Error("--candidate-digest must be an exact SHA-256 digest.");
+      }
+    } else if (argument === "--source-sha") {
+      options.sourceSha = arguments_[++index];
+      if (!options.sourceSha || !sourceShaPattern.test(options.sourceSha)) {
+        throw new Error("--source-sha must be an exact Git commit SHA.");
+      }
+    } else if (argument === "--version") {
       options.version = arguments_[++index];
       if (!options.version || options.version.startsWith("--")) {
         throw new Error("--version requires a value.");
@@ -40,7 +59,7 @@ async function main() {
   const options = parseArguments(process.argv.slice(2));
   if (options.help) {
     process.stdout.write(
-      "Usage: node scripts/integration/release-gate.mjs --version <stable-semver> --mode <fixture|live> [--output <path>]\n",
+      "Usage: node scripts/integration/release-gate.mjs --version <stable-semver> --mode <fixture|live> [--candidate-digest <sha256:digest> --source-sha <commit-sha>] [--output <path>]\n",
     );
     return 0;
   }
@@ -48,11 +67,13 @@ async function main() {
   const coverage = coverageForVersion(await readReleaseCoverage(), options.version, readiness);
   const services = options.mode === "fixture" ? coverage.fixtureServices : coverage.liveServices;
   return runIntegration({
+    candidateDigest: options.candidateDigest,
     mode: options.mode,
     output: options.output,
     readiness,
     releaseProfile: coverage.profile,
     services,
+    sourceSha: options.sourceSha,
     strict: true,
   });
 }

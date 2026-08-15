@@ -256,6 +256,7 @@ jobs:
     needs:
       - release-coverage
       - validate-source
+      - build-candidate
     environment: integration
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -292,9 +293,13 @@ jobs:
           OMNIFIN_SEERR_URL: ${{ vars.OMNIFIN_SEERR_URL }}
           OMNIFIN_SONARR_API_KEY: ${{ secrets.OMNIFIN_SONARR_API_KEY }}
           OMNIFIN_SONARR_URL: ${{ vars.OMNIFIN_SONARR_URL }}
+          CANDIDATE_DIGEST: ${{ needs.build-candidate.outputs.digest }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: >-
           node scripts/integration/release-gate.mjs
+          --candidate-digest "$CANDIDATE_DIGEST"
+          --source-sha "$RELEASE_SHA"
           --version "$RELEASE_VERSION" --mode live
           --output artifacts/release-integration/live.json
       - name: Upload sanitized live release evidence
@@ -342,10 +347,17 @@ jobs:
 
   build-candidate:
     name: Build unprivileged candidate archive
-    if: ${{ always() && needs.release-coverage.result == 'success' && needs.source-gate.result == 'success' }}
+    if: >-
+      ${{
+        always() &&
+        needs.release-coverage.result == 'success' &&
+        needs.validate-release-metadata.result == 'success' &&
+        needs.validate-source.result == 'success'
+      }}
     needs:
       - release-coverage
-      - source-gate
+      - validate-release-metadata
+      - validate-source
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:

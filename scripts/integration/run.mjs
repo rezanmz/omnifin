@@ -381,7 +381,9 @@ export async function runIntegration(options) {
   const report = {
     schemaVersion: 1,
     mode: options.mode,
+    ...(options.candidateDigest ? { candidateDigest: options.candidateDigest } : {}),
     ...(options.releaseProfile ? { releaseProfile: options.releaseProfile } : {}),
+    ...(options.sourceSha ? { sourceSha: options.sourceSha } : {}),
     summary: summarize(results),
     results,
   };
