@@ -1,3 +1,4 @@
+import type { ContinueWatchingResponse } from "@omnifin/contracts/dashboard";
 import type { PlaybackNegotiationResponse } from "@omnifin/contracts/playback";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -162,5 +163,121 @@ describe("ContinueWatchingRail", () => {
 
     await user.click(screen.getByRole("button", { name: "Close player" }));
     await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("suggests one ready next episode from each bounded in-progress episode", async () => {
+    const loadContext = vi.fn(async (referenceId: string) => {
+      expect(referenceId).toBe(`media_${"b".repeat(22)}`);
+      return {
+        currentDurationSeconds: 2_700,
+        generatedAt: "2026-07-28T12:30:00.000Z",
+        mediaReferenceId: referenceId,
+        nextEpisode: {
+          artworkPath: `/v1/media/media_${"n".repeat(22)}/images/poster`,
+          durationSeconds: 2_700,
+          episodeNumber: 4,
+          mediaReferenceId: `media_${"n".repeat(22)}`,
+          seasonNumber: 2,
+          seriesTitle: "Northern Lights",
+          title: "The Long Meridian",
+        },
+        nextState: "ready" as const,
+        segments: [],
+        segmentsState: "empty" as const,
+      };
+    });
+    const playbackClient = {
+      loadContext,
+      prepare: vi.fn(async () => ({
+        canManageLibrary: false,
+        csrfToken: "rail_playback_csrf_0123456789abcdefghijklmnop",
+        session: playbackSession,
+      })),
+      report: vi.fn(async (_sessionId, request) => ({
+        acceptedAt: "2026-07-28T12:30:00.000Z",
+        positionSeconds: request.positionSeconds,
+        sessionId: playbackSessionId,
+        state: "stopped" as const,
+      })),
+      reportIssue: vi.fn(async (_sessionId, request) => ({
+        category: request.category,
+        createdAt: "2026-07-28T12:30:00.000Z",
+        id: `issue_${"i".repeat(22)}`,
+        positionSeconds: request.positionSeconds,
+        status: "open" as const,
+      })),
+    };
+    render(
+      <ContinueWatchingRail
+        initialOutcome={{ feed: demoContinueWatchingFeed, status: "ready" }}
+        live={false}
+        playbackClient={playbackClient}
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Next up" })).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "View details for The Long Meridian" }),
+    ).toBeVisible();
+    expect(screen.getByText("Northern Lights · S2E4")).toBeVisible();
+    expect(loadContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds next-up context checks to eight in-progress episodes", async () => {
+    const loadContext = vi.fn(async (mediaReferenceId: string) => ({
+      currentDurationSeconds: 2_700,
+      generatedAt: "2026-07-28T12:30:00.000Z",
+      mediaReferenceId,
+      nextEpisode: null,
+      nextState: "end" as const,
+      segments: [],
+      segmentsState: "empty" as const,
+    }));
+    const sourceItem = demoContinueWatchingFeed.items[0]!;
+    const feed: ContinueWatchingResponse = {
+      ...demoContinueWatchingFeed,
+      items: Array.from({ length: 9 }, (_, index) => {
+        const referenceId = `media_${String.fromCharCode(97 + index).repeat(22)}`;
+        return {
+          ...sourceItem,
+          media: { ...sourceItem.media, id: referenceId },
+        };
+      }),
+    };
+    const playbackClient = {
+      loadContext,
+      prepare: vi.fn(async () => ({
+        canManageLibrary: false,
+        csrfToken: "rail_playback_csrf_0123456789abcdefghijklmnop",
+        session: playbackSession,
+      })),
+      report: vi.fn(async (_sessionId, request) => ({
+        acceptedAt: "2026-07-28T12:30:00.000Z",
+        positionSeconds: request.positionSeconds,
+        sessionId: playbackSessionId,
+        state: "stopped" as const,
+      })),
+      reportIssue: vi.fn(async (_sessionId, request) => ({
+        category: request.category,
+        createdAt: "2026-07-28T12:30:00.000Z",
+        id: `issue_${"i".repeat(22)}`,
+        positionSeconds: request.positionSeconds,
+        status: "open" as const,
+      })),
+    };
+
+    render(
+      <ContinueWatchingRail
+        initialOutcome={{ feed, status: "ready" }}
+        live={false}
+        playbackClient={playbackClient}
+      />,
+    );
+
+    await waitFor(() => expect(loadContext).toHaveBeenCalledTimes(8));
+    expect(loadContext).toHaveBeenLastCalledWith(
+      `media_${"h".repeat(22)}`,
+      expect.any(AbortSignal),
+    );
   });
 });
