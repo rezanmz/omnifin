@@ -46,16 +46,16 @@
     "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm docs:check"
   },
   "devDependencies": {
-    "@commitlint/cli": "21.2.1",
-    "@commitlint/config-conventional": "21.2.0",
+    "@commitlint/cli": "21.2.2",
+    "@commitlint/config-conventional": "21.2.2",
     "cross-env": "10.1.0",
     "eslint": "9.39.5",
-    "eslint-config-next": "16.3.0",
+    "eslint-config-next": "16.3.2",
     "prettier": "3.9.6",
     "prettier-plugin-tailwindcss": "0.8.1",
-    "turbo": "2.10.8",
+    "turbo": "2.10.11",
     "typescript": "5.9.3",
-    "typescript-eslint": "8.66.0",
+    "typescript-eslint": "8.67.0",
     "yaml": "2.9.0"
   }
 }
