@@ -32,7 +32,7 @@
     "@omnifin/contracts": "workspace:*",
     "better-sqlite3": "13.0.2",
     "drizzle-orm": "0.45.2",
-    "fastify": "5.11.2",
+    "fastify": "5.12.1",
     "fastify-plugin": "6.0.0",
     "jose": "6.2.8",
     "openid-client": "6.8.4",
