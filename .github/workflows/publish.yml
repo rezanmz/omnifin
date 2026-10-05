@@ -219,7 +219,7 @@ jobs:
           test "$(jq --raw-output '.version' package.json)" = "$RELEASE_VERSION"
           test "$(jq --raw-output '.["."]' .release-please-manifest.json)" = "$RELEASE_VERSION"
       - name: Install pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: ${{ env.PNPM_VERSION }}
       - name: Set up Node.js
@@ -361,9 +361,9 @@ jobs:
       - name: Prepare release artifact directory
         run: mkdir --parents "${RUNNER_TEMP}/release-artifacts"
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Derive candidate metadata
         id: metadata
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
@@ -380,7 +380,7 @@ jobs:
             io.github.omnifin.release-profile=${{ needs.release-coverage.outputs.profile }}
       - name: Build multi-architecture OCI candidate
         id: build
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           annotations: ${{ steps.metadata.outputs.annotations }}
           build-args: |
@@ -399,7 +399,7 @@ jobs:
           tags: ${{ steps.metadata.outputs.tags }}
       - name: Install Syft
         id: syft
-        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           syft-version: ${{ env.SYFT_VERSION }}
       - name: Generate and validate portable SPDX SBOM
@@ -462,7 +462,7 @@ jobs:
           name: release-candidate-${{ github.run_id }}
           path: release-artifacts
       - name: Install ORAS
-        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+        uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4 # v2.0.2
         with:
           version: ${{ env.ORAS_VERSION }}
       - name: Verify candidate bundle
@@ -590,13 +590,13 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           push-to-registry: true
           subject-digest: ${{ needs.publish-candidate.outputs.digest }}
           subject-name: ${{ env.IMAGE_NAME }}
       - name: Attest SPDX SBOM
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           push-to-registry: true
           sbom-path: release-evidence/sbom.spdx.json
@@ -710,7 +710,7 @@ jobs:
           persist-credentials: false
           ref: ${{ inputs.release_sha }}
       - name: Install ORAS
-        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+        uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4 # v2.0.2
         with:
           version: ${{ env.ORAS_VERSION }}
       - name: Install Cosign
@@ -917,7 +917,7 @@ jobs:
           persist-credentials: false
           ref: ${{ inputs.release_sha }}
       - name: Install ORAS
-        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+        uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4 # v2.0.2
         with:
           version: ${{ env.ORAS_VERSION }}
       - name: Install Cosign
@@ -1434,7 +1434,7 @@ jobs:
               }
             }
       - name: Install ORAS
-        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+        uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4 # v2.0.2
         with:
           version: ${{ env.ORAS_VERSION }}
       - name: Authenticate to GHCR
@@ -1529,7 +1529,7 @@ jobs:
       contents: read
     steps:
       - name: Install ORAS
-        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+        uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4 # v2.0.2
         with:
           version: ${{ env.ORAS_VERSION }}
       - name: Pull stable image anonymously
